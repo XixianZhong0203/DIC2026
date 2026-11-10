@@ -39,21 +39,21 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       if (result.suggestedReply) card.append(details(t('模型建议稿'), result.suggestedReply));
       card.append(details(t('模型原始输出'), result.raw));
       if (item.review) card.append(details(t('人工核实'), item.review));
-      if (result.status !== 'supported' && result.analysisId) {
-        const reviewForm = element('form', '');
-        const resolution = element('textarea', '');
-        resolution.required = true;
-        resolution.maxLength = 2000;
-        resolution.placeholder = t('记录核实结果或说明这封邮件只用于澄清');
-        resolution.setAttribute('aria-label', resolution.placeholder);
-        const saveReview = action(t('保存核实结果'), () => {
-          if (reviewForm.reportValidity()) return request('opportunity-review', {
-            id: item.id, analysis_id: result.analysisId, resolution: resolution.value,
-          });
+    }
+    if (!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) {
+      const reviewForm = element('form', '');
+      const resolution = element('textarea', '');
+      resolution.required = true;
+      resolution.maxLength = 2000;
+      resolution.placeholder = t('记录核实结果或说明这封邮件只用于澄清');
+      resolution.setAttribute('aria-label', resolution.placeholder);
+      const saveReview = action(t('保存核实结果'), () => {
+        if (reviewForm.reportValidity()) return request('opportunity-review', {
+          id: item.id, analysis_id: result?.analysisId ?? null, resolution: resolution.value,
         });
-        reviewForm.append(resolution, saveReview);
-        card.append(reviewForm);
-      }
+      });
+      reviewForm.append(resolution, saveReview);
+      card.append(reviewForm);
     }
     const analysisForm = element('form', '');
     const question = element('input', '');
@@ -89,11 +89,25 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       form.onsubmit = event => { event.preventDefault(); save.click(); };
       form.append(recipient, body, save);
       editor.append(form);
+      const evidenceLabel = item.review ? t('已人工核实')
+        : result?.status === 'supported' ? t('模型判断有依据')
+        : result ? t('模型判断待核实')
+        : t('无证据：未分析、未复核');
+      const approvalLabel = item.sent ? t('已批准 · 模拟发送成功')
+        : item.draft_id ? t('草稿已保存，待批准')
+        : t('尚未保存草稿');
+      card.append(element('p', t('证据状态') + ' · ' + evidenceLabel,
+        !item.review && result?.status !== 'supported' ? 'attention' : 'muted'));
+      card.append(element('p', t('批准状态') + ' · ' + approvalLabel, 'muted'));
+      if (item.review) card.append(element('p', t('核实记录') + ' · ' + item.review, 'muted'));
       if (item.draft_id) {
         editor.open = true;
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
-        if (item.sent) editor.append(element('p', t('模拟发送成功')));
-        else if (result && result.status !== 'supported' && !item.review) {
+        if (item.sent) {
+          editor.append(element('p', t('模拟发送成功')));
+        } else if (!item.review && !result) {
+          editor.append(element('p', t('还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。'), 'attention'));
+        } else if (!item.review && result.status !== 'supported') {
           editor.append(element('p', t('请先记录如何处理不确定性，再批准发送。'), 'attention'));
         } else editor.append(action(t('批准已保存版本并模拟发送'), () =>
           request('opportunity-send', { id: item.id, draft_id: item.draft_id }), false));
@@ -115,9 +129,13 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
       return row;
     }));
-    get('opportunity-audit').replaceChildren(...(state.audit ?? []).map(event =>
-      details(t(labels[event.action] ?? event.action) + ' · ' + new Date(event.time).toLocaleString(language()),
-        JSON.stringify(JSON.parse(event.detail), null, 2))));
+    const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期' };
+    get('opportunity-audit').replaceChildren(...(state.audit ?? []).map(event => {
+      const detail = JSON.parse(event.detail);
+      const reason = event.action === 'blocked' && detail.reason ? ' · ' + t(blockedReasons[detail.reason] ?? detail.reason) : '';
+      return details(t(labels[event.action] ?? event.action) + reason + ' · ' + new Date(event.time).toLocaleString(language()),
+        JSON.stringify(detail, null, 2));
+    }));
     const report = state.benchmark;
     get('model-results').replaceChildren();
     if (report) {

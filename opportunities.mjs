@@ -117,11 +117,15 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
       '/api/opportunity-review': ({ id, analysis_id, resolution }) => {
         const item = get(id);
         const result = item.analysis && JSON.parse(item.analysis);
-        if (!result?.analysisId || result.analysisId !== analysis_id) fail(409, '分析已变更，请重新核对。');
+        if (result) {
+          if (!result.analysisId || result.analysisId !== analysis_id) fail(409, '分析已变更，请重新核对。');
+        } else if (analysis_id != null) {
+          fail(409, '分析已变更，请重新核对。');
+        }
         const review = required(resolution, 2000);
         transaction(() => {
           db.prepare('UPDATE opportunities SET review=? WHERE id=?').run(review, id);
-          audit(id, 'human_reviewed', { analysisId: analysis_id, resolution: review });
+          audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, resolution: review });
         });
       },
       '/api/opportunity-draft': ({ id, recipient, body }) => {
@@ -144,14 +148,24 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           fail(409, '草稿已变更，请重新核对后确认。');
         }
         if (item.sent) return;
-        const analysis = item.analysis && JSON.parse(item.analysis);
+        let analysis = null;
+        try {
+          analysis = item.analysis ? JSON.parse(item.analysis) : null;
+        } catch {
+          analysis = null;
+        }
+        if (!analysis && !item.review) {
+          audit(id, 'blocked', { action: 'send', reason: 'no_evidence_review' });
+          fail(409, '还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。');
+        }
         if (analysis && analysis.status !== 'supported' && !item.review) {
           audit(id, 'blocked', { action: 'send', reason: 'unresolved_evidence', analysisId: analysis.analysisId });
           fail(409, '请先记录如何处理不确定性，再批准发送。');
         }
         transaction(() => {
           db.prepare('UPDATE opportunities SET sent=1 WHERE id=?').run(id);
-          audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: mode('send') });
+          audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: mode('send'),
+            evidence: item.review ? 'human_review' : 'model_supported' });
           audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
         });
       },
