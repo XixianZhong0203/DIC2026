@@ -13,6 +13,9 @@
 //       Deterministic plumbing + positive/negative controls. No network required.
 //   node --env-file-if-exists=.env evaluation/round1.mjs
 //       One round of flow validation with the currently configured model.
+//   node evaluation/round1.mjs --score <trace.json>
+//       Re-score an existing model trace with the current (revised) metric
+//       definitions; no model calls. Writes <trace>-rescored.json.
 //
 // Output: console result tables + raw trace docs/evidence/round1-<model>-<ts>.json.
 // Exit code 0 when all deterministic controls pass; real-model judgment outcomes are data,
@@ -22,6 +25,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { resolve as resolvePath, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { opportunityWorkflow } from '../opportunities.mjs';
 import { actionDecision, runAlignmentBenchmark } from '../alignment.mjs';
@@ -33,7 +37,7 @@ const repoRoot = new URL('..', import.meta.url).pathname;
 const versionedFiles = ['opportunities.mjs', 'alignment.mjs', 'server.mjs', 'memory-impact.mjs',
   'evaluation/round1.mjs', 'delegation.test.mjs'];
 function codeVersion() {
-  const hash = p => createHash('sha256').update(readFileSync(new URL('./' + p, import.meta.url)))
+  const hash = p => createHash('sha256').update(readFileSync(join(repoRoot, p)))
     .digest('hex').slice(0, 16);
   let gitHead = 'unknown';
   let dirtyFiles = [];
@@ -45,8 +49,8 @@ function codeVersion() {
   return { gitHead, dirtyFiles, fileHashes: Object.fromEntries(versionedFiles.map(f => [f, hash(f)])) };
 }
 function previousModelTrace() {
-  const dir = new URL('./docs/evidence/', import.meta.url);
-  const candidates = readdirSync(dir).filter(f => /^round1-.*\.json$/.test(f) && !f.endsWith('-rescored.json'));
+  const dir = new URL('../docs/evidence/', import.meta.url);
+  const candidates = readdirSync(dir).filter(f => /^round1-.*\.json$/.test(f) && !f.endsWith('-rescored.json')).sort();
   let previous = null;
   for (const f of candidates) {
     try {
@@ -405,7 +409,7 @@ async function rescore(tracePath) {
   const combined = oppMetrics ? combinedMetrics(oppMetrics, alnModel) : null;
   const membership = { opportunities: opportunitiesMembership(t.cases), alignmentModel: alignmentMembership(t.alignment?.model) };
   const out = {
-    source: new URL(tracePath).pathname,
+    source: tracePath,
     rescoredAt: new Date().toISOString(),
     note: '按 2026-11-10 修订后的指标口径重算（alignment 过度弃权改用守卫后判定 actual.status）；raw 输出未变，仅指标重算。',
     model: t.env?.model, metrics: { opportunities: oppMetrics, alignmentFixture: alnFixture, alignmentModel: alnModel, combined },
@@ -436,8 +440,10 @@ const frStr = f => `${f.num}/${f.den} (${f.pct})`;
 async function main() {
   selfCheck();
   const at = new Date().toISOString();
-  const trace = { round: 1, mode: fixtureMode ? 'fixture' : 'model', at,
-    env: { model, localModel, modelConfigured }, controls: {} };
+  const cv = codeVersion();
+  if (!fixtureMode) checkDrift(cv);
+  const trace = { round: 1, mode: fixtureMode ? 'fixture' : 'model', at, codeVersion: cv,
+    env: { model, localModel, modelConfigured, base }, controls: {} };
 
   // 1) delegation: external API path (deterministic controls, always run)
   const dapiPositiveControl = await scenarioDapiPositive('自动化正对照', assessOk, 'fixture');
@@ -558,4 +564,9 @@ async function main() {
   console.log('\n控制项全部通过。');
 }
 
-main().catch(error => { console.error('RUNNER 控制项失败：', error.message); process.exit(1); });
+const scoreFlag = process.argv.indexOf('--score');
+if (scoreFlag !== -1 && process.argv[scoreFlag + 1]) {
+  rescore(resolvePath(process.argv[scoreFlag + 1])).catch(error => { console.error('重评分失败：', error.message); process.exit(1); });
+} else {
+  main().catch(error => { console.error('RUNNER 控制项失败：', error.message); process.exit(1); });
+}

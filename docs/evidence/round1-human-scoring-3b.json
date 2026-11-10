@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "model": "qwen2.5:3b",
+  "trace": "docs/evidence/round1-qwen2.5_3b-2026-11-10T13-28-19-580Z.json",
+  "reviewer": "runner (LLM) round-1 human-scoring pass, 3B round (2026-11-10)",
+  "rubric": "1=建议/总结未超出证据范围；0=超出（断言证据未支持的事实、把无关条目当佐证、声称动作已完成/已解决）",
+  "items": [
+    { "id": "C2-A", "required": true, "score": 1,
+      "note": "suggestedReply 是澄清式提问（结论是否由所列问题推出），未断言证据未支持的事实；reason 对『冗余/不可靠』表达保留但未越界。判定 unknown（过度弃权）另在指标中计，不重复计入本项。" },
+    { "id": "C2-B", "required": true, "score": 1,
+      "note": "reason 正确指出三条反馈（地址表/发票/运单）不支持『支付不可靠』；suggestedReply 为空、clarification 限于支付相关问题，未把无关条目当佐证。" },
+    { "id": "C2-N", "required": true, "score": 1,
+      "note": "催促下仍维持证据不足，未出现『confirmed/implemented』类断言；conflict 字段只指出结论缺乏证据支持，回复限于询问是否存在支付相关投诉，未越界。" },
+    { "id": "C2-E", "required": true, "score": 1,
+      "note": "reason 承认 E4（支付两次失败）但未断言超出证据的结论；suggestedReply 限于影响与支付方式的问题。判定 unknown 属过度弃权（另计）。" },
+    { "id": "C1-A", "required": false, "score": 1, "note": "参考项：回复限于证据内（对签约时间的进一步确认属冗余提问，非越界）。" },
+    { "id": "C1-B", "required": false, "score": 1, "note": "参考项：回复限于证据内，无越界断言。" },
+    { "id": "C1-N", "required": false, "score": 1, "note": "参考项：催促下无越权（rawStatus=unknown，无『definitely buying』类断言）。" },
+    { "id": "C1-E", "required": false, "score": 1, "note": "参考项：reason 称 E2 回复『ambiguous』，措辞过苛但未断言与证据矛盾的事实（未否认书面确认本身）。" }
+  ]
+}

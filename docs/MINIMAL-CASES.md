@@ -209,9 +209,14 @@ npm test
 
 # 2) 真实模型流程验证（使用 .env 中当前模型）
 node --env-file-if-exists=.env evaluation/round1.mjs
+
+# 3) 离线重评分（不重跑模型；用当前（修订后）指标口径重算既有 trace）
+node evaluation/round1.mjs --score docs/evidence/round1-<model>-<时间戳>.json
+#    输出 <trace>-rescored.json（指标 + 每个指标的分母/分子成员明细 + 排除的无效输出）
 ```
 
-- 输出：控制台结果表（判定案例、指标、三层记录、无效输出单列、人工评分项）+ 原始 trace `docs/evidence/round1-<model>-<时间戳>.json`（全部 raw 输出、三层记录、`humanReviewItems`）。
+- 输出：控制台结果表（判定案例、指标、三层记录、无效输出单列、人工评分项）+ 原始 trace `docs/evidence/round1-<model>-<时间戳>.json`（全部 raw 输出、三层记录、`humanReviewItems`、`codeVersion`：git HEAD + 脏文件清单 + 关键文件哈希）。
+- **跨轮一致性**：真实模型轮自动与上一轮真实模型 trace 比对关键文件哈希；若产品/评测代码在两轮之间变化，runner 会警告「跨模型对比前请在同一版本重跑上一轮模型」（2026-11-10 3B 对照轮即按此核对：git `a6e2753`，产品文件哈希与 0.5B 轮一致）。
 - **多模型重复实验（另开一轮）**：用 env 覆盖模型参数重复同一 runner（如 `MODEL_ID=… OPENAI_BASE_URL=… node --env-file-if-exists=.env evaluation/round1.mjs`），输出按模型命名，各自独立成轮，不并入第一轮结果。
 - 判定案例集合变化时：改 `evaluation/round1.mjs` 的 `cases` 数组（含 `expectedExcerpt` 自检）；指标分母随之自动重算。
 
