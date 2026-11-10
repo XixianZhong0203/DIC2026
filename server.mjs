@@ -48,6 +48,17 @@ db.exec('CREATE TABLE IF NOT EXISTS calendar_identity (id INTEGER PRIMARY KEY CH
 db.prepare('INSERT OR IGNORE INTO calendar_identity VALUES (1, ?)').run(randomUUID());
 const calendarId = db.prepare('SELECT uid FROM calendar_identity WHERE id = 1').get().uid;
 const tasks = () => db.prepare('SELECT * FROM tasks WHERE deleted = 0 ORDER BY starts, id').all();
+db.exec(`CREATE TABLE IF NOT EXISTS conversations (
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, project TEXT NOT NULL DEFAULT '', created TEXT NOT NULL
+);`);
+const messageColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map(column => column.name));
+if (!messageColumns.has('conversation_id')) db.exec('ALTER TABLE messages ADD COLUMN conversation_id INTEGER');
+const memoryColumns = new Set(db.prepare('PRAGMA table_info(memory)').all().map(column => column.name));
+if (!memoryColumns.has('message_id')) db.exec('ALTER TABLE memory ADD COLUMN message_id INTEGER');
+if (db.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id IS NULL').get().n) {
+  const created = db.prepare('INSERT INTO conversations(title, created) VALUES (?, ?)').run('过往对话', new Date().toISOString());
+  db.prepare('UPDATE messages SET conversation_id = ? WHERE conversation_id IS NULL').run(Number(created.lastInsertRowid));
+}
 
 const key = (process.env.OPENAI_API_KEY ?? '').trim();
 const base = (process.env.OPENAI_BASE_URL ?? 'https://opencode.ai/inference/openai/v1').replace(/\/$/, '');
@@ -63,6 +74,19 @@ const memories = () => db.prepare(`
 const messages = () => db.prepare('SELECT * FROM messages ORDER BY id').all().map(row => ({
   ...row, review: row.review && JSON.parse(row.review),
 }));
+function backfillOrphanMessages() {
+  if (!db.prepare('SELECT id FROM messages WHERE conversation_id IS NULL LIMIT 1').get()) return;
+  let row = db.prepare("SELECT id FROM conversations WHERE title = '过往对话'").get();
+  if (!row) row = db.prepare("INSERT INTO conversations(title, created) VALUES ('过往对话', ?)").get(new Date().toISOString());
+  db.prepare('UPDATE messages SET conversation_id = ? WHERE conversation_id IS NULL').run(Number(row.id));
+}
+const conversations = () => {
+  backfillOrphanMessages();
+  return db.prepare('SELECT * FROM conversations ORDER BY id').all();
+};
+const conversationHistory = id => db.prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY id').all().map(row => ({
+  ...row, review: row.review && JSON.parse(row.review),
+}));
 const draft = () => db.prepare('SELECT * FROM drafts ORDER BY rowid DESC LIMIT 1').get() ?? null;
 const log = (type, version, id = null) =>
   db.prepare('INSERT INTO events(type,version,draft,time) VALUES (?,?,?,?)').run(type, version, id, new Date().toISOString());
@@ -75,7 +99,7 @@ const memorySnapshot = (edit, base, records) =>
 const state = () => {
   const current = draft();
   const activity = events();
-  return { ...workflow.state(), alignment: latestAlignment(), memoryDecisions: memoryDecisions(), tasks: tasks(), memory: memories(), messages: messages(), draft: current, events: activity,
+  return { ...workflow.state(), alignment: latestAlignment(), memoryDecisions: memoryDecisions(), tasks: tasks(), memory: memories(), messages: messages(), conversations: conversations(), draft: current, events: activity,
     status: current ? releaseStatus(current, activity) : null, live: modelConfigured, release, repository };
 };
 
@@ -106,10 +130,10 @@ async function complete(messages) {
 
 const workflow = opportunityWorkflow(db, { complete, model, fail, required });
 
-async function modelReply(question, language, active) {
-  const recent = messages().slice(-14);
+async function modelReply(question, language, active, recent) {
   const history = recent.filter((message, index) => !(message.review?.temporary ||
     (message.role === 'user' && recent[index + 1]?.review?.temporary)))
+    .slice(-14)
     .map(({ role, body }) => ({ role, content: body }));
   const raw = await complete([
       { role: 'system', content: `你是 Daymark，一个帮助个人接续项目的队友。
@@ -125,26 +149,40 @@ async function modelReply(question, language, active) {
       { role: 'user', content: question },
   ]);
   let review;
+  let plain = false;
   try {
     review = JSON.parse(raw?.trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/g, ''));
     required(review.answer, 16000);
   } catch {
-    fail(502, '模型没有返回可核查的答复，请重试。');
+    review = { answer: raw.trim().slice(0, 16000) };
+    plain = true;
+    if (!review.answer) fail(502, '模型没有返回可核查的答复，请重试。');
   }
   const ids = Array.isArray(review.citations) ? review.citations : [];
   const cited = active.filter(record => ids.includes(record.id));
   const facts = verifiedQuotes(review.facts, active.filter(record => ['fact', 'source'].includes(record.kind)));
   const stringList = value => Array.isArray(value) ? value.filter(item => typeof item === 'string').slice(0, 8) : [];
   return { answer: review.answer, cited, facts, inferences: stringList(review.inferences),
-    unknowns: stringList(review.unknowns), mode: 'model', modelId: model, conflict: typeof review.conflict === 'string' ? review.conflict : '',
+    unknowns: stringList(review.unknowns), mode: 'model', modelId: model, plain, conflict: typeof review.conflict === 'string' ? review.conflict : '',
     question: typeof review.question === 'string' ? review.question : '',
     understood: typeof review.understood === 'string' ? review.understood : '' };
 }
 
-async function reply(question, language, useModel, temporary) {
+async function reply(question, language, useModel, temporary, conversationId) {
+  let conversation;
+  if (conversationId == null) {
+    conversation = Number(db.prepare('INSERT INTO conversations(title, created) VALUES (?, ?)')
+      .run(question.slice(0, 30), new Date().toISOString()).lastInsertRowid);
+  } else if (!Number.isSafeInteger(conversationId) ||
+      !db.prepare('SELECT id FROM conversations WHERE id = ?').get(conversationId)) {
+    fail(404, '找不到这个对话。');
+  } else {
+    conversation = conversationId;
+  }
   const records = memories().filter(row => !row.superseded);
   let retrieved = [];
-  const previous = messages().at(-1)?.review;
+  const recent = conversationHistory(conversation);
+  const previous = recent.at(-1)?.review;
   const clarification = previous?.temporary ? '' : previous?.question;
   const retrievalQuery = clarification ? question + '\n' + clarification.slice(0, 350) : question;
   const fallback = () => localReply(question, language, {
@@ -154,7 +192,7 @@ async function reply(question, language, useModel, temporary) {
   if (useModel && modelConfigured) {
     try {
       retrieved = rankRecords(retrievalQuery, records).filter(match => match.score > 0).slice(0, 12).map(match => match.record);
-      review = await modelReply(question, language, retrieved);
+      review = await modelReply(question, language, retrieved, recent);
       if (review.unknowns.length && !review.conflict) {
         const gap = review.unknowns.slice(0, 2).join(' ').slice(0, 500);
         const used = new Set(retrieved.map(record => record.id));
@@ -163,7 +201,7 @@ async function reply(question, language, useModel, temporary) {
         if (extra.length) {
           retrieved.push(...extra);
           try {
-            review = await modelReply(question, language, retrieved);
+            review = await modelReply(question, language, retrieved, recent);
             review.gapRetrieval = { query: gap, ids: extra.map(record => record.id), status: 'completed' };
           } catch (error) {
             if (!error.status) throw error;
@@ -187,16 +225,17 @@ async function reply(question, language, useModel, temporary) {
     gapRetrieval: review.gapRetrieval ?? null,
     result: review.mode,
   };
-  const insert = db.prepare('INSERT INTO messages(role,body,review) VALUES (?,?,?)');
+  const insert = db.prepare('INSERT INTO messages(role,body,review,conversation_id) VALUES (?,?,?,?)');
   db.exec('BEGIN');
   try {
-    insert.run('user', question, null);
-    insert.run('assistant', review.answer, JSON.stringify(review));
+    insert.run('user', question, null, conversation);
+    insert.run('assistant', review.answer, JSON.stringify(review), conversation);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
+  return { ...state(), conversation };
 }
 
 const mutations = {
@@ -232,8 +271,10 @@ const mutations = {
         question: typeof item?.question === 'string' ? item.question : '' };
     }), classificationError, snapshot };
   },
-  '/api/memory': ({ kind, scope, body, source, replaces, review_base, snapshot }) => {
+  '/api/memory': ({ kind, scope, body, source, replaces, review_base, snapshot, message_id }) => {
     if (!['fact', 'preference', 'rule', 'proposal', 'source'].includes(kind)) fail(400, '请选择记录类型。');
+    if (message_id != null && (!Number.isSafeInteger(message_id) ||
+        !db.prepare('SELECT id FROM messages WHERE id = ?').get(message_id))) fail(400, '找不到对应的对话消息。');
     const old = replaces == null ? null : memories().find(record => record.id === replaces);
     if (replaces != null && (!old || old.superseded)) fail(409, '原记录已变更，请刷新后重试。');
     const edit = { kind, scope: required(scope, 100), body: required(body, kind === 'source' ? 16000 : 4000) };
@@ -248,8 +289,8 @@ const mutations = {
     }
     db.exec('BEGIN');
     try {
-      const result = db.prepare('INSERT INTO memory(kind,scope,body,source,replaces) VALUES (?,?,?,?,?)')
-        .run(kind, edit.scope, edit.body, origin, old?.id ?? null);
+      const result = db.prepare('INSERT INTO memory(kind,scope,body,source,replaces,message_id) VALUES (?,?,?,?,?,?)')
+        .run(kind, edit.scope, edit.body, origin, old?.id ?? null, message_id ?? null);
       if (needsReview) db.prepare('INSERT INTO memory_decisions(record,detail,time) VALUES (?,?,?)')
         .run(result.lastInsertRowid, JSON.stringify({ action: old ? 'replace' : 'keep', replaced: old?.id ?? null,
           scope: edit.scope, candidates: candidates.map(record => record.id) }), new Date().toISOString());
@@ -303,7 +344,64 @@ const mutations = {
     const insert = db.prepare('INSERT INTO memory(kind,scope,body,source) SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM memory WHERE source = ?)');
     for (const item of demoRecords) insert.run(item.kind, item.scope, item.body, item.source, item.source);
   },
-  '/api/chat': ({ text, language, useModel = true, temporary }) => reply(required(text, 6000), language, useModel === true, temporary === true),
+  '/api/chat': ({ text, language, useModel = true, temporary, conversation_id }) => reply(required(text, 6000), language, useModel === true, temporary === true, conversation_id),
+  '/api/conversation': ({ title, project }) => {
+    if (title != null && typeof title !== 'string') fail(400, '请检查输入内容。');
+    if (project != null && (typeof project !== 'string' || project.length > 60)) fail(400, '请检查输入内容。');
+    const result = db.prepare('INSERT INTO conversations(title, project, created) VALUES (?,?,?)')
+      .run(typeof title === 'string' && title.trim() ? title.trim().slice(0, 60) : '新对话',
+        typeof project === 'string' ? project.trim() : '', new Date().toISOString());
+    return { ...state(), conversation: Number(result.lastInsertRowid) };
+  },
+  '/api/conversation-edit': ({ id, title, project }) => {
+    if (!Number.isSafeInteger(id) || !db.prepare('SELECT id FROM conversations WHERE id = ?').get(id)) {
+      fail(404, '找不到这个对话。');
+    }
+    const sets = [];
+    const args = [];
+    if (title != null) {
+      if (typeof title !== 'string' || !title.trim() || title.length > 60) fail(400, '请检查输入内容。');
+      sets.push('title = ?');
+      args.push(title.trim());
+    }
+    if (project != null) {
+      if (typeof project !== 'string' || project.length > 60) fail(400, '请检查输入内容。');
+      sets.push('project = ?');
+      args.push(project.trim());
+    }
+    if (sets.length) db.prepare(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
+  },
+  '/api/conversation-merge': ({ id, target }) => {
+    if (!Number.isSafeInteger(id) || !Number.isSafeInteger(target) || id === target) fail(400, '请求内容不正确。');
+    const source = db.prepare('SELECT id FROM conversations WHERE id = ?').get(id);
+    const goal = db.prepare('SELECT id FROM conversations WHERE id = ?').get(target);
+    if (!source || !goal) fail(404, '找不到这个对话。');
+    db.exec('BEGIN');
+    db.prepare('UPDATE messages SET conversation_id = ? WHERE conversation_id = ?').run(target, id);
+    db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+    db.exec('COMMIT');
+  },
+  '/api/conversation-delete': ({ id }) => {
+    if (!Number.isSafeInteger(id)) fail(400, '请求内容不正确。');
+    db.exec('BEGIN');
+    const removed = db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+    if (!removed.changes) {
+      db.exec('ROLLBACK');
+      fail(404, '找不到这个对话。');
+    }
+    // Memories saved from this conversation's messages go with it, along with any later revisions of those memories.
+    const seeds = db.prepare('SELECT m.id FROM memory m JOIN messages msg ON msg.id = m.message_id WHERE msg.conversation_id = ?').all(id);
+    const doomed = new Set(seeds.map(row => row.id));
+    let frontier = seeds.map(row => row.id);
+    while (frontier.length) {
+      frontier = db.prepare(`SELECT id FROM memory WHERE replaces IN (${frontier.map(() => '?').join(',')})`)
+        .all(...frontier).map(row => row.id).filter(row => !doomed.has(row));
+      for (const row of frontier) doomed.add(row);
+    }
+    if (doomed.size) db.prepare(`DELETE FROM memory WHERE id IN (${[...doomed].map(() => '?').join(',')})`).run(...[...doomed]);
+    db.prepare('DELETE FROM messages WHERE conversation_id = ?').run(id);
+    db.exec('COMMIT');
+  },
   '/api/draft': ({ body }) => {
     db.prepare('INSERT INTO drafts VALUES (?,?,?)').run(randomUUID(), release, required(body, 12000));
   },

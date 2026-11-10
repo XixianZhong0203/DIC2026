@@ -20,6 +20,27 @@ let current;
 let editing = null;
 let pendingMemory = null;
 let oneTurnNote = false;
+let activeChat = Number(localStorage.getItem('daymark-chat')) || null;
+
+function reconcileChat() {
+  const chats = current?.conversations ?? [];
+  if (!chats.length) { activeChat = null; return; }
+  if (activeChat == null || !chats.some(chat => chat.id === activeChat)) {
+    activeChat = Math.max(...chats.map(chat => chat.id));
+  }
+  localStorage.setItem('daymark-chat', activeChat);
+}
+
+function chatMessages() {
+  if (!current || activeChat == null) return [];
+  return (current.messages ?? []).filter(message => message.conversation_id === activeChat);
+}
+
+function setActiveChat(id) {
+  activeChat = id;
+  if (id != null) localStorage.setItem('daymark-chat', id);
+  render();
+}
 
 function resetMemoryReview() {
   pendingMemory = null;
@@ -60,6 +81,7 @@ async function fetchResult(path, body) {
 async function request(path, body) {
   const data = await fetchResult(path, body);
   current = { ...data, tasks: data.tasks ?? [] };
+  reconcileChat();
   render();
 }
 
@@ -117,7 +139,8 @@ function render() {
   renderPlanner();
   renderOpportunities(current);
   renderAlignment(current.alignment);
-  const { memory, messages, draft, events, status, live, release, repository } = current;
+  const { memory, draft, events, status, live, release, repository } = current;
+  const messages = chatMessages();
   if (pendingMemory) renderMemoryReview();
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
   const latest = messages.at(-1)?.review;
@@ -143,10 +166,12 @@ function render() {
     card.append(element('small', message.role === 'user' ? t('你') : 'Daymark'), element('p', message.body));
     if (message.review?.mode) card.append(element('small', t(message.review.mode === 'local' ? '本地查询' : '模型回复') + (message.review.modelId ? ' · ' + message.review.modelId : ''), 'reply-mode'));
     if (message.review?.fallbackReason) card.append(element('p', t(message.review.fallbackReason), 'reply-note'));
+    if (message.review?.plain) card.append(element('p', t('模型未返回结构化答复，按纯文本展示。'), 'reply-note'));
     if (message.review) card.append(element('small', t(message.review.cited?.length ? '有引用可核对' : '未引用项目证据')));
     card.append(action(t('存入记忆'), async () => {
-      await request('memory', { kind: 'source', scope: 'DIC2026',
-        source: t('项目对话') + ' #' + message.id, body: message.body });
+      const chat = (current.conversations ?? []).find(item => item.id === activeChat);
+      await request('memory', { kind: 'source', scope: chat?.project || 'DIC2026',
+        source: t('项目对话') + ' #' + message.id, body: message.body, message_id: message.id });
       showView('capture');
     }));
     if (message.review?.conflict) card.append(element('p', message.review.conflict, 'attention'));
@@ -211,6 +236,8 @@ function render() {
 }
 
 const viewButtons = [...document.querySelectorAll('[data-view]')];
+const groupViews = { plan: ['tasks', 'calendar'], records: ['capture', 'memory', 'delegation', 'evaluation'] };
+const expandedGroups = new Set(Object.keys(groupViews));
 let view = 'chat';
 let calendarMonth = new Date();
 let selectedDay = null;
@@ -264,24 +291,35 @@ get('calendar-add').onclick = () => {
   }
 };
 
-const viewTitles = { chat: '对话', opportunities: '机会', tasks: '待办', calendar: '日历',
+const viewTitles = { chat: '对话', opportunities: '线索', tasks: '待办', calendar: '日历',
   capture: '收集', memory: '记忆', delegation: '授权', evaluation: '评估' };
+
+function activeGroup() {
+  return Object.keys(groupViews).find(key => groupViews[key].includes(view)) ?? '';
+}
+
+function syncNavState() {
+  const group = activeGroup();
+  if (group) expandedGroups.add(group);
+  for (const key of Object.keys(groupViews)) {
+    const open = expandedGroups.has(key);
+    get('group-' + key).setAttribute('aria-expanded', String(open));
+    get('children-' + key).hidden = !open;
+    document.querySelector(`.nav-caret[data-toggle="${key}"]`)?.classList.toggle('closed', !open);
+    if (key === group) get('group-' + key).setAttribute('aria-current', 'page');
+    else get('group-' + key).removeAttribute('aria-current');
+  }
+}
 
 function showView(name) {
   view = name;
   get('view-title').textContent = t(viewTitles[name]);
   document.body.classList.remove('sidebar-open');
   get('sidebar-toggle').setAttribute('aria-expanded', 'false');
-  const group = ['tasks', 'calendar'].includes(name) ? 'plan'
-    : ['capture', 'memory', 'delegation', 'evaluation'].includes(name) ? 'records' : '';
-  get('subnav').hidden = !group;
+  syncNavState();
   for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
   for (const button of viewButtons) {
-    const tab = button.dataset.view;
-    const active = button.dataset.group ? tab === name :
-      tab === name || (tab === 'tasks' && group === 'plan') || (tab === 'capture' && group === 'records');
-    button.hidden = Boolean(button.dataset.group && button.dataset.group !== group);
-    if (active) button.setAttribute('aria-current', 'page');
+    if (button.dataset.view === name) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
 }
@@ -291,6 +329,17 @@ get('sidebar-toggle').onclick = () => {
   get('sidebar-toggle').setAttribute('aria-expanded', String(open));
 };
 for (const button of viewButtons) button.onclick = () => showView(button.dataset.view);
+for (const button of document.querySelectorAll('.nav-group')) button.onclick = () => {
+  expandedGroups.add(button.dataset.group);
+  showView(groupViews[button.dataset.group][0]);
+};
+for (const button of document.querySelectorAll('.nav-caret')) button.onclick = () => {
+  const group = button.dataset.toggle;
+  if (groupViews[group].includes(view)) return;
+  if (expandedGroups.has(group)) expandedGroups.delete(group);
+  else expandedGroups.add(group);
+  syncNavState();
+};
 showView(view);
 
 function dateKey(year, month, day) {
@@ -445,7 +494,11 @@ formAction('chat', async data => {
   question.readOnly = true;
   try {
     const temporary = oneTurnNote && data.text.startsWith(t('仅本次使用：'));
-    await request('chat', { ...data, language, temporary, useModel: get('chat-mode').value === 'model' });
+    await request('chat', { ...data, language, temporary, conversation_id: activeChat, useModel: get('chat-mode').value === 'model' });
+    if (current.conversation != null) {
+      activeChat = current.conversation;
+      localStorage.setItem('daymark-chat', activeChat);
+    }
     question.value = '';
     oneTurnNote = false;
   } finally {
@@ -453,6 +506,109 @@ formAction('chat', async data => {
     question.readOnly = false;
   }
 });
+get('new-chat').onclick = () => withButton(get('new-chat'), async () => {
+  const data = await fetchResult('conversation', {});
+  current = { ...data, tasks: data.tasks ?? [] };
+  if (data.conversation != null) {
+    activeChat = data.conversation;
+    localStorage.setItem('daymark-chat', activeChat);
+  }
+  render();
+  showView('chat');
+  get('question').focus();
+});
+get('toggle-chats').onclick = () => {
+  renderChatList();
+  if (!get('chat-dialog').open) get('chat-dialog').showModal();
+};
+get('close-chats').onclick = () => get('chat-dialog').close();
+get('chat-dialog').addEventListener('close', () => render());
+
+function renderChatList() {
+  const list = get('chat-list');
+  list.replaceChildren();
+  const chats = [...(current?.conversations ?? [])].sort((a, b) => b.id - a.id);
+  if (!chats.length) {
+    list.append(element('p', t('还没有对话。发消息或点「新对话」开始。'), 'muted'));
+    return;
+  }
+  for (const chat of chats) list.append(chatRow(chat));
+}
+
+function chatRow(chat) {
+  const row = element('div', '', 'chat-row' + (chat.id === activeChat ? ' current' : ''));
+  const title = element('button', chat.title, 'chat-row-title');
+  title.type = 'button';
+  title.onclick = () => {
+    get('chat-dialog').close();
+    showView('chat');
+    setActiveChat(chat.id);
+  };
+  const project = element('input', '', 'chat-row-project');
+  project.value = chat.project;
+  project.placeholder = t('未分组');
+  project.maxLength = 40;
+  project.setAttribute('aria-label', t('项目'));
+  project.onchange = () => {
+    if (project.value.trim() !== chat.project) request('conversation-edit', { id: chat.id, project: project.value.trim() });
+  };
+  const rename = element('button', '✎', 'chat-row-tool');
+  rename.type = 'button';
+  rename.title = t('重命名');
+  rename.setAttribute('aria-label', t('重命名'));
+  rename.onclick = () => startRename(chat, row, title);
+  const merge = element('button', '⇥', 'chat-row-tool');
+  merge.type = 'button';
+  merge.title = t('并入当前对话');
+  merge.setAttribute('aria-label', t('并入当前对话'));
+  merge.hidden = chat.id === activeChat;
+  merge.onclick = () => withButton(merge, async () => {
+    if (activeChat == null || chat.id === activeChat) return;
+    if (!window.confirm(t('把这个对话并入当前对话？消息和记忆都会一起跟过去。'))) return;
+    await request('conversation-merge', { id: chat.id, target: activeChat });
+    renderChatList();
+  });
+  const remove = element('button', '✕', 'chat-row-tool');
+  remove.type = 'button';
+  remove.title = t('删除对话');
+  remove.setAttribute('aria-label', t('删除对话'));
+  remove.onclick = () => withButton(remove, async () => {
+    if (!window.confirm(t('删除这个对话？对话里的消息和由对话保存的记忆会一起删除。'))) return;
+    await request('conversation-delete', { id: chat.id });
+    if (activeChat === chat.id) {
+      const chats = current.conversations ?? [];
+      activeChat = chats.length ? Math.max(...chats.map(item => item.id)) : null;
+    }
+    localStorage.setItem('daymark-chat', activeChat);
+    renderChatList();
+  });
+  row.append(title, project, merge, remove);
+  return row;
+}
+
+function startRename(chat, row, titleButton) {
+  if (row.querySelector('.chat-row-name')) return;
+  const input = element('input', '', 'chat-row-name');
+  input.value = chat.title;
+  input.maxLength = 60;
+  input.setAttribute('aria-label', t('重命名对话'));
+  titleButton.replaceWith(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = async save => {
+    if (finished) return;
+    finished = true;
+    const value = input.value.trim();
+    if (save && value && value !== chat.title) await request('conversation-edit', { id: chat.id, title: value });
+    renderChatList();
+  };
+  input.onblur = () => { finish(true); };
+  input.onkeydown = event => {
+    if (event.key === 'Enter') { event.preventDefault(); input.blur(); }
+    if (event.key === 'Escape') { input.onblur = null; finish(false); }
+  };
+}
 async function saveMemory(data, replaces, review = pendingMemory) {
   await request('memory', { ...data, replaces, snapshot: review?.snapshot, review_base: review?.replaces });
   clearRevision();

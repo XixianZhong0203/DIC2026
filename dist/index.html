@@ -12,18 +12,30 @@
   <div class="brand"><svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><rect x="2" y="9" width="23" height="23" rx="5" fill="#c6d9cc"/><rect x="10" y="3" width="24" height="24" rx="5" fill="#295846"/><path d="m16 15 4 4 8-9" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg><b>Daymark</b></div>
   <nav class="feature-nav" aria-label="Workspace navigation">
     <button type="button" data-view="chat" data-i18n>对话</button>
-    <button type="button" data-view="opportunities" data-i18n>机会</button>
-    <button type="button" data-view="tasks" data-i18n>计划</button>
-    <button type="button" data-view="capture" data-i18n>资料</button>
+    <button type="button" data-view="opportunities" data-i18n>线索</button>
+    <div class="nav-item">
+      <div class="nav-group-row">
+        <button type="button" class="nav-group" id="group-plan" data-group="plan" aria-expanded="true" data-i18n>计划</button>
+        <button type="button" class="nav-caret" data-toggle="plan" aria-hidden="true">⌄</button>
+      </div>
+      <div class="nav-children" id="children-plan">
+        <button type="button" data-view="tasks" data-i18n>待办</button>
+        <button type="button" data-view="calendar" data-i18n>日历</button>
+      </div>
+    </div>
+    <div class="nav-item">
+      <div class="nav-group-row">
+        <button type="button" class="nav-group" id="group-records" data-group="records" aria-expanded="true" data-i18n>资料</button>
+        <button type="button" class="nav-caret" data-toggle="records" aria-hidden="true">⌄</button>
+      </div>
+      <div class="nav-children" id="children-records">
+        <button type="button" data-view="capture" data-i18n>收集</button>
+        <button type="button" data-view="memory" data-i18n>记忆</button>
+        <button type="button" data-view="delegation" data-i18n>授权</button>
+        <button type="button" data-view="evaluation" data-i18n>评估</button>
+      </div>
+    </div>
   </nav>
-<div class="subnav" id="subnav" hidden>
-  <button type="button" data-view="tasks" data-group="plan" data-i18n>待办</button>
-  <button type="button" data-view="calendar" data-group="plan" data-i18n>日历</button>
-  <button type="button" data-view="capture" data-group="records" data-i18n>收集</button>
-  <button type="button" data-view="memory" data-group="records" data-i18n>记忆</button>
-  <button type="button" data-view="delegation" data-group="records" data-i18n>授权</button>
-  <button type="button" data-view="evaluation" data-group="records" data-i18n>评估</button>
-</div>
 </aside>
 <div class="workspace-frame">
 <header class="workspace-header">
@@ -44,14 +56,14 @@
 </dialog>
 <div class="grid">
   <section class="card wide" data-panel="opportunities">
-    <div class="card-head"><h2 data-i18n>客户线索与改进机会</h2></div>
+    <div class="card-head"><h2 data-i18n>客户线索与改进想法</h2></div>
     <p class="muted" data-i18n>搜索公开线索，再保存可核对的出处和原文。也可以录入客户反馈或工作改进想法。</p>
     <form id="lead-search">
       <label><span data-i18n>搜索词</span><input name="query" required maxlength="200"></label>
       <div class="buttons"><button data-i18n>生成公开搜索链接</button><a id="lead-search-link" target="_blank" rel="noopener noreferrer" hidden data-i18n>打开搜索</a></div>
     </form>
     <form id="opportunity-form">
-      <label><span data-i18n>记录类型</span><select name="kind"><option value="lead" data-i18n>潜在客户</option><option value="idea" data-i18n>改进机会</option></select></label>
+      <label><span data-i18n>记录类型</span><select name="kind"><option value="lead" data-i18n>潜在客户</option><option value="idea" data-i18n>改进想法</option></select></label>
       <label><span data-i18n>标题</span><input name="title" required maxlength="200"></label>
       <label><span data-i18n>出处</span><input name="source" required maxlength="500"></label>
       <label><span data-i18n>原文</span><textarea name="evidence" required maxlength="8000"></textarea></label>
@@ -115,6 +127,15 @@
       <h1 data-i18n>今天想做什么？</h1>
       <p class="muted" data-i18n>查一条记录，接着做一件事。</p>
     </div>
+    <div class="chat-toolbar">
+      <button id="new-chat" type="button" class="secondary" data-i18n>新对话</button>
+      <button id="toggle-chats" type="button" class="secondary" data-i18n>对话列表</button>
+    </div>
+    <dialog id="chat-dialog" class="chat-dialog" aria-labelledby="chat-dialog-title">
+      <div class="source-heading"><h2 id="chat-dialog-title" data-i18n>全部对话</h2>
+        <button id="close-chats" type="button" class="secondary" data-i18n>关闭</button></div>
+      <div id="chat-list"></div>
+    </dialog>
     <div id="conversation" aria-live="polite"></div>
     <form id="chat" class="composer">
       <label class="sr-only" for="question"><span data-i18n>问 Daymark</span></label>

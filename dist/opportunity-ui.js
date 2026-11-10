@@ -11,7 +11,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   formAction('model-evaluation', () => request('opportunity-benchmark', { language: language() }));
 
   const labels = {
-    lead: '潜在客户', idea: '改进机会', research: '资料分析', draft: '起草联系邮件',
+    lead: '潜在客户', idea: '改进想法', research: '资料分析', draft: '起草联系邮件',
     send: '对外发送', transfer: '转账', auto: '可委托 AI', approval: '逐次审批',
     human: '本人处理', captured: '保存线索', assessed: '分析完成', drafted: '草稿已保存',
     simulated_send: '模拟发送成功', blocked: '操作被拦截', policy: '授权已更新', analysis_started: '开始分析', analysis_failed: '模型分析失败',
