@@ -93,3 +93,25 @@ summary { cursor: pointer; }
   header, main { padding-inline: 16px; }
   .intro { align-items: start; flex-direction: column; gap: 6px; }
 }
+
+.feature-nav {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 9px max(16px, calc((100vw - 1120px) / 2));
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+.feature-nav button { flex: none; background: transparent; color: var(--green); border-color: transparent; }
+.feature-nav button[aria-current] { background: #e4eee5; border-color: #ccdcd0; font-weight: 700; }
+.wide { grid-column: 1 / -1; }
+.time-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.calendar-tools { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 12px 0; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; text-align: center; }
+.calendar-grid button { width: 100%; padding-inline: 2px; }
+.calendar-grid button[aria-pressed="true"] { color: white; background: var(--green); }
+.task-entry > button { margin: 6px 0 0 10px; }
+#revision-original { margin: 0; padding: 8px; background: #f8eed7; white-space: pre-wrap; }
+@media (max-width: 440px) { .time-fields { grid-template-columns: 1fr; } }
+
+#task-list, #capture-list { max-height: 440px; overflow: auto; }

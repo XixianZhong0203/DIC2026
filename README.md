@@ -14,6 +14,12 @@ Daymark 是为独立经营者设计的本地 AI 工作台。它把项目记忆�
 
 Live chat requires your own API key. Copy `.env.example` to `.env`, set `OPENAI_API_KEY`, and restart Daymark. For another Chat Completions provider, also set its `OPENAI_BASE_URL` and `MODEL_ID`. Git ignores the local `.env` and `data/` directory.
 
+## 收集、待办与日历
+
+从「收集」粘贴邮件、聊天或笔记，也可以从对话保存单条消息。来源原文单独保存。关联待办时，界面提示原文中的 ISO 格式日期。确认开始和结束时间后，待办和月历会使用同一条记录。时间使用浏览器本地时间。
+
+用「记忆」修订长期偏好或规则，可查看旧值与来源。模型答复显示引用和缺失证据。引用仍需要人工核对。「评估」可导出固定案例输入、模拟结果和发布日志。
+
 ## 试一次
 
 1. 载入示例记忆，核对 v0.1 的测试记录、v0.2 的目标与未确认的自动发布提议。

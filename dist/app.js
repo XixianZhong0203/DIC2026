@@ -46,17 +46,18 @@ async function request(path, body) {
   }).catch(() => { throw new Error('无法连接到 Daymark，请确认本地服务已启动。'); });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error);
-  current = data;
+  current = { ...data, tasks: data.tasks ?? [] };
   render();
 }
 
 function clearRevision() {
   editing = null;
   get('memoryForm').reset();
-  get('revision').hidden = get('cancel').hidden = true;
+  get('revision').hidden = get('revision-original').hidden = get('cancel').hidden = true;
 }
 
 function render() {
+  renderPlanner();
   const { memory, messages, draft, events, status, live, release, repository } = current;
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
   get('connection').textContent = t(live ? '模型已配置' : '本地演示模式');
@@ -66,6 +67,12 @@ function render() {
   for (const message of messages) {
     const card = element('article', '', 'message ' + message.role);
     card.append(element('small', message.role === 'user' ? t('你') : 'Daymark'), element('p', message.body));
+    if (message.review) card.append(element('small', t(message.review.cited?.length ? '有引用可核对' : '未引用项目证据')));
+    card.append(action(t('存入记忆'), async () => {
+      await request('memory', { kind: 'source', scope: 'DIC2026',
+        source: t('项目对话') + ' #' + message.id, body: message.body });
+      showView('capture');
+    }));
     if (message.review?.conflict) card.append(element('p', message.review.conflict, 'attention'));
     if (message.review?.question) card.append(element('p', message.review.question, 'attention'));
     for (const record of message.review?.cited ?? []) {
@@ -77,7 +84,7 @@ function render() {
   }
   conversation.scrollTop = conversation.scrollHeight;
 
-  const labels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议' };
+  const labels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议', source: '原始资料' };
   get('memory').replaceChildren(...memory.map(record => {
     const card = element('article', '', 'entry');
     card.append(element('small', '#' + record.id + ' · ' + t(labels[record.kind]) + ' · ' + record.scope +
@@ -89,7 +96,11 @@ function render() {
       for (const name of ['kind', 'scope', 'body']) form.elements[name].value = record[name];
       form.elements.source.value = '';
       get('revision').textContent = t('正在修订 #') + record.id;
-      get('revision').hidden = get('cancel').hidden = false;
+      get('revision-original').textContent = record.body + '\n' + record.source;
+      get('revision').hidden = get('revision-original').hidden = get('cancel').hidden = false;
+      if (record.kind === 'source') {
+        form.elements.kind.value = 'source';
+      }
       form.elements.body.focus();
     }));
     return card;
@@ -110,6 +121,129 @@ function render() {
     ' · ' + event.version + ' · ' + new Date(event.time).toLocaleString(language), 'muted')));
 }
 
+const viewButtons = [...document.querySelectorAll('[data-view]')];
+let view = 'tasks';
+let calendarMonth = new Date();
+let selectedDay = null;
+
+function showView(name) {
+  view = name;
+  for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
+  for (const button of viewButtons) {
+    if (button.dataset.view === name) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+}
+
+for (const button of viewButtons) button.onclick = () => showView(button.dataset.view);
+showView(view);
+
+function dateKey(year, month, day) {
+  return [year, String(month + 1).padStart(2, '0'), String(day).padStart(2, '0')].join('-');
+}
+
+function showDateHints() {
+  const record = current.memory.find(item => String(item.id) === get('task-source').value);
+  const hints = [...new Set(record?.body.match(/\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?/g) ?? [])];
+  const note = get('date-hints');
+  note.hidden = !record;
+  note.textContent = hints.length
+    ? t('原文中的候选时间，请核对') + ' · ' + hints.join(' / ')
+    : t('请从来源确认日期和时间。');
+}
+
+function taskCard(task) {
+  const card = element('article', '', 'entry task-entry');
+  card.append(element('strong', task.title), element('p', task.starts.replace('T', ' ') + ' → ' + task.ends.replace('T', ' ')),
+    element('small', t(task.done ? '已完成' : '待处理')));
+  const record = current.memory.find(item => item.id === task.memory_id);
+  if (record) {
+    const evidence = element('details', '');
+    evidence.append(element('summary', t('出处') + ' · #' + record.id + ' · ' + record.source),
+      element('p', record.body));
+    card.append(evidence);
+  }
+  card.append(action(t(task.done ? '重新打开' : '标记完成'), () => request('task-status', { id: task.id, done: !task.done })));
+  return card;
+}
+
+function renderCalendar() {
+  const year = calendarMonth.getFullYear();
+  const month = calendarMonth.getMonth();
+  const prefix = dateKey(year, month, 1).slice(0, 7);
+  get('calendar-month').textContent = calendarMonth.toLocaleDateString(language, { year: 'numeric', month: 'long' });
+  const days = get('calendar-grid');
+  days.replaceChildren();
+  for (let offset = 0; offset < 7; offset++) {
+    const weekday = new Date(2024, 0, 1 + offset);
+    days.append(element('small', weekday.toLocaleDateString(language, { weekday: 'short' })));
+  }
+  const firstDay = new Date(year, month, 1);
+  const blanks = (firstDay.getDay() + 6) % 7;
+  for (let i = 0; i < blanks; i++) days.append(element('span', ''));
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const intersects = (task, from, to) => task.starts < to + 'T00:00' && task.ends > from + 'T00:00';
+  for (let day = 1; day <= lastDay; day++) {
+    const key = dateKey(year, month, day);
+    const next = day === lastDay ? dateKey(year + (month === 11 ? 1 : 0), (month + 1) % 12, 1) : dateKey(year, month, day + 1);
+    const count = current.tasks.filter(task => intersects(task, key, next)).length;
+    const button = action(String(day) + (count ? ' · ' + count : ''), () => {
+      selectedDay = selectedDay?.key === key ? null : { key, next };
+      renderCalendar();
+    });
+    button.setAttribute('aria-pressed', String(selectedDay?.key === key));
+    days.append(button);
+  }
+  const nextMonth = dateKey(year + (month === 11 ? 1 : 0), (month + 1) % 12, 1);
+  const items = current.tasks.filter(task => selectedDay
+    ? intersects(task, selectedDay.key, selectedDay.next)
+    : intersects(task, prefix + '-01', nextMonth));
+  get('calendar-items').replaceChildren(
+    ...(selectedDay ? [element('p', selectedDay.key, 'muted')] : []),
+    ...(items.length ? items.map(taskCard) : [element('p', t('这个时间段暂无安排。'), 'muted')]),
+  );
+}
+
+function renderPlanner() {
+  const source = get('task-source');
+  const selection = source.value;
+  const empty = element('option', t('不关联记录'));
+  empty.value = '';
+  source.replaceChildren(empty, ...current.memory.map(record => {
+    const option = element('option', '#' + record.id + ' · ' + record.source);
+    option.value = record.id;
+    return option;
+  }));
+  source.value = selection;
+  if (source.selectedIndex === -1) source.value = '';
+  showDateHints();
+  get('task-list').replaceChildren(...(current.tasks.length
+    ? [...current.tasks].sort((a, b) => a.done - b.done).map(taskCard)
+    : [element('p', t('还没有待办。'), 'muted')]));
+  get('capture-list').replaceChildren(...current.memory.filter(record => record.kind === 'source' && !record.superseded).map(record => {
+    const card = element('article', '', 'entry');
+    const original = element('details', '');
+    original.append(element('summary', record.source), element('p', record.body));
+    card.append(original, action(t('用此来源创建待办'), () => {
+      showView('tasks');
+      get('task-source').value = record.id;
+      showDateHints();
+      get('task-form').elements.title.focus();
+    }));
+    return card;
+  }));
+  renderCalendar();
+}
+
+get('task-source').onchange = showDateHints;
+for (const [id, delta] of [['previous-month', -1], ['next-month', 1]]) {
+  get(id).onclick = () => {
+    calendarMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + delta, 1);
+    selectedDay = null;
+    renderCalendar();
+  };
+}
+
 function formAction(id, callback) {
   const form = get(id);
   form.onsubmit = event => {
@@ -120,10 +254,21 @@ function formAction(id, callback) {
 
 get('seed').onclick = () => withButton(get('seed'), () => request('demo', {}));
 get('cancel').onclick = clearRevision;
+formAction('capture-form', async (data, form) => {
+  await request('memory', { ...data, kind: 'source', scope: 'DIC2026' });
+  form.reset();
+});
+formAction('task-form', async (data, form) => {
+  await request('task', { ...data, memory_id: data.memory_id ? Number(data.memory_id) : null });
+  form.reset();
+  get('task-source').value = '';
+  showDateHints();
+});
 formAction('chat', async (data, form) => { await request('chat', { ...data, language }); form.reset(); });
 formAction('memoryForm', async data => { await request('memory', { ...data, replaces: editing }); clearRevision(); });
 formAction('draftForm', async (data, form) => { await request('draft', data); form.reset(); });
 function renderEvaluation(data) {
+  get('export-evidence').hidden = false;
   get('results').replaceChildren(...['reference', 'daymark'].map(mode => {
     const result = demoReport(mode, 'v0.2', data.verified, Boolean(data.approved));
     const card = element('article', '', 'entry');
@@ -132,6 +277,26 @@ function renderEvaluation(data) {
     return card;
   }));
 }
+get('export-evidence').onclick = () => {
+  const { verified, approved } = evaluationInput;
+  const versions = { current: 'v0.2', verified };
+  const report = {
+    kind: 'fixed-scenario-policy-demo',
+    input: { ...versions, approved: Boolean(approved) },
+    results: {
+      presetFailure: demoReport('reference', versions.current, verified, Boolean(approved)),
+      daymark: demoReport('daymark', versions.current, verified, Boolean(approved)),
+    },
+    simulatedReleaseLog: current.events,
+  };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' }));
+  const link = element('a', '');
+  link.href = url;
+  link.download = 'daymark-evaluation.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
 formAction('evaluation', data => {
   evaluationInput = data;
   renderEvaluation(data);
