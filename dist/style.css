@@ -259,3 +259,32 @@ main { padding: 20px clamp(14px, 4vw, 44px) 28px; }
   .header-controls { margin-left: auto; }
   .chat { min-height: calc(100dvh - 102px); }
 }
+
+.source-panel {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(460px, 100vw);
+  max-width: 100vw;
+  height: 100dvh;
+  max-height: 100dvh;
+  margin: 0;
+  padding: 20px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  color: inherit;
+  background: #fff;
+  box-shadow: -8px 0 36px #24334a12;
+}
+.source-panel::backdrop { background: #17213230; }
+.source-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.source-panel h3 { font-size: 14px; margin: 20px 0 8px; }
+.memory-review blockquote { margin: 10px 0; padding: 10px 12px; background: #eef3fb; border-radius: 8px; white-space: pre-wrap; }
+.sidebar { background: #f4f7fb; }
+.sidebar button[aria-current] { background: #e0eafe; color: #18366f; }
+
+.alignment-metrics { width: 100%; border-collapse: collapse; margin-block: 1rem; font-variant-numeric: tabular-nums; }
+.alignment-metrics th, .alignment-metrics td { text-align: left; padding: .6rem; border-bottom: 1px solid #dce4df; }
+.alignment-metrics th[scope="row"] { font-weight: 500; }
+#alignment-results pre, #source-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .83rem; }
+#memory-audit li { padding-block: .4rem; }
+#memory-audit small { display: block; }

@@ -2,7 +2,7 @@ import { createOpportunityUI } from '/opportunity-ui.js';
 import { demoReport } from '/policy.mjs';
 import { translate } from '/i18n.js';
 
-let language = localStorage.getItem('daymark-language') === 'en' ? 'en' : 'zh-CN';
+let language = localStorage.getItem('daymark-language') === 'zh-CN' ? 'zh-CN' : 'en';
 const t = phrase => translate(language, phrase);
 const staticCopy = [...document.querySelectorAll('[data-i18n], [data-placeholder]')].map(node => ({
   node, placeholder: node.hasAttribute('data-placeholder'), original: node.placeholder ?? node.textContent,
@@ -19,6 +19,7 @@ const get = id => document.getElementById(id);
 let current;
 let editing = null;
 let pendingMemory = null;
+let oneTurnNote = false;
 
 function resetMemoryReview() {
   pendingMemory = null;
@@ -47,14 +48,62 @@ async function withButton(button, callback) {
   finally { button.disabled = false; }
 }
 
-async function request(path, body) {
+async function fetchResult(path, body) {
   const response = await fetch('/api/' + path, body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }).catch(() => { throw new Error('无法连接到 Daymark，请确认本地服务已启动。'); });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error);
+  return data;
+}
+
+async function request(path, body) {
+  const data = await fetchResult(path, body);
   current = { ...data, tasks: data.tasks ?? [] };
   render();
+}
+
+let visibleEvidence = null;
+get('close-sources').onclick = () => get('source-panel').close();
+get('source-panel').addEventListener('close', () => { visibleEvidence = null; });
+
+function openSources(review) {
+  visibleEvidence = review;
+  const body = get('source-content');
+  body.replaceChildren();
+  for (const [label, items] of [['来源原文', review.facts], ['基于资料的推断', review.inferences], ['仍待核实', review.unknowns]]) {
+    if (!items?.length) continue;
+    body.append(element('h3', t(label)));
+    for (const item of items) {
+      const row = element('article', '', 'entry');
+      if (typeof item === 'string') row.append(element('p', item));
+      else row.append(element('small', '#' + item.id + ' · ' + item.source), element('p', item.quote));
+      body.append(row);
+    }
+  }
+  if (review.cited?.length) body.append(element('h3', t('引用记录')));
+  for (const record of review.cited ?? []) {
+    const source = element('details', '', 'entry');
+    source.append(element('summary', '#' + record.id + ' · ' + t(record.source)), element('p', t(record.body)));
+    body.append(source);
+  }
+  if (review.trace) {
+    const trace = element('details', '', 'entry');
+    trace.append(element('summary', t('处理记录')));
+    if (review.trace.retrievalQuery) trace.append(element('p', t('检索词') + ' · ' + review.trace.retrievalQuery));
+    if (review.trace.gapRetrieval) {
+      const { query, ids, status } = review.trace.gapRetrieval;
+      trace.append(element('p', t('补充检索') + ' · ' + query + ' · ' + ids.map(id => '#' + id).join(', ') +
+        (status === 'failed' ? ' · ' + t('模型分析失败') : '')));
+    }
+    trace.append(element('p', t('核对原文片段') + ' · ' + review.trace.matchedQuotes));
+    if (review.trace.attemptedModel) trace.append(element('p', t('调用模型') + ' · ' + review.trace.attemptedModel));
+    for (const record of review.trace.retrieved) {
+      trace.append(element('p', '#' + record.id + ' · ' + record.source + ' · ' + record.kind));
+    }
+    body.append(trace);
+  }
+  if (!get('source-panel').open) get('source-panel').showModal();
 }
 
 function clearRevision() {
@@ -67,6 +116,7 @@ function clearRevision() {
 function render() {
   renderPlanner();
   renderOpportunities(current);
+  renderAlignment(current.alignment);
   const { memory, messages, draft, events, status, live, release, repository } = current;
   if (pendingMemory) renderMemoryReview();
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
@@ -91,7 +141,7 @@ function render() {
   for (const message of messages) {
     const card = element('article', '', 'message ' + message.role);
     card.append(element('small', message.role === 'user' ? t('你') : 'Daymark'), element('p', message.body));
-    if (message.review?.mode) card.append(element('small', t(message.review.mode === 'local' ? '本地查询' : '模型回复'), 'reply-mode'));
+    if (message.review?.mode) card.append(element('small', t(message.review.mode === 'local' ? '本地查询' : '模型回复') + (message.review.modelId ? ' · ' + message.review.modelId : ''), 'reply-mode'));
     if (message.review?.fallbackReason) card.append(element('p', t(message.review.fallbackReason), 'reply-note'));
     if (message.review) card.append(element('small', t(message.review.cited?.length ? '有引用可核对' : '未引用项目证据')));
     card.append(action(t('存入记忆'), async () => {
@@ -106,15 +156,22 @@ function render() {
       card.append(understanding);
     }
     if (message.review?.question) card.append(element('p', message.review.question, 'attention'));
-    for (const record of message.review?.cited ?? []) {
-      const detail = element('details', '');
-      detail.append(element('summary', '#' + record.id + ' · ' + t(record.source)), element('p', t(record.body)));
-      card.append(detail);
+    if (message.review && (message.review.trace || message.review.cited?.length || message.review.facts?.length ||
+      message.review.inferences?.length || message.review.unknowns?.length)) {
+      card.append(action(t('核查依据'), () => openSources(message.review)));
     }
     conversation.append(card);
   }
   conversation.scrollTop = conversation.scrollHeight;
 
+  get('memory-audit').replaceChildren(...(current.memoryDecisions ?? []).map(event => {
+    const detail = JSON.parse(event.detail);
+    const row = element('li', '#' + event.record + ' · ' + t(detail.action === 'replace' ? '替换' : '保存记录') +
+      (detail.replaced ? ' #' + detail.replaced : '') + ' · ' + detail.scope);
+    row.append(element('small', t('核查候选') + ' · ' + (detail.candidates.map(id => '#' + id).join(', ') || '—') +
+      ' · ' + new Date(event.time).toLocaleString(language)));
+    return row;
+  }));
   const labels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议', source: '原始资料' };
   get('memory').replaceChildren(...memory.map(record => {
     const card = element('article', '', 'entry');
@@ -149,7 +206,7 @@ function render() {
     get('release').append(card);
   }
   get('events').replaceChildren(...events.map(event => element('p',
-    (event.type === 'published' ? t('模拟发布 · 草稿 ') + event.draft.slice(0, 8) : t('模拟测试通过')) +
+    (event.type === 'published' ? t('模拟发布 · 草稿 ') + event.draft.slice(0, 8) : t(event.type === 'verified' ? '模拟测试通过' : event.type)) +
     ' · ' + event.version + ' · ' + new Date(event.time).toLocaleString(language), 'muted')));
 }
 
@@ -387,47 +444,115 @@ formAction('chat', async data => {
   progress.hidden = false;
   question.readOnly = true;
   try {
-    await request('chat', { ...data, language, useModel: get('chat-mode').value === 'model' });
+    const temporary = oneTurnNote && data.text.startsWith(t('仅本次使用：'));
+    await request('chat', { ...data, language, temporary, useModel: get('chat-mode').value === 'model' });
     question.value = '';
+    oneTurnNote = false;
   } finally {
     progress.hidden = true;
     question.readOnly = false;
   }
 });
-async function saveMemory(data, replaces) {
-  await request('memory', { ...data, replaces });
+async function saveMemory(data, replaces, review = pendingMemory) {
+  await request('memory', { ...data, replaces, snapshot: review?.snapshot, review_base: review?.replaces });
   clearRevision();
 }
 
 function renderMemoryReview() {
   get('memory-review').hidden = false;
+  get('keep-memory').textContent = t(pendingMemory.replaces == null ? '确认保留两条' : '仅保存当前修订');
+  get('memory-proposal').textContent = pendingMemory.data.body;
+  get('memory-classification-status').textContent = t(pendingMemory.classificationError ?? '');
+  const labels = { direct: '直接冲突', ambiguous: '范围或指代不清', none: '模型未发现冲突', unreviewed: '待人工核对' };
   get('memory-candidates').replaceChildren(...pendingMemory.candidates.map(record => {
     const row = element('article', '', 'entry');
-    row.append(element('small', '#' + record.id + ' · ' + record.source), element('p', record.body),
+    row.append(element('small', '#' + record.id + ' · ' + record.scope + ' · ' + record.source),
+      element('p', t(labels[record.classification]), record.classification === 'direct' ? 'attention' : 'muted'),
+      element('p', record.body),
+      element('small', t('检索相关度') + ' · ' + record.relevance.toFixed(4)));
+    if (record.reason) row.append(element('p', record.reason));
+    if (record.question) row.append(element('p', record.question, 'attention'));
+    if (pendingMemory.replaces == null) row.append(
       action(t('用新内容替换这条'), () => saveMemory(pendingMemory.data, record.id)));
     return row;
   }));
 }
 
 get('memoryForm').addEventListener('input', resetMemoryReview);
-get('keep-memory').onclick = () => withButton(get('keep-memory'), () => saveMemory(pendingMemory.data, null));
+get('keep-memory').onclick = () => withButton(get('keep-memory'), () => saveMemory(pendingMemory.data, pendingMemory.replaces));
+get('classify-memory').onclick = () => withButton(get('classify-memory'), async () => {
+  const review = pendingMemory;
+  const result = await fetchResult('memory-impact', { ...review.data, replaces: review.replaces, classify: true, language });
+  if (pendingMemory !== review) return;
+  pendingMemory = { ...review, candidates: result.impact, classificationError: result.classificationError, snapshot: result.snapshot };
+  renderMemoryReview();
+});
 get('temporary-memory').onclick = () => {
   const value = pendingMemory.data.body;
   resetMemoryReview();
   showView('chat');
+  oneTurnNote = true;
   get('question').value = t('仅本次使用：') + value;
   get('question').focus();
 };
 
 formAction('memoryForm', async data => {
-  const scoped = ['preference', 'rule'];
-  const candidates = editing === null && scoped.includes(data.kind) ? current.memory.filter(record =>
-    !record.superseded && scoped.includes(record.kind) && record.scope.trim().toLowerCase() === data.scope.trim().toLowerCase()) : [];
-  if (!candidates.length) return saveMemory(data, editing);
-  pendingMemory = { data, candidates };
+  const previousKind = current.memory.find(record => record.id === editing)?.kind;
+  if (![data.kind, previousKind].some(kind => ['preference', 'rule'].includes(kind))) return saveMemory(data, editing);
+  const replaces = editing;
+  const form = get('memoryForm');
+  const result = await fetchResult('memory-impact', { ...data, replaces });
+  if (JSON.stringify(Object.fromEntries(new FormData(form))) !== JSON.stringify(data) || editing !== replaces) return;
+  const review = { data, replaces, candidates: result.impact, snapshot: result.snapshot };
+  if (!result.impact.length) return saveMemory(data, replaces, review);
+  pendingMemory = review;
   renderMemoryReview();
   get('memory-review').scrollIntoView({ block: 'nearest' });
 });
+formAction('alignment-evaluation', () => request('alignment-benchmark', { language }));
+function renderAlignment(report) {
+  const container = get('alignment-results');
+  container.replaceChildren();
+  if (!report) return;
+  container.append(element('p', report.model + ' · ' + new Date(report.at).toLocaleString(language) +
+    ' · ' + t(report.complete ? '运行完成' : '运行中断'), 'muted'));
+  const labels = {
+    parseCoverage: '结构有效', unsupportedAgreement: '无依据附和',
+    firstUnsupportedTurn: '首次无依据附和轮次', stanceFlips: '立场变动次数',
+    appropriateAbstention: '正确暂缓', evidenceUpdate: '补证后更新',
+    unauthorizedAttempts: '越权尝试', unauthorizedEffects: '越权模拟结果', legitimateCompletion: '合法任务完成',
+  };
+  const table = element('table', '', 'alignment-metrics');
+  const header = element('tr', '');
+  for (const label of ['指标', '基础模型', 'Daymark 提示']) header.append(element('th', t(label)));
+  table.append(header);
+  for (const [key, label] of Object.entries(labels)) {
+    const row = element('tr', '');
+    const heading = element('th', t(label));
+    heading.scope = 'row';
+    row.append(heading);
+    for (const metrics of report.metrics) {
+      const value = metrics[key];
+      row.append(element('td', value && typeof value === 'object' ? value.count + ' / ' + value.total : value ?? '—'));
+    }
+    table.append(row);
+  }
+  container.append(table);
+  for (const row of report.results) {
+    const details = element('details', '', 'entry');
+    details.append(element('summary', row.caseId + ' · ' + row.turn + ' · ' +
+      t(row.guarded ? 'Daymark 提示' : '基础模型') + ' · ' +
+      t(row.statusMatched == null ? '未评分' : row.statusMatched ? '符合预期' : '需要复核')));
+    if (row.toolAttempt) details.append(element('p', t('拟执行动作') + ' · ' + row.toolAttempt.kind + ' · ' + row.toolAttempt.decision));
+    details.append(element('p', t(row.effectApplied ? '已产生模拟结果' : '未产生模拟结果')));
+    details.append(element('pre', JSON.stringify(row, null, 2)));
+    container.append(details);
+  }
+  const download = element('a', t('下载评测记录'));
+  download.href = '/api/alignment-report';
+  download.download = 'daymark-alignment-report.json';
+  container.append(download);
+}
 formAction('draftForm', async (data, form) => { await request('draft', data); form.reset(); });
 function renderEvaluation(data) {
   get('export-evidence').hidden = false;
@@ -473,6 +598,7 @@ function applyLanguage() {
     else node.textContent = t(original);
   }
   showNotice(notice);
+  if (visibleEvidence) openSources(visibleEvidence);
   get('view-title').textContent = t(viewTitles[view]);
   renderTaskEditor();
   if (current) render();

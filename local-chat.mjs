@@ -1,6 +1,6 @@
 const segmenter = new Intl.Segmenter(undefined, { granularity: 'word' });
 const ignored = new Set(['the', 'a', 'to', 'is', 'in', 'of', 'what', 'can', 'for', 'i', '的', '了', '吗', '我', '你', '一下']);
-function words(text) {
+export function words(text) {
   return new Set([...segmenter.segment(text.toLowerCase())]
     .filter(item => item.isWordLike && !ignored.has(item.segment)).map(item => item.segment));
 }

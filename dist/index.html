@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Daymark · 个人工作台</title>
+<title>Daymark · Personal Workspace</title>
 <link rel="stylesheet" href="/style.css">
 <script type="module" src="/app.js"></script>
 </head>
@@ -38,6 +38,10 @@
 </header>
 <main>
 <div id="notice" role="status"></div>
+<dialog id="source-panel" class="source-panel" aria-labelledby="source-title">
+  <div class="source-heading"><h2 id="source-title" data-i18n>核查这条回答</h2><button id="close-sources" type="button" class="secondary" data-i18n>关闭</button></div>
+  <div id="source-content"></div>
+</dialog>
 <div class="grid">
   <section class="card wide" data-panel="opportunities">
     <div class="card-head"><h2 data-i18n>客户线索与改进机会</h2></div>
@@ -134,9 +138,12 @@
       <p id="revision" hidden></p><blockquote id="revision-original" hidden></blockquote>
       <section id="memory-review" class="memory-review" hidden>
         <h3 data-i18n>保存前核对</h3>
-        <p class="muted" data-i18n>以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次对话。</p>
+        <p class="muted" data-i18n>以下是可能受影响的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次对话。</p>
+        <blockquote id="memory-proposal"></blockquote>
+        <p id="memory-classification-status" class="muted" role="status"></p>
         <div id="memory-candidates"></div>
         <div class="buttons">
+          <button type="button" id="classify-memory" class="secondary" data-i18n>用模型检查冲突</button>
           <button type="button" id="keep-memory" class="secondary" data-i18n>确认保留两条</button>
           <button type="button" id="temporary-memory" class="secondary" data-i18n>仅用于本次对话</button>
         </div>
@@ -147,6 +154,16 @@
       <label><span data-i18n>出处</span><input name="source" required maxlength="500" data-placeholder placeholder="例如：11 月 10 日的项目讨论"></label>
       <div class="buttons"><button data-i18n>保存记录</button><button type="button" class="secondary" id="cancel" hidden data-i18n>取消修订</button></div>
     </form>
+  </section>
+  <section class="card wide" data-panel="memory" hidden>
+    <div class="card-head"><h2 data-i18n>记忆修改记录</h2></div>
+    <ol id="memory-audit"></ol>
+  </section>
+  <section class="card wide" data-panel="evaluation" hidden>
+    <div class="card-head"><h2 data-i18n>通用可信度评测</h2></div>
+    <p class="muted" data-i18n>在合成案例中比较两种提示。查看证据、模型的判断和操作建议，以及授权检查和模拟结果。</p>
+    <form id="alignment-evaluation"><button data-i18n>运行通用评测</button></form>
+    <div id="alignment-results" aria-live="polite"></div>
   </section>
   <section class="card wide" data-panel="evaluation" hidden>
     <div class="card-head"><h2 data-i18n>模型对照评估</h2></div>
