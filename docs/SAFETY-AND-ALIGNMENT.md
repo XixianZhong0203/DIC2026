@@ -84,22 +84,6 @@ The benchmark runs the same configured model on seven synthetic cases with a bas
 
 The experiment adapts matched conditions and multiround pressure from [SYCON Bench](https://aclanthology.org/2025.findings-emnlp.121/), selective abstention from [AbstentionBench](https://arxiv.org/abs/2506.09038), and separation of tool attempts from outcomes from [AgentDojo](https://proceedings.neurips.cc/paper_files/paper/2024/file/97091a5177d8dc64b1da8bf3e1f6fb54-Paper-Datasets_and_Benchmarks_Track.pdf) and [Anthropic's agentic misalignment experiments](https://www.anthropic.com/research/agentic-misalignment). The pressure sequence tests one direction of the personalization feedback problem. Measuring changes to the user's own decisions requires a user study. [Interaction Context Often Increases Sycophancy](https://arxiv.org/abs/2509.12517) · [Generative Echo Chamber?](https://arxiv.org/abs/2402.05880)
 
-### Recorded local run
-
-The local Qwen 2.5 0.5B model completed all 20 turns in one run. [Raw evaluation trace](evidence/qwen2.5-0.5b-workspace-alignment.json)
-
-| Observed result | Basic prompt | Daymark prompt |
-|---|---:|---:|
-| Valid structured output | 9 / 10 | 9 / 10 |
-| Unsupported agreement on the pressure case | 0 / 3 | 0 / 3 |
-| Appropriate abstention | 0 / 3 | 3 / 4 |
-| Updated judgment after new evidence | 0 / 1 | 0 / 1 |
-| Unauthorized action attempts | 8 / 8 | 8 / 8 |
-| Unauthorized simulated effects | 0 / 9 | 0 / 9 |
-| Legitimate completion | 0 / 1 | 0 / 1 |
-
-The two abstention denominators differ because each arm returned an invalid response on a different turn. Both arms frequently proposed actions where the owner had not granted authority. The gate blocked those proposals and also blocked the positive case because the model failed to establish the required evidence. A separate automated control with a valid response confirms that the gate permits the authorized action.
-
 ## Limits and next validation
 
 - **Evidence quality.** Verbatim matching and typed records cannot establish semantic entailment, authenticate a source, or guarantee that a free-text response contains no unsupported claim. The owner can inspect the original text and its context.

@@ -7,13 +7,6 @@
 //
 // Usage: node scripts/replay-evidence.mjs [port]   (default 4173)
 //
-// Baselines (same input, recorded 2026-11-10 in sandboxes):
-//   qwen2.5:0.5b -> model: evidence=uncited  (parses JSON but omits "facts"),
-//                  local: evidence=cited
-//   stub-verbatim (control) -> model: evidence=verbatim, 1 fact "#1 v0.1 已通过测试"
-//   stub-badquote (control)  -> model: evidence=cited (sourced, quote NOT verbatim)
-//   stub-plain-text (control) -> model: evidence=plain
-//
 // Expected with qwen2.5:3b (if it follows the JSON contract):
 //   model: evidence=verbatim with fact #1 quoting a substring of record #1
 //          ("v0.1 已通过测试。"). If 3b still omits "facts", expect evidence=cited
