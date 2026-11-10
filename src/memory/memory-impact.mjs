@@ -1,4 +1,4 @@
-import { rankRecords, words } from './local-chat.mjs';
+import { rankRecords, words } from '../chat/local-chat.mjs';
 
 // Personalized PageRank with restart at the incoming edit. This small graph
 // links memory records through shared terms and scopes.

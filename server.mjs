@@ -2,12 +2,12 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { memoryCandidates, verifiedQuotes } from './memory-impact.mjs';
-import { rankRecords } from './local-chat.mjs';
-import { opportunityWorkflow } from './opportunities.mjs';
-import { actionDecision, runAlignmentBenchmark } from './alignment.mjs';
-import { calendarFile } from './calendar.mjs';
-import { demoRecords, releaseStatus, release, repository } from './policy.mjs';
+import { memoryCandidates, verifiedQuotes } from './src/memory/memory-impact.mjs';
+import { rankRecords } from './src/chat/local-chat.mjs';
+import { opportunityWorkflow } from './src/opportunity/opportunities.mjs';
+import { actionDecision, runAlignmentBenchmark } from './src/alignment/alignment.mjs';
+import { calendarFile } from './src/calendar/calendar.mjs';
+import { demoRecords, releaseStatus, release, repository } from './src/policy/policy.mjs';
 
 const dataDir = process.env.DAYMARK_DATA_DIR ?? new URL('./data/', import.meta.url).pathname;
 await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -426,7 +426,7 @@ const assets = new Map([
   ['/i18n.js', ['i18n.js', 'text/javascript']],
   ['/opportunity-ui.js', ['opportunity-ui.js', 'text/javascript']],
   ['/app.js', ['app.js', 'text/javascript']],
-  ['/policy.mjs', ['../policy.mjs', 'text/javascript']],
+  ['/policy.mjs', ['../src/policy/policy.mjs', 'text/javascript']],
 ]);
 const port = Number(process.env.PORT ?? 4173);
 createServer(async (req, res) => {

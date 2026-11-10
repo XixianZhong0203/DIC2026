@@ -27,8 +27,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { opportunityWorkflow } from '../opportunities.mjs';
-import { actionDecision, runAlignmentBenchmark } from '../alignment.mjs';
+import { opportunityWorkflow } from '../src/opportunity/opportunities.mjs';
+import { actionDecision, runAlignmentBenchmark } from '../src/alignment/alignment.mjs';
 
 const fixtureMode = process.argv.includes('--fixture');
 const repoRoot = new URL('..', import.meta.url).pathname;
