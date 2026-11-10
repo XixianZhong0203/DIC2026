@@ -2,3 +2,8 @@
 .env.*
 !.env.example
 data/
+
+# Local evaluation outputs and demo notes
+/docs/evidence/
+/docs/ROUND1-RESULTS.md
+/docs/DEMO-PLAYBOOK.md

@@ -23,7 +23,7 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -50,6 +50,7 @@ function codeVersion() {
 }
 function previousModelTrace() {
   const dir = new URL('../docs/evidence/', import.meta.url);
+  if (!existsSync(dir)) return null;
   const candidates = readdirSync(dir).filter(f => /^round1-.*\.json$/.test(f) && !f.endsWith('-rescored.json')).sort();
   let previous = null;
   for (const f of candidates) {
