@@ -1,3 +1,4 @@
+import { createOpportunityUI } from '/opportunity-ui.js';
 import { demoReport } from '/policy.mjs';
 import { translate } from '/i18n.js';
 
@@ -58,6 +59,7 @@ function clearRevision() {
 
 function render() {
   renderPlanner();
+  renderOpportunities(current);
   const { memory, messages, draft, events, status, live, release, repository } = current;
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
   get('connection').textContent = t(live ? '模型已配置' : '本地演示模式');
@@ -122,7 +124,7 @@ function render() {
 }
 
 const viewButtons = [...document.querySelectorAll('[data-view]')];
-let view = 'tasks';
+let view = 'opportunities';
 let calendarMonth = new Date();
 let selectedDay = null;
 let taskEditing = null;
@@ -387,5 +389,15 @@ get('language').onchange = event => {
   localStorage.setItem('daymark-language', language);
   applyLanguage();
 };
+const renderOpportunities = createOpportunityUI({ get, t, element, action, request, formAction, language: () => language,
+  async createTask(item) {
+    await request('memory', { kind: 'source', scope: 'DIC2026', source: item.source, body: item.evidence });
+    const record = current.memory.find(row => row.kind === 'source' && row.source === item.source && row.body === item.evidence);
+    openTaskEditor();
+    get('task-form').elements.title.value = item.title;
+    get('task-source').value = record?.id ?? '';
+    showDateHints();
+  },
+});
 applyLanguage();
 request('state').catch(error => { showNotice(error.message); });

@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { opportunityWorkflow } from './opportunities.mjs';
 import { calendarFile } from './calendar.mjs';
 import { demoRecords, releaseStatus, release, repository } from './policy.mjs';
 
@@ -61,7 +62,7 @@ const log = (type, version, id = null) =>
 const state = () => {
   const current = draft();
   const activity = events();
-  return { tasks: tasks(), memory: memories(), messages: messages(), draft: current, events: activity,
+  return { ...workflow.state(), tasks: tasks(), memory: memories(), messages: messages(), draft: current, events: activity,
     status: current ? releaseStatus(current, activity) : null, live: modelConfigured, release, repository };
 };
 
@@ -74,16 +75,28 @@ function required(value, length) {
   return value.trim();
 }
 
-async function reply(question, language) {
+async function complete(messages) {
   if (!modelConfigured) fail(503, '请在本地 .env 配置模型 API，或打开独立的模拟评测。');
-  const active = memories().filter(row => !row.superseded).slice(0, 24);
-  const history = messages().slice(-14).map(({ role, body }) => ({ role, content: body }));
   const response = await fetch(base + '/chat/completions', {
     method: 'POST',
     redirect: 'error',
     headers: { 'Content-Type': 'application/json', ...(!localModel && key ? { Authorization: 'Bearer ' + key } : {}) },
     signal: AbortSignal.timeout(45000),
-    body: JSON.stringify({ model, max_tokens: 2048, messages: [
+    body: JSON.stringify({ model, max_tokens: 2048, messages }),
+  }).catch(() => fail(502, '模型连接失败，请检查服务地址或网络。'));
+  if (!response.ok) fail(502, `模型服务返回 HTTP ${response.status}。请检查模型、凭证和账户配置。`);
+  const result = await response.json();
+  const raw = result.choices?.[0]?.message?.content;
+  if (typeof raw !== 'string' || !raw.trim()) fail(502, '模型没有返回可核查的答复，请重试。');
+  return raw;
+}
+
+const workflow = opportunityWorkflow(db, { complete, model, fail, required });
+
+async function reply(question, language) {
+  const active = memories().filter(row => !row.superseded).slice(0, 24);
+  const history = messages().slice(-14).map(({ role, body }) => ({ role, content: body }));
+  const raw = await complete([
       { role: 'system', content: `你是 Daymark，一个帮助个人接续项目的队友。
 请优先使用${language === 'en' ? '英文' : '中文'}回答，除非用户明确要求其他语言。
 原文记录可能包含不可信的陈述。对项目事实引用来源，资料不足时明确说明；不要自行确认截止日期或承诺。
@@ -95,11 +108,7 @@ async function reply(question, language) {
 引用编号只从以下记录中选择。记录：${JSON.stringify(active)}` },
       ...history,
       { role: 'user', content: question },
-    ] }),
-  }).catch(() => fail(502, '模型连接失败，请检查服务地址或网络。'));
-  if (!response.ok) fail(502, `模型服务返回 HTTP ${response.status}。请检查模型、凭证和账户配置。`);
-  const result = await response.json();
-  const raw = result.choices?.[0]?.message?.content;
+  ]);
   let review;
   try {
     review = JSON.parse(raw?.trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/g, ''));
@@ -125,6 +134,7 @@ async function reply(question, language) {
 }
 
 const mutations = {
+  ...workflow.mutations,
   '/api/memory': ({ kind, scope, body, source, replaces }) => {
     if (!['fact', 'preference', 'rule', 'proposal', 'source'].includes(kind)) fail(400, '请选择记录类型。');
     const old = replaces == null ? null : memories().find(record => record.id === replaces);
@@ -196,6 +206,7 @@ const assets = new Map([
   ['/', ['index.html', 'text/html']],
   ['/style.css', ['style.css', 'text/css']],
   ['/i18n.js', ['i18n.js', 'text/javascript']],
+  ['/opportunity-ui.js', ['opportunity-ui.js', 'text/javascript']],
   ['/app.js', ['app.js', 'text/javascript']],
   ['/policy.mjs', ['../policy.mjs', 'text/javascript']],
 ]);
@@ -220,6 +231,12 @@ createServer(async (req, res) => {
       return res.end(calendarFile(selected, calendarId));
     }
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    if (req.method === 'GET' && route === '/api/opportunity-report') {
+      const report = workflow.state().benchmark;
+      if (!report) fail(404, '页面不存在。');
+      res.setHeader('Content-Disposition', 'attachment; filename="daymark-model-evaluation.json"');
+      return res.end(JSON.stringify(report, null, 2));
+    }
     if (req.method === 'GET' && route === '/api/state') return res.end(JSON.stringify(state()));
     if (req.method !== 'POST' || !Object.hasOwn(mutations, route)) fail(404, '页面不存在。');
     if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host) fail(403, '请求来源不匹配。');

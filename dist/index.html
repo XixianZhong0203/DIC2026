@@ -15,6 +15,8 @@
   <select id="language" aria-label="Language / 语言"><option value="zh-CN">中文</option><option value="en">English</option></select>
 </header>
 <nav class="feature-nav" aria-label="Workspace navigation">
+  <button type="button" data-view="opportunities" data-i18n>机会</button>
+  <button type="button" data-view="delegation" data-i18n>授权</button>
   <button type="button" data-view="tasks" data-i18n>待办</button>
   <button type="button" data-view="calendar" data-i18n>日历</button>
   <button type="button" data-view="capture" data-i18n>收集</button>
@@ -32,6 +34,29 @@
 </section>
 <div id="notice" role="status"></div>
 <div class="grid">
+  <section class="card wide" data-panel="opportunities">
+    <div class="card-head"><h2 data-i18n>客户线索与改进机会</h2></div>
+    <p class="muted" data-i18n>搜索公开线索，再保存可核对的出处和原文。也可以录入客户反馈或工作改进想法。</p>
+    <form id="lead-search">
+      <label><span data-i18n>搜索词</span><input name="query" required maxlength="200"></label>
+      <div class="buttons"><button data-i18n>生成公开搜索链接</button><a id="lead-search-link" target="_blank" rel="noopener noreferrer" hidden data-i18n>打开搜索</a></div>
+    </form>
+    <form id="opportunity-form">
+      <label><span data-i18n>记录类型</span><select name="kind"><option value="lead" data-i18n>潜在客户</option><option value="idea" data-i18n>改进机会</option></select></label>
+      <label><span data-i18n>标题</span><input name="title" required maxlength="200"></label>
+      <label><span data-i18n>出处</span><input name="source" required maxlength="500"></label>
+      <label><span data-i18n>原文</span><textarea name="evidence" required maxlength="8000"></textarea></label>
+      <button data-i18n>保存线索</button>
+    </form>
+    <div id="opportunity-list"></div>
+  </section>
+  <section class="card wide" data-panel="delegation" hidden>
+    <div class="card-head"><h2 data-i18n>委托与审批</h2></div>
+    <p class="muted" data-i18n>发送只在本机模拟。每次批准对应已保存的收件人和正文。</p>
+    <div id="delegation-list"></div>
+    <h3 data-i18n>操作记录</h3>
+    <div id="opportunity-audit"></div>
+  </section>
   <section class="card wide" data-panel="tasks">
     <div class="card-head"><h2 data-i18n>待办与时间安排</h2></div>
     <div id="task-list"></div>
@@ -93,6 +118,12 @@
       <label><span data-i18n>出处</span><input name="source" required maxlength="500" data-placeholder placeholder="例如：11 月 10 日的项目讨论"></label>
       <div class="buttons"><button data-i18n>保存记录</button><button type="button" class="secondary" id="cancel" hidden data-i18n>取消修订</button></div>
     </form>
+  </section>
+  <section class="card wide" data-panel="evaluation" hidden>
+    <div class="card-head"><h2 data-i18n>模型对照评估</h2></div>
+    <p class="muted" data-i18n>同一个模型运行基础提示与 Daymark 提示。使用固定案例，保留原始输出、预期判断和核对结果。</p>
+    <form id="model-evaluation"><button data-i18n>运行模型评估</button></form>
+    <div id="model-results"></div>
   </section>
   <section class="card" data-panel="evaluation" hidden>
     <div class="card-head"><span class="number">03</span><h2 data-i18n>模拟发布</h2></div>
