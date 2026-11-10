@@ -3,7 +3,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { memoryCandidates, verifiedQuotes } from './memory-impact.mjs';
-import { localReply, rankRecords } from './local-chat.mjs';
+import { rankRecords } from './local-chat.mjs';
 import { opportunityWorkflow } from './opportunities.mjs';
 import { actionDecision, runAlignmentBenchmark } from './alignment.mjs';
 import { calendarFile } from './calendar.mjs';
@@ -168,7 +168,7 @@ async function modelReply(question, language, active, recent) {
     understood: typeof review.understood === 'string' ? review.understood : '' };
 }
 
-async function reply(question, language, useModel, temporary, conversationId) {
+async function reply(question, language, temporary, conversationId) {
   let conversation;
   if (conversationId == null) {
     conversation = Number(db.prepare('INSERT INTO conversations(title, created) VALUES (?, ?)')
@@ -185,45 +185,37 @@ async function reply(question, language, useModel, temporary, conversationId) {
   const previous = recent.at(-1)?.review;
   const clarification = previous?.temporary ? '' : previous?.question;
   const retrievalQuery = clarification ? question + '\n' + clarification.slice(0, 350) : question;
-  const fallback = () => localReply(question, language, {
-    records, tasks: tasks(), release, verified: events().some(event => event.type === 'verified' && event.version === release),
-  });
-  let review;
-  if (useModel && modelConfigured) {
-    try {
-      retrieved = rankRecords(retrievalQuery, records).filter(match => match.score > 0).slice(0, 12).map(match => match.record);
-      review = await modelReply(question, language, retrieved, recent);
-      if (review.unknowns.length && !review.conflict) {
-        const gap = review.unknowns.slice(0, 2).join(' ').slice(0, 500);
-        const used = new Set(retrieved.map(record => record.id));
-        const extra = rankRecords(gap, records.filter(record => !used.has(record.id) && ['fact', 'source'].includes(record.kind)))
-          .filter(match => match.score >= 2).slice(0, 4).map(match => match.record);
-        if (extra.length) {
-          retrieved.push(...extra);
-          try {
-            review = await modelReply(question, language, retrieved, recent);
-            review.gapRetrieval = { query: gap, ids: extra.map(record => record.id), status: 'completed' };
-          } catch (error) {
-            if (!error.status) throw error;
-            review.gapRetrieval = { query: gap, ids: extra.map(record => record.id), status: 'failed' };
-          }
-        }
+  if (!modelConfigured) fail(503, '未配置模型，无法使用对话。');
+  // 对话一律走模型回答（本地查询模式已移除）
+  retrieved = rankRecords(retrievalQuery, records).filter(match => match.score > 0).slice(0, 12).map(match => match.record);
+  let review = await modelReply(question, language, retrieved, recent);
+  if (review.unknowns.length && !review.conflict) {
+    const gap = review.unknowns.slice(0, 2).join(' ').slice(0, 500);
+    const used = new Set(retrieved.map(record => record.id));
+    const extra = rankRecords(gap, records.filter(record => !used.has(record.id) && ['fact', 'source'].includes(record.kind)))
+      .filter(match => match.score >= 2).slice(0, 4).map(match => match.record);
+    if (extra.length) {
+      retrieved.push(...extra);
+      try {
+        review = await modelReply(question, language, retrieved, recent);
+        review.gapRetrieval = { query: gap, ids: extra.map(record => record.id), status: 'completed' };
+      } catch (error) {
+        if (!error.status) throw error;
+        review.gapRetrieval = { query: gap, ids: extra.map(record => record.id), status: 'failed' };
       }
-    } catch (error) {
-      if (!error.status) throw error;
-      review = { ...fallback(), fallbackReason: error.message };
     }
-  } else {
-    review = fallback();
   }
   review.temporary = temporary;
+  review.evidence = review.plain ? 'plain'
+    : (review.facts?.length ?? 0) > 0 ? 'verbatim'
+    : (review.cited?.length ?? 0) > 0 ? 'cited' : 'uncited';
   review.trace = {
-    attemptedModel: useModel && modelConfigured ? model : null,
-    retrieved: (retrieved.length ? retrieved : review.cited ?? []).map(({ id, kind, source }) => ({ id, kind, source })),
+    attemptedModel: model,
+    retrieved: retrieved.map(({ id, kind, source }) => ({ id, kind, source })),
     matchedQuotes: review.facts?.length ?? 0,
-    retrievalQuery: useModel && modelConfigured ? retrievalQuery : null,
+    retrievalQuery,
     gapRetrieval: review.gapRetrieval ?? null,
-    result: review.mode,
+    result: 'model',
   };
   const insert = db.prepare('INSERT INTO messages(role,body,review,conversation_id) VALUES (?,?,?,?)');
   db.exec('BEGIN');
@@ -344,7 +336,8 @@ const mutations = {
     const insert = db.prepare('INSERT INTO memory(kind,scope,body,source) SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM memory WHERE source = ?)');
     for (const item of demoRecords) insert.run(item.kind, item.scope, item.body, item.source, item.source);
   },
-  '/api/chat': ({ text, language, useModel = true, temporary, conversation_id }) => reply(required(text, 6000), language, useModel === true, temporary === true, conversation_id),
+  // useModel 仍被外部脚本引用，保留接收但不再区分：对话一律走模型。
+  '/api/chat': ({ text, language, useModel = true, temporary, conversation_id }) => reply(required(text, 6000), language, temporary === true, conversation_id),
   '/api/conversation': ({ title, project }) => {
     if (title != null && typeof title !== 'string') fail(400, '请检查输入内容。');
     if (project != null && (typeof project !== 'string' || project.length > 60)) fail(400, '请检查输入内容。');

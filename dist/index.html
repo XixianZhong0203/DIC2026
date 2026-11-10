@@ -141,12 +141,8 @@
       <label class="sr-only" for="question"><span data-i18n>问 Daymark</span></label>
       <textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="给 Daymark 发消息"></textarea>
       <div class="composer-footer">
-        <label class="mode-control"><span class="sr-only" data-i18n>回答方式</span><select id="chat-mode">
-          <option value="model" data-i18n>模型优先</option>
-          <option value="local" data-i18n>本地查询</option>
-        </select></label>
         <span id="chat-progress" class="muted" role="status" hidden data-i18n>正在查询…</span>
-        <button class="send-button" type="submit"><span data-i18n>发送</span><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+        <button id="chat-send" class="send-button" type="submit"><span class="sr-only" data-i18n>发送</span><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       </div>
     </form>
   </section>

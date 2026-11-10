@@ -61,6 +61,13 @@ function action(label, callback, secondary = true) {
   return button;
 }
 
+function metaButton(label, callback) {
+  const button = element('button', label, 'meta-button');
+  button.type = 'button';
+  button.onclick = () => withButton(button, callback);
+  return button;
+}
+
 async function withButton(button, callback) {
   button.disabled = true;
   showNotice('');
@@ -143,11 +150,8 @@ function render() {
   const messages = chatMessages();
   if (pendingMemory) renderMemoryReview();
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
-  const latest = messages.at(-1)?.review;
-  get('connection').textContent = t(latest?.mode === 'model' ? '模型已回复' :
-    latest?.mode === 'local' || !live ? '本地查询' : '模型待连接');
-  get('chat-mode').options[0].disabled = !live;
-  if (!live) get('chat-mode').value = 'local';
+  get('connection').textContent = t(live ? '模型已连接' : '模型未连接');
+  get('chat-send').disabled = !live;
   get('chat-welcome').hidden = messages.length > 0;
   const conversation = get('conversation');
   conversation.replaceChildren();
@@ -162,29 +166,45 @@ function render() {
     conversation.append(prompts);
   }
   for (const message of messages) {
-    const card = element('article', '', 'message ' + message.role);
-    card.append(element('small', message.role === 'user' ? t('你') : 'Daymark'), element('p', message.body));
-    if (message.review?.mode) card.append(element('small', t(message.review.mode === 'local' ? '本地查询' : '模型回复') + (message.review.modelId ? ' · ' + message.review.modelId : ''), 'reply-mode'));
-    if (message.review?.fallbackReason) card.append(element('p', t(message.review.fallbackReason), 'reply-note'));
-    if (message.review?.plain) card.append(element('p', t('模型未返回结构化答复，按纯文本展示。'), 'reply-note'));
-    if (message.review) card.append(element('small', t(message.review.cited?.length ? '有引用可核对' : '未引用项目证据')));
-    card.append(action(t('存入记忆'), async () => {
+    if (message.role === 'user') {
+      const user = element('article', '', 'message user');
+      user.append(element('p', message.body));
+      conversation.append(user);
+      continue;
+    }
+    const card = element('article', '', 'message assistant');
+    const avatar = element('div', '', 'chat-avatar');
+    avatar.setAttribute('aria-hidden', 'true');
+    avatar.innerHTML = '<svg viewBox="0 0 40 40" fill="none"><path d="M20 4c0 10-6 16-16 16 10 0 16 6 16 16 0-10 6-16 16-16C26 20 20 14 20 4Z" fill="currentColor"/></svg>';
+    const main = element('div', '', 'message-main');
+    main.append(element('p', message.body));
+    if (message.review?.conflict) main.append(element('p', message.review.conflict, 'attention'));
+    if (message.review?.question) main.append(element('p', message.review.question, 'attention'));
+    if (message.review?.understood) {
+      const understanding = element('details', '', 'message-detail');
+      understanding.append(element('summary', t('我对当前任务的理解')), element('p', message.review.understood));
+      main.append(understanding);
+    }
+    const meta = element('div', '', 'message-actions');
+    if (message.review?.fallbackReason) meta.append(element('span', t(message.review.fallbackReason), 'meta-note'));
+    if (message.review?.plain) meta.append(element('span', t('模型未返回结构化答复，按纯文本展示。'), 'meta-note'));
+    else if (message.review) {
+      const ev = message.review.evidence ?? 'uncited';
+      if (ev === 'verbatim') meta.append(element('span', t('有引用可核对'), 'meta-note'));
+      else meta.append(element('span', t(ev === 'cited' ? '未核查项目证据 · 有来源，但引文未经逐字核对' : '未核查项目证据 · 无可核对引文'), 'meta-warn'));
+    }
+    if (message.review && (message.review.trace || message.review.cited?.length || message.review.facts?.length ||
+      message.review.inferences?.length || message.review.unknowns?.length)) {
+      meta.append(metaButton(t('核查依据'), () => openSources(message.review)));
+    }
+    meta.append(metaButton(t('存入记忆'), async () => {
       const chat = (current.conversations ?? []).find(item => item.id === activeChat);
       await request('memory', { kind: 'source', scope: chat?.project || 'DIC2026',
         source: t('项目对话') + ' #' + message.id, body: message.body, message_id: message.id });
       showView('capture');
     }));
-    if (message.review?.conflict) card.append(element('p', message.review.conflict, 'attention'));
-    if (message.review?.understood) {
-      const understanding = element('details', '');
-      understanding.append(element('summary', t('我对当前任务的理解')), element('p', message.review.understood));
-      card.append(understanding);
-    }
-    if (message.review?.question) card.append(element('p', message.review.question, 'attention'));
-    if (message.review && (message.review.trace || message.review.cited?.length || message.review.facts?.length ||
-      message.review.inferences?.length || message.review.unknowns?.length)) {
-      card.append(action(t('核查依据'), () => openSources(message.review)));
-    }
+    main.append(meta);
+    card.append(avatar, main);
     conversation.append(card);
   }
   conversation.scrollTop = conversation.scrollHeight;
@@ -474,8 +494,6 @@ function formAction(id, callback) {
 
 get('seed').onclick = () => withButton(get('seed'), () => request('demo', {}));
 get('cancel').onclick = clearRevision;
-get('chat-mode').value = localStorage.getItem('daymark-chat-mode') === 'local' ? 'local' : 'model';
-get('chat-mode').onchange = event => localStorage.setItem('daymark-chat-mode', event.target.value);
 formAction('capture-form', async (data, form) => {
   await request('memory', { ...data, kind: 'source', scope: 'DIC2026' });
   form.reset();
@@ -494,7 +512,7 @@ formAction('chat', async data => {
   question.readOnly = true;
   try {
     const temporary = oneTurnNote && data.text.startsWith(t('仅本次使用：'));
-    await request('chat', { ...data, language, temporary, conversation_id: activeChat, useModel: get('chat-mode').value === 'model' });
+    await request('chat', { ...data, language, temporary, conversation_id: activeChat });
     if (current.conversation != null) {
       activeChat = current.conversation;
       localStorage.setItem('daymark-chat', activeChat);
