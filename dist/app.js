@@ -18,6 +18,12 @@ function showNotice(message) {
 const get = id => document.getElementById(id);
 let current;
 let editing = null;
+let pendingMemory = null;
+
+function resetMemoryReview() {
+  pendingMemory = null;
+  get('memory-review').hidden = true;
+}
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -53,6 +59,7 @@ async function request(path, body) {
 
 function clearRevision() {
   editing = null;
+  resetMemoryReview();
   get('memoryForm').reset();
   get('revision').hidden = get('revision-original').hidden = get('cancel').hidden = true;
 }
@@ -61,6 +68,7 @@ function render() {
   renderPlanner();
   renderOpportunities(current);
   const { memory, messages, draft, events, status, live, release, repository } = current;
+  if (pendingMemory) renderMemoryReview();
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
   const latest = messages.at(-1)?.review;
   get('connection').textContent = t(latest?.mode === 'model' ? '模型已回复' :
@@ -92,6 +100,11 @@ function render() {
       showView('capture');
     }));
     if (message.review?.conflict) card.append(element('p', message.review.conflict, 'attention'));
+    if (message.review?.understood) {
+      const understanding = element('details', '');
+      understanding.append(element('summary', t('我对当前任务的理解')), element('p', message.review.understood));
+      card.append(understanding);
+    }
     if (message.review?.question) card.append(element('p', message.review.question, 'attention'));
     for (const record of message.review?.cited ?? []) {
       const detail = element('details', '');
@@ -109,6 +122,7 @@ function render() {
       (record.superseded ? ' · ' + t('已被修订') : '') + (record.replaces ? ' · ' + t('修订 #') + record.replaces : '')));
     card.append(element('p', t(record.body)), element('p', t('出处') + ' · ' + t(record.source), 'muted'));
     if (!record.superseded) card.append(action(t('修订'), () => {
+      resetMemoryReview();
       editing = record.id;
       const form = get('memoryForm');
       for (const name of ['kind', 'scope', 'body']) form.elements[name].value = record[name];
@@ -193,8 +207,14 @@ get('calendar-add').onclick = () => {
   }
 };
 
+const viewTitles = { chat: '对话', opportunities: '机会', tasks: '待办', calendar: '日历',
+  capture: '收集', memory: '记忆', delegation: '授权', evaluation: '评估' };
+
 function showView(name) {
   view = name;
+  get('view-title').textContent = t(viewTitles[name]);
+  document.body.classList.remove('sidebar-open');
+  get('sidebar-toggle').setAttribute('aria-expanded', 'false');
   const group = ['tasks', 'calendar'].includes(name) ? 'plan'
     : ['capture', 'memory', 'delegation', 'evaluation'].includes(name) ? 'records' : '';
   get('subnav').hidden = !group;
@@ -209,6 +229,10 @@ function showView(name) {
   }
 }
 
+get('sidebar-toggle').onclick = () => {
+  const open = document.body.classList.toggle('sidebar-open');
+  get('sidebar-toggle').setAttribute('aria-expanded', String(open));
+};
 for (const button of viewButtons) button.onclick = () => showView(button.dataset.view);
 showView(view);
 
@@ -370,7 +394,40 @@ formAction('chat', async data => {
     question.readOnly = false;
   }
 });
-formAction('memoryForm', async data => { await request('memory', { ...data, replaces: editing }); clearRevision(); });
+async function saveMemory(data, replaces) {
+  await request('memory', { ...data, replaces });
+  clearRevision();
+}
+
+function renderMemoryReview() {
+  get('memory-review').hidden = false;
+  get('memory-candidates').replaceChildren(...pendingMemory.candidates.map(record => {
+    const row = element('article', '', 'entry');
+    row.append(element('small', '#' + record.id + ' · ' + record.source), element('p', record.body),
+      action(t('用新内容替换这条'), () => saveMemory(pendingMemory.data, record.id)));
+    return row;
+  }));
+}
+
+get('memoryForm').addEventListener('input', resetMemoryReview);
+get('keep-memory').onclick = () => withButton(get('keep-memory'), () => saveMemory(pendingMemory.data, null));
+get('temporary-memory').onclick = () => {
+  const value = pendingMemory.data.body;
+  resetMemoryReview();
+  showView('chat');
+  get('question').value = t('仅本次使用：') + value;
+  get('question').focus();
+};
+
+formAction('memoryForm', async data => {
+  const scoped = ['preference', 'rule'];
+  const candidates = editing === null && scoped.includes(data.kind) ? current.memory.filter(record =>
+    !record.superseded && scoped.includes(record.kind) && record.scope.trim().toLowerCase() === data.scope.trim().toLowerCase()) : [];
+  if (!candidates.length) return saveMemory(data, editing);
+  pendingMemory = { data, candidates };
+  renderMemoryReview();
+  get('memory-review').scrollIntoView({ block: 'nearest' });
+});
 formAction('draftForm', async (data, form) => { await request('draft', data); form.reset(); });
 function renderEvaluation(data) {
   get('export-evidence').hidden = false;
@@ -416,6 +473,7 @@ function applyLanguage() {
     else node.textContent = t(original);
   }
   showNotice(notice);
+  get('view-title').textContent = t(viewTitles[view]);
   renderTaskEditor();
   if (current) render();
   if (evaluationInput) renderEvaluation(evaluationInput);

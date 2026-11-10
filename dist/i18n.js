@@ -1,4 +1,12 @@
 const english = {
+  "工作区菜单": "Workspace menu",
+  "保存前核对": "Review before saving",
+  "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次对话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once.",
+  "确认保留两条": "Keep both",
+  "仅用于本次对话": "Use once in chat",
+  "用新内容替换这条": "Replace this record",
+  "仅本次使用：": "For this turn only: ",
+  "我对当前任务的理解": "How I understood the current request",
   "开始分析": "Analysis started",
   "模型分析失败": "Model request failed",
   "核对原文": "Source checked",

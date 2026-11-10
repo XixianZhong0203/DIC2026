@@ -8,7 +8,7 @@
 <script type="module" src="/app.js"></script>
 </head>
 <body>
-<header>
+<aside class="sidebar" id="sidebar">
   <div class="brand"><svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><rect x="2" y="9" width="23" height="23" rx="5" fill="#c6d9cc"/><rect x="10" y="3" width="24" height="24" rx="5" fill="#295846"/><path d="m16 15 4 4 8-9" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg><b>Daymark</b></div>
   <nav class="feature-nav" aria-label="Workspace navigation">
     <button type="button" data-view="chat" data-i18n>对话</button>
@@ -16,12 +16,6 @@
     <button type="button" data-view="tasks" data-i18n>计划</button>
     <button type="button" data-view="capture" data-i18n>资料</button>
   </nav>
-  <div class="header-controls">
-    <span id="connection" class="badge"></span>
-    <select id="language" aria-label="Language / 语言"><option value="zh-CN">中文</option><option value="en">English</option></select>
-  </div>
-</header>
-<main>
 <div class="subnav" id="subnav" hidden>
   <button type="button" data-view="tasks" data-group="plan" data-i18n>待办</button>
   <button type="button" data-view="calendar" data-group="plan" data-i18n>日历</button>
@@ -30,6 +24,19 @@
   <button type="button" data-view="delegation" data-group="records" data-i18n>授权</button>
   <button type="button" data-view="evaluation" data-group="records" data-i18n>评估</button>
 </div>
+</aside>
+<div class="workspace-frame">
+<header class="workspace-header">
+  <button id="sidebar-toggle" class="secondary" type="button" aria-controls="sidebar" aria-expanded="false">
+    <span aria-hidden="true">☰</span><span class="sr-only" data-i18n>工作区菜单</span>
+  </button>
+  <span id="view-title" class="view-title"></span>
+  <div class="header-controls">
+    <span id="connection" class="badge"></span>
+    <select id="language" aria-label="Language / 语言"><option value="zh-CN">中文</option><option value="en">English</option></select>
+  </div>
+</header>
+<main>
 <div id="notice" role="status"></div>
 <div class="grid">
   <section class="card wide" data-panel="opportunities">
@@ -125,6 +132,15 @@
     <button class="secondary" id="seed" data-i18n>载入示例记忆</button>
     <form id="memoryForm">
       <p id="revision" hidden></p><blockquote id="revision-original" hidden></blockquote>
+      <section id="memory-review" class="memory-review" hidden>
+        <h3 data-i18n>保存前核对</h3>
+        <p class="muted" data-i18n>以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次对话。</p>
+        <div id="memory-candidates"></div>
+        <div class="buttons">
+          <button type="button" id="keep-memory" class="secondary" data-i18n>确认保留两条</button>
+          <button type="button" id="temporary-memory" class="secondary" data-i18n>仅用于本次对话</button>
+        </div>
+      </section>
       <label><span data-i18n>记录类型</span><select name="kind"><option value="fact" data-i18n>事实</option><option value="preference" data-i18n>偏好</option><option value="rule" data-i18n>已确认规则</option><option value="proposal" data-i18n>未确认提议</option><option value="source" data-i18n>原始资料</option></select></label>
       <label><span data-i18n>适用范围</span><input name="scope" value="DIC2026" required maxlength="100"></label>
       <label><span data-i18n>记录</span><textarea name="body" required maxlength="4000" data-placeholder placeholder="例如：对外项目简介用英文"></textarea></label>
@@ -158,5 +174,6 @@
   </section>
 </div>
 </main>
+</div>
 </body>
 </html>

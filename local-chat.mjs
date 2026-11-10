@@ -5,6 +5,14 @@ function words(text) {
     .filter(item => item.isWordLike && !ignored.has(item.segment)).map(item => item.segment));
 }
 
+export function rankRecords(question, records) {
+  const terms = words(question);
+  return records.map(record => {
+    const matches = words(record.source + ' ' + record.body + ' ' + record.scope);
+    return { record, score: [...terms].filter(word => matches.has(word)).length };
+  }).sort((a, b) => b.score - a.score);
+}
+
 export function localReply(question, language, { records, tasks, release, verified }) {
   const en = language === 'en';
   const result = answer => ({ answer, cited: [], mode: 'local' });
@@ -26,12 +34,8 @@ export function localReply(question, language, { records, tasks, release, verifi
         ...open.map(task => `• ${task.title} · ${task.starts.replace('T', ' ')}`)].join('\n')
       : en ? 'There are no open tasks in your workspace.' : '工作台里没有未完成的待办。');
   }
-  const terms = words(question);
   const overview = /做到哪|项目进展|最近记录|project progress|where did we leave off/i.test(question);
-  const cited = records.map(record => {
-    const matches = words(record.source + ' ' + record.body + ' ' + record.scope);
-    return { record, score: [...terms].filter(word => matches.has(word)).length };
-  }).filter(match => overview || match.score > 0).sort((a,b) => b.score - a.score)
+  const cited = rankRecords(question, records).filter(match => overview || match.score > 0)
     .slice(0, 3).map(match => match.record);
   if (!cited.length) return result(en ? 'I could not find a matching record. Try a project name or keyword, or save the original source in Records.'
     : '我没有找到相关记录。可以换一个项目名或关键词，也可以先把原文存到资料里。');
