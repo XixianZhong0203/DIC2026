@@ -1,4 +1,13 @@
 const english = {
+  "开始分析": "Analysis started",
+  "模型分析失败": "Model request failed",
+  "核对原文": "Source checked",
+  "人工核实": "Human review",
+  "已批准版本": "Draft approved",
+  "记录核实结果或说明这封邮件只用于澄清": "Record what you verified, or why this email only seeks clarification",
+  "保存核实结果": "Save review",
+  "分析已变更，请重新核对。": "The analysis changed. Review the new result.",
+  "请先记录如何处理不确定性，再批准发送。": "Resolve or document the uncertainty before approving this draft.",
   "今天想做什么？": "What are you working on?",
   "查一条记录，接着做一件事。": "Find what you need and pick up your next task.",
   "给 Daymark 发消息": "Message Daymark",

@@ -14,7 +14,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     lead: '潜在客户', idea: '改进机会', research: '资料分析', draft: '起草联系邮件',
     send: '对外发送', transfer: '转账', auto: '可委托 AI', approval: '逐次审批',
     human: '本人处理', captured: '保存线索', assessed: '分析完成', drafted: '草稿已保存',
-    simulated_send: '模拟发送成功', blocked: '操作被拦截', policy: '授权已更新',
+    simulated_send: '模拟发送成功', blocked: '操作被拦截', policy: '授权已更新', analysis_started: '开始分析', analysis_failed: '模型分析失败',
+    evidence_checked: '核对原文', human_reviewed: '人工核实', approved: '已批准版本',
   };
 
   function details(title, content) {
@@ -27,14 +28,32 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const card = element('article', '', 'entry');
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
     card.append(details(t('出处') + ' · ' + item.source, item.evidence));
-    if (item.analysis) {
-      const result = JSON.parse(item.analysis);
+    const result = item.analysis && JSON.parse(item.analysis);
+    if (result) {
       card.append(element('p', t(result.status === 'supported' ? '模型判断有依据，请核对' : '证据不足或仍待确认'), 'attention'));
       if (result.quote) card.append(details(t('核对原文片段'), result.quote));
       if (result.reason) card.append(details(t('判断依据'), result.reason));
+      if (result.conflict) card.append(element('p', result.conflict, 'attention'));
+      if (result.clarification) card.append(element('p', result.clarification));
       if (result.unknown) card.append(details(t('仍需核实'), result.unknown));
       if (result.suggestedReply) card.append(details(t('模型建议稿'), result.suggestedReply));
       card.append(details(t('模型原始输出'), result.raw));
+      if (item.review) card.append(details(t('人工核实'), item.review));
+      if (result.status !== 'supported' && result.analysisId) {
+        const reviewForm = element('form', '');
+        const resolution = element('textarea', '');
+        resolution.required = true;
+        resolution.maxLength = 2000;
+        resolution.placeholder = t('记录核实结果或说明这封邮件只用于澄清');
+        resolution.setAttribute('aria-label', resolution.placeholder);
+        const saveReview = action(t('保存核实结果'), () => {
+          if (reviewForm.reportValidity()) return request('opportunity-review', {
+            id: item.id, analysis_id: result.analysisId, resolution: resolution.value,
+          });
+        });
+        reviewForm.append(resolution, saveReview);
+        card.append(reviewForm);
+      }
     }
     const analysisForm = element('form', '');
     const question = element('input', '');
@@ -74,7 +93,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         editor.open = true;
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
         if (item.sent) editor.append(element('p', t('模拟发送成功')));
-        else editor.append(action(t('批准已保存版本并模拟发送'), () =>
+        else if (result && result.status !== 'supported' && !item.review) {
+          editor.append(element('p', t('请先记录如何处理不确定性，再批准发送。'), 'attention'));
+        } else editor.append(action(t('批准已保存版本并模拟发送'), () =>
           request('opportunity-send', { id: item.id, draft_id: item.draft_id }), false));
       }
       card.append(editor);
@@ -103,7 +124,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       get('model-results').append(element('p', report.model + ' · ' + report.at));
       for (const row of report.results) {
         get('model-results').append(details(row.id + ' · ' + t(row.guarded ? 'Daymark 提示' : '基础模型') +
-          ' · ' + t(row.statusMatched ? '符合预期' : '需要复核'), JSON.stringify(row, null, 2)));
+          ' · ' + t(row.error ? '模型分析失败' : row.statusMatched ? '符合预期' : '需要复核'), JSON.stringify(row, null, 2)));
       }
       const link = element('a', t('下载模型评估凭据'));
       link.href = '/api/opportunity-report';
