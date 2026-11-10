@@ -15,23 +15,20 @@
   <select id="language" aria-label="Language / 语言"><option value="zh-CN">中文</option><option value="en">English</option></select>
 </header>
 <nav class="feature-nav" aria-label="Workspace navigation">
-  <button type="button" data-view="opportunities" data-i18n>机会</button>
-  <button type="button" data-view="delegation" data-i18n>授权</button>
-  <button type="button" data-view="tasks" data-i18n>待办</button>
-  <button type="button" data-view="calendar" data-i18n>日历</button>
-  <button type="button" data-view="capture" data-i18n>收集</button>
   <button type="button" data-view="chat" data-i18n>对话</button>
-  <button type="button" data-view="memory" data-i18n>记忆</button>
-  <button type="button" data-view="evaluation" data-i18n>评估</button>
+  <button type="button" data-view="opportunities" data-i18n>机会</button>
+  <button type="button" data-view="tasks" data-i18n>计划</button>
+  <button type="button" data-view="capture" data-i18n>资料</button>
 </nav>
 <main>
-<section class="intro" aria-labelledby="workspace-title">
-  <div>
-
-    <h1 id="workspace-title" data-i18n>今日工作台</h1>
-  </div>
-  <p data-i18n>待办、日历与项目记录</p>
-</section>
+<div class="subnav" id="subnav" hidden>
+  <button type="button" data-view="tasks" data-group="plan" data-i18n>待办</button>
+  <button type="button" data-view="calendar" data-group="plan" data-i18n>日历</button>
+  <button type="button" data-view="capture" data-group="records" data-i18n>收集</button>
+  <button type="button" data-view="memory" data-group="records" data-i18n>记忆</button>
+  <button type="button" data-view="delegation" data-group="records" data-i18n>授权</button>
+  <button type="button" data-view="evaluation" data-group="records" data-i18n>评估</button>
+</div>
 <div id="notice" role="status"></div>
 <div class="grid">
   <section class="card wide" data-panel="opportunities">
@@ -101,9 +98,15 @@
     <div id="capture-list"></div>
   </section>
   <section class="card chat wide" data-panel="chat" hidden>
-    <div class="card-head"><span class="number">01</span><h2 data-i18n>项目对话</h2></div>
+    <div class="chat-heading">
+      <div><h1 data-i18n>问 Daymark</h1><p class="muted" data-i18n>在这里找回项目记录、待办和发布状态。</p></div>
+      <label class="mode-control"><span data-i18n>回答方式</span><select id="chat-mode">
+        <option value="model" data-i18n>模型优先</option>
+        <option value="local" data-i18n>本地查询</option>
+      </select></label>
+    </div>
     <div id="conversation" aria-live="polite"></div>
-    <form id="chat"><label for="question"><span data-i18n>问 Daymark</span></label><textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="我们昨天做到哪了？v0.2 可以发布了吗？"></textarea><button data-i18n>发送</button></form>
+    <form id="chat"><label class="sr-only" for="question"><span data-i18n>问 Daymark</span></label><textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="我们昨天做到哪了？v0.2 可以发布了吗？"></textarea><button data-i18n>发送</button></form>
   </section>
   <section class="card" data-panel="memory" hidden>
     <div class="card-head"><span class="number">02</span><h2 data-i18n>项目记忆</h2></div>

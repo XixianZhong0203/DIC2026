@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { localReply } from './local-chat.mjs';
 import { opportunityWorkflow } from './opportunities.mjs';
 import { calendarFile } from './calendar.mjs';
 import { demoRecords, releaseStatus, release, repository } from './policy.mjs';
@@ -81,20 +82,19 @@ async function complete(messages) {
     method: 'POST',
     redirect: 'error',
     headers: { 'Content-Type': 'application/json', ...(!localModel && key ? { Authorization: 'Bearer ' + key } : {}) },
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(18000),
     body: JSON.stringify({ model, max_tokens: 2048, messages }),
   }).catch(() => fail(502, '模型连接失败，请检查服务地址或网络。'));
   if (!response.ok) fail(502, `模型服务返回 HTTP ${response.status}。请检查模型、凭证和账户配置。`);
-  const result = await response.json();
-  const raw = result.choices?.[0]?.message?.content;
+  const result = await response.json().catch(() => null);
+  const raw = result?.choices?.[0]?.message?.content;
   if (typeof raw !== 'string' || !raw.trim()) fail(502, '模型没有返回可核查的答复，请重试。');
   return raw;
 }
 
 const workflow = opportunityWorkflow(db, { complete, model, fail, required });
 
-async function reply(question, language) {
-  const active = memories().filter(row => !row.superseded).slice(0, 24);
+async function modelReply(question, language, active) {
   const history = messages().slice(-14).map(({ role, body }) => ({ role, content: body }));
   const raw = await complete([
       { role: 'system', content: `你是 Daymark，一个帮助个人接续项目的队友。
@@ -118,14 +118,31 @@ async function reply(question, language) {
   }
   const ids = Array.isArray(review.citations) ? review.citations : [];
   const cited = active.filter(record => ids.includes(record.id));
+  return { answer: review.answer, cited, mode: 'model', conflict: typeof review.conflict === 'string' ? review.conflict : '',
+    question: typeof review.question === 'string' ? review.question : '' };
+}
+
+async function reply(question, language, useModel) {
+  const records = memories().filter(row => !row.superseded);
+  const fallback = () => localReply(question, language, {
+    records, tasks: tasks(), release, verified: events().some(event => event.type === 'verified' && event.version === release),
+  });
+  let review;
+  if (useModel && modelConfigured) {
+    try {
+      review = await modelReply(question, language, records.slice(0, 24));
+    } catch (error) {
+      if (!error.status) throw error;
+      review = { ...fallback(), fallbackReason: error.message };
+    }
+  } else {
+    review = fallback();
+  }
   const insert = db.prepare('INSERT INTO messages(role,body,review) VALUES (?,?,?)');
   db.exec('BEGIN');
   try {
     insert.run('user', question, null);
-    insert.run('assistant', review.answer, JSON.stringify({
-      cited, conflict: typeof review.conflict === 'string' ? review.conflict : '',
-      question: typeof review.question === 'string' ? review.question : '',
-    }));
+    insert.run('assistant', review.answer, JSON.stringify(review));
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
@@ -187,7 +204,7 @@ const mutations = {
     const insert = db.prepare('INSERT INTO memory(kind,scope,body,source) SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM memory WHERE source = ?)');
     for (const item of demoRecords) insert.run(item.kind, item.scope, item.body, item.source, item.source);
   },
-  '/api/chat': ({ text, language }) => reply(required(text, 6000), language),
+  '/api/chat': ({ text, language, useModel = true }) => reply(required(text, 6000), language, useModel === true),
   '/api/draft': ({ body }) => {
     db.prepare('INSERT INTO drafts VALUES (?,?,?)').run(randomUUID(), release, required(body, 12000));
   },

@@ -62,13 +62,28 @@ function render() {
   renderOpportunities(current);
   const { memory, messages, draft, events, status, live, release, repository } = current;
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
-  get('connection').textContent = t(live ? '模型已配置' : '本地演示模式');
+  const latest = messages.at(-1)?.review;
+  get('connection').textContent = t(latest?.mode === 'model' ? '模型已回复' :
+    latest?.mode === 'local' || !live ? '本地查询' : '模型待连接');
+  get('chat-mode').options[0].disabled = !live;
+  if (!live) get('chat-mode').value = 'local';
   const conversation = get('conversation');
   conversation.replaceChildren();
-  if (!messages.length) conversation.append(element('p', t(live ? '试着问一个关于项目进度的问题。' : '配置模型后可对话，也可以先体验示例记忆和模拟发布。'), 'muted'));
+  if (!messages.length) {
+    const prompts = element('div', '', 'chat-prompts');
+    for (const prompt of ['有哪些待办？', '我们做到哪了？', '当前版本可以发布吗？']) {
+      prompts.append(action(t(prompt), () => {
+        get('question').value = t(prompt);
+        get('question').focus();
+      }));
+    }
+    conversation.append(prompts);
+  }
   for (const message of messages) {
     const card = element('article', '', 'message ' + message.role);
     card.append(element('small', message.role === 'user' ? t('你') : 'Daymark'), element('p', message.body));
+    if (message.review?.mode) card.append(element('small', t(message.review.mode === 'local' ? '本地查询' : '模型回复'), 'reply-mode'));
+    if (message.review?.fallbackReason) card.append(element('p', t(message.review.fallbackReason), 'reply-note'));
     if (message.review) card.append(element('small', t(message.review.cited?.length ? '有引用可核对' : '未引用项目证据')));
     card.append(action(t('存入记忆'), async () => {
       await request('memory', { kind: 'source', scope: 'DIC2026',
@@ -124,7 +139,7 @@ function render() {
 }
 
 const viewButtons = [...document.querySelectorAll('[data-view]')];
-let view = 'opportunities';
+let view = 'chat';
 let calendarMonth = new Date();
 let selectedDay = null;
 let taskEditing = null;
@@ -179,9 +194,16 @@ get('calendar-add').onclick = () => {
 
 function showView(name) {
   view = name;
+  const group = ['tasks', 'calendar'].includes(name) ? 'plan'
+    : ['capture', 'memory', 'delegation', 'evaluation'].includes(name) ? 'records' : '';
+  get('subnav').hidden = !group;
   for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
   for (const button of viewButtons) {
-    if (button.dataset.view === name) button.setAttribute('aria-current', 'page');
+    const tab = button.dataset.view;
+    const active = button.dataset.group ? tab === name :
+      tab === name || (tab === 'tasks' && group === 'plan') || (tab === 'capture' && group === 'records');
+    button.hidden = Boolean(button.dataset.group && button.dataset.group !== group);
+    if (active) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
 }
@@ -321,6 +343,8 @@ function formAction(id, callback) {
 
 get('seed').onclick = () => withButton(get('seed'), () => request('demo', {}));
 get('cancel').onclick = clearRevision;
+get('chat-mode').value = localStorage.getItem('daymark-chat-mode') === 'local' ? 'local' : 'model';
+get('chat-mode').onchange = event => localStorage.setItem('daymark-chat-mode', event.target.value);
 formAction('capture-form', async (data, form) => {
   await request('memory', { ...data, kind: 'source', scope: 'DIC2026' });
   form.reset();
@@ -332,7 +356,7 @@ formAction('task-form', async data => {
   });
   openTaskEditor();
 });
-formAction('chat', async (data, form) => { await request('chat', { ...data, language }); form.reset(); });
+formAction('chat', async (data, form) => { await request('chat', { ...data, language, useModel: get('chat-mode').value === 'model' }); form.reset(); });
 formAction('memoryForm', async data => { await request('memory', { ...data, replaces: editing }); clearRevision(); });
 formAction('draftForm', async (data, form) => { await request('draft', data); form.reset(); });
 function renderEvaluation(data) {
