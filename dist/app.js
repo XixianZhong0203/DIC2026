@@ -20,6 +20,7 @@ let current;
 let editing = null;
 let pendingMemory = null;
 let oneTurnNote = false;
+let chatBusy = false;
 let activeChat = Number(localStorage.getItem('daymark-chat')) || null;
 
 function reconcileChat() {
@@ -54,15 +55,103 @@ function element(tag, text, className) {
   return node;
 }
 
-function action(label, callback, secondary = true) {
-  const button = element('button', label, secondary ? 'secondary' : '');
+const escapeHtml = text => String(text).replace(/[&<>"']/g, char =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+
+function mdInline(text) {
+  return text
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+function markdown(text) {
+  const lines = String(text).split('\n');
+  let html = '';
+  let paragraph = [];
+  let list = null;
+  let code = false;
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html += '<p>' + mdInline(escapeHtml(paragraph.join(' '))) + '</p>';
+    paragraph = [];
+  };
+  const closeList = () => {
+    if (list) { html += '</' + list + '>'; list = null; }
+  };
+  for (const line of lines) {
+    if (code) {
+      if (/^\s*```/.test(line)) { code = false; html += '</code></pre>'; }
+      else html += escapeHtml(line) + '\n';
+      continue;
+    }
+    if (/^\s*```/.test(line)) { flushParagraph(); closeList(); code = true; html += '<pre><code>'; continue; }
+    if (!line.trim()) { flushParagraph(); closeList(); continue; }
+    const heading = line.match(/^\s*(#{1,4})\s+(.*)$/);
+    if (heading) {
+      flushParagraph(); closeList();
+      const level = Math.min(heading[1].length + 2, 6);
+      html += '<h' + level + '>' + mdInline(escapeHtml(heading[2])) + '</h' + level + '>';
+      continue;
+    }
+    const quote = line.match(/^\s*>\s?(.*)$/);
+    if (quote) {
+      flushParagraph(); closeList();
+      html += '<blockquote>' + mdInline(escapeHtml(quote[1])) + '</blockquote>';
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+    const numbered = bullet ? null : line.match(/^\s*\d+[.)]\s+(.*)$/);
+    if (bullet || numbered) {
+      flushParagraph();
+      const type = bullet ? 'ul' : 'ol';
+      if (list !== type) { closeList(); html += '<' + type + '>'; list = type; }
+      html += '<li>' + mdInline(escapeHtml((bullet ?? numbered)[1])) + '</li>';
+      continue;
+    }
+    paragraph.push(line.trim());
+  }
+  if (code) html += '</code></pre>';
+  flushParagraph();
+  closeList();
+  return html;
+}
+
+const ICONS = {
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V4a2 2 0 0 1 2-2h9"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>',
+  bookmark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7.5 19.5 3 21l1.5-4.5Z"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+};
+
+function iconButton(name, label, callback) {
+  const button = element('button', '', 'meta-button');
   button.type = 'button';
+  button.title = t(label);
+  button.setAttribute('aria-label', t(label));
+  button.innerHTML = ICONS[name];
   button.onclick = () => withButton(button, callback);
   return button;
 }
 
-function metaButton(label, callback) {
-  const button = element('button', label, 'meta-button');
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = element('textarea', text);
+    area.style.cssText = 'position:fixed;opacity:0';
+    document.body.append(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+}
+
+function action(label, callback, secondary = true) {
+  const button = element('button', label, secondary ? 'secondary' : '');
   button.type = 'button';
   button.onclick = () => withButton(button, callback);
   return button;
@@ -151,61 +240,71 @@ function render() {
   if (pendingMemory) renderMemoryReview();
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
   get('connection').textContent = t(live ? '模型已连接' : '模型未连接');
-  get('chat-send').disabled = !live;
+  get('chat-send').disabled = chatBusy || !live || !get('question').value.trim();
+  get('composer-model').textContent = live ? 'Daymark' + (current.model ? ' · ' + current.model : '') : '';
+  get('scroll-bottom').setAttribute('aria-label', t('回到底部'));
+  layoutComposer(messages.length > 0);
+  renderChatHistory();
+  if (view === 'chat') {
+    const chat = (current.conversations ?? []).find(item => item.id === activeChat);
+    get('view-title').textContent = t(chat?.title ?? '对话');
+  }
   get('chat-welcome').hidden = messages.length > 0;
   const conversation = get('conversation');
+  conversation.hidden = messages.length === 0;
   conversation.replaceChildren();
   if (!messages.length) {
-    const prompts = element('div', '', 'chat-prompts');
-    for (const prompt of ['有哪些待办？', '我们做到哪了？', '当前版本可以发布吗？']) {
-      prompts.append(action(t(prompt), () => {
-        get('question').value = t(prompt);
-        get('question').focus();
+    renderPromptChips();
+  } else {
+    for (const message of messages) {
+      if (message.role === 'user') {
+        const user = element('article', '', 'message user');
+        user.append(element('p', message.body));
+        conversation.append(user);
+        continue;
+      }
+      const card = element('article', '', 'message assistant');
+      const main = element('div', '', 'message-main');
+      const body = element('div', '', 'message-body');
+      body.innerHTML = markdown(message.body);
+      main.append(body);
+      if (message.review?.conflict) main.append(element('p', message.review.conflict, 'attention'));
+      if (message.review?.question) main.append(element('p', message.review.question, 'attention'));
+      if (message.review?.understood) {
+        const understanding = element('details', '', 'message-detail');
+        understanding.append(element('summary', t('我对当前任务的理解')), element('p', message.review.understood));
+        main.append(understanding);
+      }
+      const evidence = element('div', '', 'evidence-line');
+      if (message.review?.fallbackReason) evidence.append(element('span', t(message.review.fallbackReason), 'meta-note'));
+      if (message.review?.plain) evidence.append(element('span', t('模型未返回结构化答复，按纯文本展示。'), 'meta-note'));
+      else if (message.review) {
+        const ev = message.review.evidence ?? 'uncited';
+        if (ev === 'verbatim') evidence.append(element('span', t('有引用可核对'), 'meta-note'));
+        else evidence.append(element('span', t(ev === 'cited' ? '未核查项目证据 · 有来源，但引文未经逐字核对' : '未核查项目证据 · 无可核对引文'), 'meta-warn'));
+      }
+      if (evidence.childElementCount) main.append(evidence);
+      const actions = element('div', '', 'message-actions');
+      if (message.review && (message.review.trace || message.review.cited?.length || message.review.facts?.length ||
+        message.review.inferences?.length || message.review.unknowns?.length)) {
+        actions.append(iconButton('search', '核查依据', () => openSources(message.review)));
+      }
+      const copy = iconButton('copy', '复制', async () => {
+        await copyText(message.body);
+        copy.innerHTML = ICONS.check;
+        setTimeout(() => { copy.innerHTML = ICONS.copy; }, 1600);
+      });
+      actions.append(copy);
+      actions.append(iconButton('bookmark', '存入记忆', async () => {
+        const chat = (current.conversations ?? []).find(item => item.id === activeChat);
+        await request('memory', { kind: 'source', scope: chat?.project || 'DIC2026',
+          source: t('项目对话') + ' #' + message.id, body: message.body, message_id: message.id });
+        showView('capture');
       }));
+      main.append(actions);
+      card.append(main);
+      conversation.append(card);
     }
-    conversation.append(prompts);
-  }
-  for (const message of messages) {
-    if (message.role === 'user') {
-      const user = element('article', '', 'message user');
-      user.append(element('p', message.body));
-      conversation.append(user);
-      continue;
-    }
-    const card = element('article', '', 'message assistant');
-    const avatar = element('div', '', 'chat-avatar');
-    avatar.setAttribute('aria-hidden', 'true');
-    avatar.innerHTML = '<svg viewBox="0 0 40 40" fill="none"><path d="M20 4c0 10-6 16-16 16 10 0 16 6 16 16 0-10 6-16 16-16C26 20 20 14 20 4Z" fill="currentColor"/></svg>';
-    const main = element('div', '', 'message-main');
-    main.append(element('p', message.body));
-    if (message.review?.conflict) main.append(element('p', message.review.conflict, 'attention'));
-    if (message.review?.question) main.append(element('p', message.review.question, 'attention'));
-    if (message.review?.understood) {
-      const understanding = element('details', '', 'message-detail');
-      understanding.append(element('summary', t('我对当前任务的理解')), element('p', message.review.understood));
-      main.append(understanding);
-    }
-    const meta = element('div', '', 'message-actions');
-    if (message.review?.fallbackReason) meta.append(element('span', t(message.review.fallbackReason), 'meta-note'));
-    if (message.review?.plain) meta.append(element('span', t('模型未返回结构化答复，按纯文本展示。'), 'meta-note'));
-    else if (message.review) {
-      const ev = message.review.evidence ?? 'uncited';
-      if (ev === 'verbatim') meta.append(element('span', t('有引用可核对'), 'meta-note'));
-      else meta.append(element('span', t(ev === 'cited' ? '未核查项目证据 · 有来源，但引文未经逐字核对' : '未核查项目证据 · 无可核对引文'), 'meta-warn'));
-    }
-    if (message.review && (message.review.trace || message.review.cited?.length || message.review.facts?.length ||
-      message.review.inferences?.length || message.review.unknowns?.length)) {
-      meta.append(metaButton(t('核查依据'), () => openSources(message.review)));
-    }
-    meta.append(metaButton(t('存入记忆'), async () => {
-      const chat = (current.conversations ?? []).find(item => item.id === activeChat);
-      await request('memory', { kind: 'source', scope: chat?.project || 'DIC2026',
-        source: t('项目对话') + ' #' + message.id, body: message.body, message_id: message.id });
-      showView('capture');
-    }));
-    main.append(meta);
-    card.append(avatar, main);
-    conversation.append(card);
   }
   conversation.scrollTop = conversation.scrollHeight;
 
@@ -256,8 +355,8 @@ function render() {
 }
 
 const viewButtons = [...document.querySelectorAll('[data-view]')];
-const groupViews = { plan: ['tasks', 'calendar'], records: ['capture', 'memory', 'delegation', 'evaluation'] };
-const expandedGroups = new Set(Object.keys(groupViews));
+const groupViews = { chat: ['chat'], plan: ['tasks', 'calendar'], records: ['capture', 'memory', 'delegation', 'evaluation'] };
+let expandedGroups = new Set(['chat']);
 let view = 'chat';
 let calendarMonth = new Date();
 let selectedDay = null;
@@ -319,14 +418,12 @@ function activeGroup() {
 }
 
 function syncNavState() {
-  const group = activeGroup();
-  if (group) expandedGroups.add(group);
   for (const key of Object.keys(groupViews)) {
     const open = expandedGroups.has(key);
     get('group-' + key).setAttribute('aria-expanded', String(open));
     get('children-' + key).hidden = !open;
     document.querySelector(`.nav-caret[data-toggle="${key}"]`)?.classList.toggle('closed', !open);
-    if (key === group) get('group-' + key).setAttribute('aria-current', 'page');
+    if (key === activeGroup()) get('group-' + key).setAttribute('aria-current', 'page');
     else get('group-' + key).removeAttribute('aria-current');
   }
 }
@@ -350,14 +447,13 @@ get('sidebar-toggle').onclick = () => {
 };
 for (const button of viewButtons) button.onclick = () => showView(button.dataset.view);
 for (const button of document.querySelectorAll('.nav-group')) button.onclick = () => {
-  expandedGroups.add(button.dataset.group);
-  showView(groupViews[button.dataset.group][0]);
+  const group = button.dataset.group;
+  expandedGroups = expandedGroups.has(group) ? new Set() : new Set([group]);
+  syncNavState();
 };
 for (const button of document.querySelectorAll('.nav-caret')) button.onclick = () => {
   const group = button.dataset.toggle;
-  if (groupViews[group].includes(view)) return;
-  if (expandedGroups.has(group)) expandedGroups.delete(group);
-  else expandedGroups.add(group);
+  expandedGroups = expandedGroups.has(group) ? new Set() : new Set([group]);
   syncNavState();
 };
 showView(view);
@@ -510,6 +606,8 @@ formAction('chat', async data => {
   const question = get('question');
   progress.hidden = false;
   question.readOnly = true;
+  chatBusy = true;
+  get('chat-send').disabled = true;
   try {
     const temporary = oneTurnNote && data.text.startsWith(t('仅本次使用：'));
     await request('chat', { ...data, language, temporary, conversation_id: activeChat });
@@ -520,10 +618,65 @@ formAction('chat', async data => {
     question.value = '';
     oneTurnNote = false;
   } finally {
+    chatBusy = false;
     progress.hidden = true;
     question.readOnly = false;
+    growQuestion();
+    get('chat-send').disabled = !current?.live || !question.value.trim();
   }
 });
+
+const PROMPT_CHIPS = ['有哪些待办？', '我们做到哪了？', '当前版本可以发布吗？'];
+
+function renderPromptChips() {
+  const prompts = get('chat-prompts');
+  prompts.replaceChildren();
+  for (const prompt of PROMPT_CHIPS) {
+    prompts.append(action(t(prompt), () => {
+      get('question').value = t(prompt);
+      get('question').focus();
+      growQuestion();
+    }));
+  }
+}
+
+function layoutComposer(hasMessages) {
+  const wrap = get('composer');
+  if (hasMessages) {
+    if (wrap.parentElement !== get('chat-stage')) get('chat-stage').append(wrap);
+  } else if (wrap.parentElement !== get('chat-welcome')) {
+    get('chat-prompts').before(wrap);
+  }
+}
+
+function growQuestion() {
+  const question = get('question');
+  question.style.height = 'auto';
+  question.style.height = Math.min(question.scrollHeight, 200) + 'px';
+}
+
+get('question').addEventListener('input', () => {
+  growQuestion();
+  get('chat-send').disabled = chatBusy || !current?.live || !get('question').value.trim();
+});
+get('question').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+    event.preventDefault();
+    get('chat-send').click();
+  }
+});
+
+get('conversation').addEventListener('scroll', () => {
+  const node = get('conversation');
+  const jump = get('scroll-bottom');
+  const away = node.scrollHeight - node.scrollTop - node.clientHeight > 120;
+  jump.hidden = !away;
+  if (away) jump.style.bottom = Math.max(12, get('composer').offsetTop - 14) + 'px';
+});
+get('scroll-bottom').onclick = () => {
+  const node = get('conversation');
+  node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
+};
 get('new-chat').onclick = () => withButton(get('new-chat'), async () => {
   const data = await fetchResult('conversation', {});
   current = { ...data, tasks: data.tasks ?? [] };
@@ -535,14 +688,7 @@ get('new-chat').onclick = () => withButton(get('new-chat'), async () => {
   showView('chat');
   get('question').focus();
 });
-get('toggle-chats').onclick = () => {
-  renderChatList();
-  if (!get('chat-dialog').open) get('chat-dialog').showModal();
-};
-get('close-chats').onclick = () => get('chat-dialog').close();
-get('chat-dialog').addEventListener('close', () => render());
-
-function renderChatList() {
+function renderChatHistory() {
   const list = get('chat-list');
   list.replaceChildren();
   const chats = [...(current?.conversations ?? [])].sort((a, b) => b.id - a.id);
@@ -557,23 +703,14 @@ function chatRow(chat) {
   const row = element('div', '', 'chat-row' + (chat.id === activeChat ? ' current' : ''));
   const title = element('button', chat.title, 'chat-row-title');
   title.type = 'button';
-  title.onclick = () => {
-    get('chat-dialog').close();
-    showView('chat');
-    setActiveChat(chat.id);
-  };
-  const project = element('input', '', 'chat-row-project');
-  project.value = chat.project;
-  project.placeholder = t('未分组');
-  project.maxLength = 40;
-  project.setAttribute('aria-label', t('项目'));
-  project.onchange = () => {
-    if (project.value.trim() !== chat.project) request('conversation-edit', { id: chat.id, project: project.value.trim() });
-  };
-  const rename = element('button', '✎', 'chat-row-tool');
+  title.title = chat.title;
+  title.onclick = () => { showView('chat'); setActiveChat(chat.id); };
+  const tools = element('div', '', 'chat-row-tools');
+  const rename = element('button', '', 'chat-row-tool');
   rename.type = 'button';
   rename.title = t('重命名');
   rename.setAttribute('aria-label', t('重命名'));
+  rename.innerHTML = ICONS.pencil;
   rename.onclick = () => startRename(chat, row, title);
   const merge = element('button', '⇥', 'chat-row-tool');
   merge.type = 'button';
@@ -584,12 +721,13 @@ function chatRow(chat) {
     if (activeChat == null || chat.id === activeChat) return;
     if (!window.confirm(t('把这个对话并入当前对话？消息和记忆都会一起跟过去。'))) return;
     await request('conversation-merge', { id: chat.id, target: activeChat });
-    renderChatList();
+    renderChatHistory();
   });
-  const remove = element('button', '✕', 'chat-row-tool');
+  const remove = element('button', '', 'chat-row-tool');
   remove.type = 'button';
   remove.title = t('删除对话');
   remove.setAttribute('aria-label', t('删除对话'));
+  remove.innerHTML = ICONS.close;
   remove.onclick = () => withButton(remove, async () => {
     if (!window.confirm(t('删除这个对话？对话里的消息和由对话保存的记忆会一起删除。'))) return;
     await request('conversation-delete', { id: chat.id });
@@ -598,9 +736,18 @@ function chatRow(chat) {
       activeChat = chats.length ? Math.max(...chats.map(item => item.id)) : null;
     }
     localStorage.setItem('daymark-chat', activeChat);
-    renderChatList();
+    renderChatHistory();
   });
-  row.append(title, project, merge, remove);
+  tools.append(rename, merge, remove);
+  const project = element('input', '', 'chat-row-project');
+  project.value = chat.project;
+  project.placeholder = t('未分组');
+  project.maxLength = 40;
+  project.setAttribute('aria-label', t('项目'));
+  project.onchange = () => {
+    if (project.value.trim() !== chat.project) request('conversation-edit', { id: chat.id, project: project.value.trim() });
+  };
+  row.append(title, tools, project);
   return row;
 }
 
@@ -619,7 +766,7 @@ function startRename(chat, row, titleButton) {
     finished = true;
     const value = input.value.trim();
     if (save && value && value !== chat.title) await request('conversation-edit', { id: chat.id, title: value });
-    renderChatList();
+    renderChatHistory();
   };
   input.onblur = () => { finish(true); };
   input.onkeydown = event => {
@@ -795,4 +942,6 @@ const renderOpportunities = createOpportunityUI({ get, t, element, action, reque
   },
 });
 applyLanguage();
-request('state').catch(error => { showNotice(error.message); });
+request('state').then(() => {
+  if (view === 'chat' && window.matchMedia('(hover: hover)').matches) get('question').focus();
+}).catch(error => { showNotice(error.message); });

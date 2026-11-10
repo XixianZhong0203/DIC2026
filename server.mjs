@@ -100,7 +100,7 @@ const state = () => {
   const current = draft();
   const activity = events();
   return { ...workflow.state(), alignment: latestAlignment(), memoryDecisions: memoryDecisions(), tasks: tasks(), memory: memories(), messages: messages(), conversations: conversations(), draft: current, events: activity,
-    status: current ? releaseStatus(current, activity) : null, live: modelConfigured, release, repository };
+    status: current ? releaseStatus(current, activity) : null, live: modelConfigured, model, release, repository };
 };
 
 function fail(status, message) {
@@ -218,10 +218,12 @@ async function reply(question, language, temporary, conversationId) {
     result: 'model',
   };
   const insert = db.prepare('INSERT INTO messages(role,body,review,conversation_id) VALUES (?,?,?,?)');
+  const firstMessage = !db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? LIMIT 1').get(conversation);
   db.exec('BEGIN');
   try {
     insert.run('user', question, null, conversation);
     insert.run('assistant', review.answer, JSON.stringify(review), conversation);
+    if (firstMessage) db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(question.slice(0, 30), conversation);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

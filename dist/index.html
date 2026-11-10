@@ -10,25 +10,35 @@
 <body>
 <aside class="sidebar" id="sidebar">
   <div class="brand"><svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><rect x="2" y="9" width="23" height="23" rx="5" fill="#c6d9cc"/><rect x="10" y="3" width="24" height="24" rx="5" fill="#295846"/><path d="m16 15 4 4 8-9" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg><b>Daymark</b></div>
+  <button id="new-chat" type="button" class="new-chat"><span data-i18n>新对话</span><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7.5 19.5 3 21l1.5-4.5Z"/><path d="m13.5 6.5 4 4"/></svg></button>
   <nav class="feature-nav" aria-label="Workspace navigation">
-    <button type="button" data-view="chat" data-i18n>对话</button>
+    <div class="nav-item">
+      <div class="nav-group-row">
+        <button type="button" class="nav-group" id="group-chat" data-group="chat" aria-expanded="true" data-i18n>对话</button>
+        <button type="button" class="nav-caret" data-toggle="chat" aria-hidden="true">⌄</button>
+      </div>
+      <div class="nav-children" id="children-chat">
+        <div class="chat-history-label" data-i18n>历史对话</div>
+        <div id="chat-list"></div>
+      </div>
+    </div>
     <button type="button" data-view="opportunities" data-i18n>线索</button>
     <div class="nav-item">
       <div class="nav-group-row">
-        <button type="button" class="nav-group" id="group-plan" data-group="plan" aria-expanded="true" data-i18n>计划</button>
-        <button type="button" class="nav-caret" data-toggle="plan" aria-hidden="true">⌄</button>
+        <button type="button" class="nav-group" id="group-plan" data-group="plan" aria-expanded="false" data-i18n>计划</button>
+        <button type="button" class="nav-caret closed" data-toggle="plan" aria-hidden="true">⌄</button>
       </div>
-      <div class="nav-children" id="children-plan">
+      <div class="nav-children" id="children-plan" hidden>
         <button type="button" data-view="tasks" data-i18n>待办</button>
         <button type="button" data-view="calendar" data-i18n>日历</button>
       </div>
     </div>
     <div class="nav-item">
       <div class="nav-group-row">
-        <button type="button" class="nav-group" id="group-records" data-group="records" aria-expanded="true" data-i18n>资料</button>
-        <button type="button" class="nav-caret" data-toggle="records" aria-hidden="true">⌄</button>
+        <button type="button" class="nav-group" id="group-records" data-group="records" aria-expanded="false" data-i18n>资料</button>
+        <button type="button" class="nav-caret closed" data-toggle="records" aria-hidden="true">⌄</button>
       </div>
-      <div class="nav-children" id="children-records">
+      <div class="nav-children" id="children-records" hidden>
         <button type="button" data-view="capture" data-i18n>收集</button>
         <button type="button" data-view="memory" data-i18n>记忆</button>
         <button type="button" data-view="delegation" data-i18n>授权</button>
@@ -122,29 +132,29 @@
     <div id="capture-list"></div>
   </section>
   <section class="card chat wide" data-panel="chat" hidden>
-    <div class="chat-heading" id="chat-welcome">
-      <div class="chat-mark" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M20 4c0 10-6 16-16 16 10 0 16 6 16 16 0-10 6-16 16-16C26 20 20 14 20 4Z" fill="currentColor"/></svg></div>
-      <h1 data-i18n>今天想做什么？</h1>
-      <p class="muted" data-i18n>查一条记录，接着做一件事。</p>
-    </div>
-    <div class="chat-toolbar">
-      <button id="new-chat" type="button" class="secondary" data-i18n>新对话</button>
-      <button id="toggle-chats" type="button" class="secondary" data-i18n>对话列表</button>
-    </div>
-    <dialog id="chat-dialog" class="chat-dialog" aria-labelledby="chat-dialog-title">
-      <div class="source-heading"><h2 id="chat-dialog-title" data-i18n>全部对话</h2>
-        <button id="close-chats" type="button" class="secondary" data-i18n>关闭</button></div>
-      <div id="chat-list"></div>
-    </dialog>
-    <div id="conversation" aria-live="polite"></div>
-    <form id="chat" class="composer">
-      <label class="sr-only" for="question"><span data-i18n>问 Daymark</span></label>
-      <textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="给 Daymark 发消息"></textarea>
-      <div class="composer-footer">
-        <span id="chat-progress" class="muted" role="status" hidden data-i18n>正在查询…</span>
-        <button id="chat-send" class="send-button" type="submit"><span class="sr-only" data-i18n>发送</span><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <div class="chat-stage" id="chat-stage">
+      <div class="chat-empty" id="chat-welcome">
+        <h1 data-i18n>今天想做什么？</h1>
+        <p class="muted" data-i18n>查一条记录，接着做一件事。</p>
+        <div class="chat-prompts" id="chat-prompts"></div>
       </div>
-    </form>
+      <div id="conversation" aria-live="polite" hidden></div>
+      <button id="scroll-bottom" type="button" class="scroll-bottom" hidden>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div id="composer">
+        <form id="chat" class="composer">
+          <label class="sr-only" for="question"><span data-i18n>问 Daymark</span></label>
+          <textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="给 Daymark 发消息"></textarea>
+          <div class="composer-footer">
+            <span id="composer-model"></span>
+            <span id="chat-progress" class="muted" role="status" hidden data-i18n>正在查询…</span>
+            <button id="chat-send" class="send-button" type="submit"><span class="sr-only" data-i18n>发送</span><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          </div>
+        </form>
+        <p class="composer-note" data-i18n>Daymark 可能出错，重要信息请核对。</p>
+      </div>
+    </div>
   </section>
   <section class="card" data-panel="memory" hidden>
     <div class="card-head"><span class="number">02</span><h2 data-i18n>项目记忆</h2></div>
