@@ -10,49 +10,50 @@
 <body>
 <header>
   <div class="brand"><svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><rect x="2" y="9" width="23" height="23" rx="5" fill="#c6d9cc"/><rect x="10" y="3" width="24" height="24" rx="5" fill="#295846"/><path d="m16 15 4 4 8-9" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg><b>Daymark</b></div>
-  <span class="workspace">DIC2026 / 个人工作台</span>
+  <span class="workspace"><span data-i18n>DIC2026 / 个人工作台</span></span>
   <span id="connection" class="badge"></span>
+  <select id="language" aria-label="Language / 语言"><option value="zh-CN">中文</option><option value="en">English</option></select>
 </header>
 <main>
 <section class="intro">
   <span class="eyebrow">YOUR AI TEAMMATE</span>
-  <h1>接着昨天做。</h1>
-  <p>找回项目决定，核对它们今天是否适用。</p>
+  <h1 data-i18n>接着昨天做。</h1>
+  <p><span data-i18n>找回项目决定，核对它们今天是否适用。</span></p>
 </section>
 <div id="notice" role="status"></div>
 <div class="grid">
   <section class="card chat">
-    <div class="card-head"><span class="number">01</span><h2>项目对话</h2></div>
+    <div class="card-head"><span class="number">01</span><h2 data-i18n>项目对话</h2></div>
     <div id="conversation" aria-live="polite"></div>
-    <form id="chat"><label for="question">问 Daymark</label><textarea id="question" name="text" required maxlength="6000" placeholder="我们昨天做到哪了？v0.2 可以发布了吗？"></textarea><button>发送</button></form>
+    <form id="chat"><label for="question"><span data-i18n>问 Daymark</span></label><textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="我们昨天做到哪了？v0.2 可以发布了吗？"></textarea><button data-i18n>发送</button></form>
   </section>
   <section class="card">
-    <div class="card-head"><span class="number">02</span><h2>项目记忆</h2></div>
+    <div class="card-head"><span class="number">02</span><h2 data-i18n>项目记忆</h2></div>
     <div id="memory"></div>
-    <button class="secondary" id="seed">载入示例记忆</button>
+    <button class="secondary" id="seed" data-i18n>载入示例记忆</button>
     <form id="memoryForm">
       <p id="revision" hidden></p>
-      <label>记录类型<select name="kind"><option value="fact">事实</option><option value="preference">偏好</option><option value="rule">已确认规则</option><option value="proposal">未确认提议</option></select></label>
-      <label>适用范围<input name="scope" value="DIC2026" required maxlength="100"></label>
-      <label>记录<textarea name="body" required maxlength="4000" placeholder="例如：对外项目简介用英文"></textarea></label>
-      <label>出处<input name="source" required maxlength="500" placeholder="例如：11 月 10 日的项目讨论"></label>
-      <div class="buttons"><button>保存记录</button><button type="button" class="secondary" id="cancel" hidden>取消修订</button></div>
+      <label><span data-i18n>记录类型</span><select name="kind"><option value="fact" data-i18n>事实</option><option value="preference" data-i18n>偏好</option><option value="rule" data-i18n>已确认规则</option><option value="proposal" data-i18n>未确认提议</option></select></label>
+      <label><span data-i18n>适用范围</span><input name="scope" value="DIC2026" required maxlength="100"></label>
+      <label><span data-i18n>记录</span><textarea name="body" required maxlength="4000" data-placeholder placeholder="例如：对外项目简介用英文"></textarea></label>
+      <label><span data-i18n>出处</span><input name="source" required maxlength="500" data-placeholder placeholder="例如：11 月 10 日的项目讨论"></label>
+      <div class="buttons"><button data-i18n>保存记录</button><button type="button" class="secondary" id="cancel" hidden data-i18n>取消修订</button></div>
     </form>
   </section>
   <section class="card">
-    <div class="card-head"><span class="number">03</span><h2>模拟发布</h2></div>
-    <p class="muted">在本地验证草稿、测试记录和发布授权。此处所有发布均为模拟。</p>
-    <form id="draftForm"><label>发布内容<textarea name="body" required maxlength="12000" placeholder="输入要发布的版本说明"></textarea></label><button>保存为新草稿</button></form>
+    <div class="card-head"><span class="number">03</span><h2 data-i18n>模拟发布</h2></div>
+    <p class="muted"><span data-i18n>在本地验证草稿、测试记录和发布授权。此处所有发布均为模拟。</span></p>
+    <form id="draftForm"><label><span data-i18n>发布内容</span><textarea name="body" required maxlength="12000" data-placeholder placeholder="输入要发布的版本说明"></textarea></label><button data-i18n>保存为新草稿</button></form>
     <div id="release"></div>
     <div id="events"></div>
   </section>
   <section class="card">
-    <div class="card-head"><span class="number">04</span><h2>漏洞复现</h2></div>
-    <p class="muted">固定案例 · 用预设的错误行为展示旧证据和未确认提议如何导致越权。</p>
+    <div class="card-head"><span class="number">04</span><h2 data-i18n>漏洞复现</h2></div>
+    <p class="muted"><span data-i18n>固定案例 · 用预设的错误行为展示旧证据和未确认提议如何导致越权。</span></p>
     <form id="evaluation">
-      <label>通过测试的版本<select name="verified"><option>v0.1</option><option>v0.2</option></select></label>
-      <label class="check"><input name="approved" type="checkbox"> 用户批准当前草稿</label>
-      <button>运行示例</button>
+      <label><span data-i18n>通过测试的版本</span><select name="verified"><option>v0.1</option><option>v0.2</option></select></label>
+      <label class="check"><input name="approved" type="checkbox"><span data-i18n>用户批准当前草稿</span></label>
+      <button data-i18n>运行示例</button>
     </form>
     <div id="results" aria-live="polite"></div>
   </section>

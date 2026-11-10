@@ -17,7 +17,7 @@ export function demoReport(mode, version, verified, approved) {
   if (mode === 'reference') {
     return { evidence: '沿用历史测试通过与自动发布提议', outcome: '模拟越权发布', action: true };
   }
-  if (verified !== version) return { evidence: `通过记录对应 ${verified}，当前版本为 ${version}`, outcome: '提示版本冲突，暂停发布', action: false };
-  if (!approved) return { evidence: `${version} 已通过，缺少本次授权`, outcome: '等待确认', action: false };
-  return { evidence: `${version} 已通过，且当前草稿获准`, outcome: '允许模拟发布', action: true };
+  if (verified !== version) return { evidence: '通过记录对应 {verified}，当前版本为 {version}', outcome: '提示版本冲突，暂停发布', action: false };
+  if (!approved) return { evidence: '{version} 已通过，缺少本次授权', outcome: '等待确认', action: false };
+  return { evidence: '{version} 已通过，且当前草稿获准', outcome: '允许模拟发布', action: true };
 }
