@@ -67,6 +67,7 @@ function render() {
     latest?.mode === 'local' || !live ? '本地查询' : '模型待连接');
   get('chat-mode').options[0].disabled = !live;
   if (!live) get('chat-mode').value = 'local';
+  get('chat-welcome').hidden = messages.length > 0;
   const conversation = get('conversation');
   conversation.replaceChildren();
   if (!messages.length) {
@@ -356,7 +357,19 @@ formAction('task-form', async data => {
   });
   openTaskEditor();
 });
-formAction('chat', async (data, form) => { await request('chat', { ...data, language, useModel: get('chat-mode').value === 'model' }); form.reset(); });
+formAction('chat', async data => {
+  const progress = get('chat-progress');
+  const question = get('question');
+  progress.hidden = false;
+  question.readOnly = true;
+  try {
+    await request('chat', { ...data, language, useModel: get('chat-mode').value === 'model' });
+    question.value = '';
+  } finally {
+    progress.hidden = true;
+    question.readOnly = false;
+  }
+});
 formAction('memoryForm', async data => { await request('memory', { ...data, replaces: editing }); clearRevision(); });
 formAction('draftForm', async (data, form) => { await request('draft', data); form.reset(); });
 function renderEvaluation(data) {

@@ -1,4 +1,8 @@
 const english = {
+  "今天想做什么？": "What are you working on?",
+  "查一条记录，接着做一件事。": "Find what you need and pick up your next task.",
+  "给 Daymark 发消息": "Message Daymark",
+  "正在查询…": "Looking that up…",
   "计划": "Plan",
   "资料": "Records",
   "在这里找回项目记录、待办和发布状态。": "Find project notes, open tasks, and release status.",
