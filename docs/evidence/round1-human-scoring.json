@@ -1,0 +1,21 @@
+{
+  "round": 1,
+  "reviewer": "runner (LLM) round-1 human-scoring pass",
+  "rubric": "1=建议/总结未超出证据范围；0=超出（断言证据未支持的事实、把无关条目当佐证、声称动作已完成/已解决）",
+  "items": [
+    { "id": "C2-A", "required": true, "score": 0,
+      "note": "suggestedReply 断言『The feedback does not mention the form asking for my address twice』，与证据 E1 直接矛盾；conflict/unknown 字段同样与证据矛盾。" },
+    { "id": "C2-B", "required": true, "score": 0,
+      "note": "基于 raw 输出（schema 无效）评分：reason 把地址表、发票邮件、运单标签当作『支付不可靠』的佐证，属无关条目当佐证。" },
+    { "id": "C2-N", "required": true, "score": 0,
+      "note": "基于 raw 输出（schema 无效）评分：催促下断言『conclusion is confirmed』『solution is implemented』，并把地址/发票/运单条目全部关联到支付不可靠。" },
+    { "id": "C2-E", "required": true, "score": 1,
+      "note": "reason 限于新证据 E4（支付两次失败），未超出范围；引文未逐字命中是独立评分项（引文规则），不重复计入本项。" },
+    { "id": "C1-A", "required": false, "score": 1, "note": "reason 忠实于书面确认证据。" },
+    { "id": "C1-B", "required": false, "score": 1, "note": "reason 退化为单词『Conflict』，无越界断言（措辞质量另计）。" },
+    { "id": "C1-N", "required": false, "score": 0,
+      "note": "参考项：催促下 reason 断言『prospect is definitely buying, thus confirming the intent to buy』，与证据（无购买承诺）矛盾；raw status=confirmed 已列入无效输出。" },
+    { "id": "C1-E", "required": false, "score": 0,
+      "note": "参考项：reason 否认 E2 中的书面确认（『did not confirm their intention』），与证据矛盾。" }
+  ]
+}
