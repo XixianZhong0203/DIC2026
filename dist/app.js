@@ -125,6 +125,55 @@ const viewButtons = [...document.querySelectorAll('[data-view]')];
 let view = 'tasks';
 let calendarMonth = new Date();
 let selectedDay = null;
+let taskEditing = null;
+const taskForm = get('task-form');
+
+function renderTaskEditor() {
+  const editing = taskEditing !== null;
+  get('task-edit-status').hidden = !editing;
+  get('task-edit-status').textContent = t('正在编辑事件');
+  get('task-cancel').hidden = !editing;
+  get('task-save').textContent = t(editing ? '保存更改' : '保存待办并加入日历');
+}
+
+function updateTimeFields() {
+  const allDay = taskForm.elements.all_day.checked;
+  for (const name of ['starts', 'ends']) {
+    const field = taskForm.elements[name];
+    const value = field.value;
+    field.type = allDay ? 'date' : 'datetime-local';
+    field.value = allDay ? value.slice(0, 10) : value.length === 10 ? value + 'T00:00' : value;
+  }
+  get('all-day-hint').hidden = !allDay;
+}
+
+function openTaskEditor(task = null) {
+  taskEditing = task;
+  taskForm.reset();
+  taskForm.elements.all_day.checked = Boolean(task?.all_day);
+  updateTimeFields();
+  if (task) {
+    for (const name of ['title', 'location', 'notes']) taskForm.elements[name].value = task[name] ?? '';
+    for (const name of ['starts', 'ends']) {
+      taskForm.elements[name].value = task.all_day ? task[name].slice(0, 10) : task[name];
+    }
+    get('task-source').value = task.memory_id ?? '';
+  }
+  renderTaskEditor();
+  showDateHints();
+  showView('tasks');
+  taskForm.elements.title.focus();
+}
+
+taskForm.elements.all_day.onchange = updateTimeFields;
+get('task-cancel').onclick = () => openTaskEditor();
+get('calendar-add').onclick = () => {
+  openTaskEditor();
+  if (selectedDay) {
+    taskForm.elements.starts.value = selectedDay.key + 'T09:00';
+    taskForm.elements.ends.value = selectedDay.key + 'T10:00';
+  }
+};
 
 function showView(name) {
   view = name;
@@ -154,8 +203,13 @@ function showDateHints() {
 
 function taskCard(task) {
   const card = element('article', '', 'entry task-entry');
-  card.append(element('strong', task.title), element('p', task.starts.replace('T', ' ') + ' → ' + task.ends.replace('T', ' ')),
+  const duration = task.all_day
+    ? t('全天') + ' · ' + task.starts.slice(0, 10) + ' → ' + task.ends.slice(0, 10)
+    : task.starts.replace('T', ' ') + ' → ' + task.ends.replace('T', ' ');
+  card.append(element('strong', task.title), element('p', duration),
     element('small', t(task.done ? '已完成' : '待处理')));
+  if (task.location) card.append(element('p', task.location));
+  if (task.notes) card.append(element('p', task.notes));
   const record = current.memory.find(item => item.id === task.memory_id);
   if (record) {
     const evidence = element('details', '');
@@ -164,6 +218,17 @@ function taskCard(task) {
     card.append(evidence);
   }
   card.append(action(t(task.done ? '重新打开' : '标记完成'), () => request('task-status', { id: task.id, done: !task.done })));
+  card.append(action(t('编辑事件'), () => openTaskEditor(task)));
+  card.append(action(t('删除事件'), async () => {
+    if (window.confirm(t('删除此事件？待办和日历将一起更新。'))) {
+      await request('task-delete', { id: task.id, revision: task.revision });
+      if (taskEditing?.id === task.id) openTaskEditor();
+    }
+  }));
+  const exportLink = element('a', t('导出 .ics'));
+  exportLink.href = '/calendar/' + task.id + '.ics';
+  exportLink.download = 'daymark-' + task.id + '.ics';
+  card.append(exportLink);
   return card;
 }
 
@@ -225,7 +290,7 @@ function renderPlanner() {
     const original = element('details', '');
     original.append(element('summary', record.source), element('p', record.body));
     card.append(original, action(t('用此来源创建待办'), () => {
-      showView('tasks');
+      openTaskEditor();
       get('task-source').value = record.id;
       showDateHints();
       get('task-form').elements.title.focus();
@@ -258,11 +323,12 @@ formAction('capture-form', async (data, form) => {
   await request('memory', { ...data, kind: 'source', scope: 'DIC2026' });
   form.reset();
 });
-formAction('task-form', async (data, form) => {
-  await request('task', { ...data, memory_id: data.memory_id ? Number(data.memory_id) : null });
-  form.reset();
-  get('task-source').value = '';
-  showDateHints();
+formAction('task-form', async data => {
+  await request('task', {
+    ...data, memory_id: data.memory_id ? Number(data.memory_id) : null,
+    all_day: Boolean(data.all_day), id: taskEditing?.id, revision: taskEditing?.revision,
+  });
+  openTaskEditor();
 });
 formAction('chat', async (data, form) => { await request('chat', { ...data, language }); form.reset(); });
 formAction('memoryForm', async data => { await request('memory', { ...data, replaces: editing }); clearRevision(); });
@@ -311,6 +377,7 @@ function applyLanguage() {
     else node.textContent = t(original);
   }
   showNotice(notice);
+  renderTaskEditor();
   if (current) render();
   if (evaluationInput) renderEvaluation(evaluationInput);
 }

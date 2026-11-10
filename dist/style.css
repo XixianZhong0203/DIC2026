@@ -115,3 +115,5 @@ summary { cursor: pointer; }
 @media (max-width: 440px) { .time-fields { grid-template-columns: 1fr; } }
 
 #task-list, #capture-list { max-height: 440px; overflow: auto; }
+.calendar-actions { align-items: center; margin-top: 12px; }
+.calendar-actions a, .task-entry > a { color: var(--green); font-size: .875rem; margin-inline: 10px; }

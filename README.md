@@ -36,3 +36,17 @@ Grounding Awareness 启发了确认状态与执行检查。Semantic Commit 启�
 - [ICR](https://aclanthology.org/2025.emnlp-main.496/)
 - [CLAMBER](https://aclanthology.org/2024.acl-long.578/)
 - [OpenCode Inference API](https://opencode.ai/docs/console/api/inference)
+
+### 本机模型 / Local model
+
+Daymark 支持 Ollama 的本机接口，无需云端密钥。先启动 Ollama 并下载模型，例如 `ollama pull qwen3:4b`。在本机 `.env` 配置后重启 Daymark。
+
+```dotenv
+OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+MODEL_ID=qwen3:4b
+OPENAI_API_KEY=
+```
+
+### 日历导出 / Calendar export
+
+「日历」可以随时导出全部事件，每条事件也有单独的 `.ics` 导出入口。macOS 日历可通过「文件 → 导入」打开。导出保留标题、起止时间、全天状态、地点和备注。普通事件采用浮动本地时间，全天事件使用排他的结束日期。

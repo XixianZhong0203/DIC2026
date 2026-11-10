@@ -25,10 +25,10 @@
 <main>
 <section class="intro" aria-labelledby="workspace-title">
   <div>
-    <span class="eyebrow" data-i18n>独立工作台</span>
-    <h1 id="workspace-title" data-i18n>项目案头</h1>
+
+    <h1 id="workspace-title" data-i18n>今日工作台</h1>
   </div>
-  <p data-i18n>往事可稽，今事可续。</p>
+  <p data-i18n>待办、日历与项目记录</p>
 </section>
 <div id="notice" role="status"></div>
 <div class="grid">
@@ -36,18 +36,27 @@
     <div class="card-head"><h2 data-i18n>待办与时间安排</h2></div>
     <div id="task-list"></div>
     <form id="task-form">
+      <p id="task-edit-status" class="muted" hidden></p>
+      <label class="check"><input name="all_day" type="checkbox"><span data-i18n>全天</span></label>
       <label><span data-i18n>事项</span><input name="title" required maxlength="200"></label>
       <div class="time-fields">
         <label><span data-i18n>开始时间</span><input name="starts" type="datetime-local" required></label>
         <label><span data-i18n>结束时间</span><input name="ends" type="datetime-local" required></label>
       </div>
+      <p id="all-day-hint" class="muted" data-i18n hidden>全天事件的结束日期为最后一天的次日。</p>
+      <label><span data-i18n>地点</span><input name="location" maxlength="500"></label>
+      <label><span data-i18n>备注</span><textarea name="notes" maxlength="4000"></textarea></label>
       <label><span data-i18n>关联记忆</span><select name="memory_id" id="task-source"></select></label>
       <p id="date-hints" class="muted" hidden></p>
-      <button data-i18n>保存待办并加入日历</button>
+      <div class="buttons"><button id="task-save" data-i18n>保存待办并加入日历</button><button id="task-cancel" type="button" class="secondary" data-i18n hidden>取消编辑</button></div>
     </form>
   </section>
   <section class="card wide" data-panel="calendar" hidden>
     <div class="card-head"><h2 data-i18n>日历</h2></div>
+    <div class="buttons calendar-actions">
+      <button id="calendar-add" type="button" data-i18n>新建事件</button>
+      <a href="/calendar.ics" download data-i18n>导出全部 .ics</a>
+    </div>
     <div class="calendar-tools">
       <button id="previous-month" type="button" class="secondary" data-i18n>上个月</button>
       <strong id="calendar-month"></strong>

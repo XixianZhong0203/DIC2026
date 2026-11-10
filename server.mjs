@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
+import { calendarFile } from './calendar.mjs';
 import { demoRecords, releaseStatus, release, repository } from './policy.mjs';
 
 const dataDir = process.env.DAYMARK_DATA_DIR ?? new URL('./data/', import.meta.url).pathname;
@@ -27,9 +28,25 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS one_publish ON events(draft) WHERE type = 'published';
 `);
 
+const taskColumns = new Set(db.prepare('PRAGMA table_info(tasks)').all().map(column => column.name));
+for (const [column, definition] of [
+  ['all_day', 'INTEGER NOT NULL DEFAULT 0'], ['location', "TEXT NOT NULL DEFAULT ''"],
+  ['notes', "TEXT NOT NULL DEFAULT ''"], ['deleted', 'INTEGER NOT NULL DEFAULT 0'],
+  ['revision', 'INTEGER NOT NULL DEFAULT 0'],
+]) {
+  if (!taskColumns.has(column)) db.exec(`ALTER TABLE tasks ADD COLUMN ${column} ${definition}`);
+}
+db.exec('CREATE TABLE IF NOT EXISTS calendar_identity (id INTEGER PRIMARY KEY CHECK (id = 1), uid TEXT NOT NULL)');
+db.prepare('INSERT OR IGNORE INTO calendar_identity VALUES (1, ?)').run(randomUUID());
+const calendarId = db.prepare('SELECT uid FROM calendar_identity WHERE id = 1').get().uid;
+const tasks = () => db.prepare('SELECT * FROM tasks WHERE deleted = 0 ORDER BY starts, id').all();
+
 const key = (process.env.OPENAI_API_KEY ?? '').trim();
 const base = (process.env.OPENAI_BASE_URL ?? 'https://opencode.ai/inference/openai/v1').replace(/\/$/, '');
 const model = process.env.MODEL_ID ?? 'deepseek-v4-flash';
+const endpoint = new URL(base);
+const localModel = ['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname);
+const modelConfigured = localModel || Boolean(key);
 const events = () => db.prepare('SELECT * FROM events ORDER BY id DESC').all();
 const memories = () => db.prepare(`
   SELECT m.*, EXISTS(SELECT 1 FROM memory n WHERE n.replaces = m.id) AS superseded
@@ -44,8 +61,8 @@ const log = (type, version, id = null) =>
 const state = () => {
   const current = draft();
   const activity = events();
-  return { tasks: db.prepare('SELECT * FROM tasks ORDER BY starts, id').all(), memory: memories(), messages: messages(), draft: current, events: activity,
-    status: current ? releaseStatus(current, activity) : null, live: Boolean(key), release, repository };
+  return { tasks: tasks(), memory: memories(), messages: messages(), draft: current, events: activity,
+    status: current ? releaseStatus(current, activity) : null, live: modelConfigured, release, repository };
 };
 
 function fail(status, message) {
@@ -58,13 +75,13 @@ function required(value, length) {
 }
 
 async function reply(question, language) {
-  if (!key) fail(503, '请在本地 .env 配置模型 API，或打开独立的模拟评测。');
+  if (!modelConfigured) fail(503, '请在本地 .env 配置模型 API，或打开独立的模拟评测。');
   const active = memories().filter(row => !row.superseded).slice(0, 24);
   const history = messages().slice(-14).map(({ role, body }) => ({ role, content: body }));
   const response = await fetch(base + '/chat/completions', {
     method: 'POST',
     redirect: 'error',
-    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(!localModel && key ? { Authorization: 'Bearer ' + key } : {}) },
     signal: AbortSignal.timeout(45000),
     body: JSON.stringify({ model, max_tokens: 2048, messages: [
       { role: 'system', content: `你是 Daymark，一个帮助个人接续项目的队友。
@@ -116,7 +133,12 @@ const mutations = {
       kind, required(scope, 100), required(body, kind === 'source' ? 16000 : 4000), required(source, 500), old?.id ?? null,
     );
   },
-  '/api/task': ({ title, starts, ends, memory_id }) => {
+  '/api/task': ({ id, revision, title, starts, ends, memory_id, all_day = false, location = '', notes = '' }) => {
+    if (typeof all_day !== 'boolean') fail(400, '请求内容不正确。');
+    if (all_day) {
+      starts = typeof starts === 'string' ? starts + 'T00:00' : starts;
+      ends = typeof ends === 'string' ? ends + 'T00:00' : ends;
+    }
     const valid = value => {
       if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return false;
       const date = new Date(value + 'Z');
@@ -126,12 +148,28 @@ const mutations = {
     if (memory_id != null && (!Number.isSafeInteger(memory_id) || !db.prepare('SELECT id FROM memory WHERE id = ?').get(memory_id))) {
       fail(400, '找不到关联的来源记录。');
     }
-    db.prepare('INSERT INTO tasks(title, starts, ends, memory_id) VALUES (?,?,?,?)')
-      .run(required(title, 200), starts, ends, memory_id ?? null);
+    if (typeof location !== 'string' || location.length > 500 || typeof notes !== 'string' || notes.length > 4000) {
+      fail(400, '请检查输入内容。');
+    }
+    const fields = [required(title, 200), starts, ends, memory_id ?? null, Number(all_day), location.trim(), notes.trim()];
+    if (id == null) {
+      db.prepare('INSERT INTO tasks(title, starts, ends, memory_id, all_day, location, notes) VALUES (?,?,?,?,?,?,?)').run(...fields);
+    } else {
+      if (!Number.isSafeInteger(id) || !Number.isSafeInteger(revision)) fail(400, '请求内容不正确。');
+      const result = db.prepare(`UPDATE tasks SET title=?, starts=?, ends=?, memory_id=?, all_day=?,
+        location=?, notes=?, revision=revision+1 WHERE id=? AND revision=? AND deleted=0`).run(...fields, id, revision);
+      if (!result.changes) fail(409, '事件已变更，请刷新后重试。');
+    }
+  },
+  '/api/task-delete': ({ id, revision }) => {
+    if (!Number.isSafeInteger(id) || !Number.isSafeInteger(revision)) fail(400, '请求内容不正确。');
+    if (!db.prepare('UPDATE tasks SET deleted=1, revision=revision+1 WHERE id=? AND revision=? AND deleted=0').run(id, revision).changes) {
+      fail(409, '事件已变更，请刷新后重试。');
+    }
   },
   '/api/task-status': ({ id, done }) => {
     if (!Number.isSafeInteger(id) || typeof done !== 'boolean') fail(400, '请求内容不正确。');
-    if (!db.prepare('UPDATE tasks SET done = ? WHERE id = ?').run(Number(done), id).changes) {
+    if (!db.prepare('UPDATE tasks SET done = ? WHERE id = ? AND deleted = 0').run(Number(done), id).changes) {
       fail(404, '找不到这条待办。');
     }
   },
@@ -172,6 +210,14 @@ createServer(async (req, res) => {
       const [file, mime] = assets.get(route);
       res.setHeader('Content-Type', mime + '; charset=utf-8');
       return res.end(await readFile(new URL('./dist/' + file, import.meta.url)));
+    }
+    if (req.method === 'GET' && (route === '/calendar.ics' || /^\/calendar\/\d+\.ics$/.test(route))) {
+      const id = /^\/calendar\/(\d+)\.ics$/.exec(route)?.[1];
+      const selected = id ? tasks().filter(task => String(task.id) === id) : tasks();
+      if (id && !selected.length) fail(404, '找不到这条待办。');
+      res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="daymark' + (id ? '-' + id : '') + '.ics"');
+      return res.end(calendarFile(selected, calendarId));
     }
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     if (req.method === 'GET' && route === '/api/state') return res.end(JSON.stringify(state()));
