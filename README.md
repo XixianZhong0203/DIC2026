@@ -6,7 +6,13 @@ Daymark 是为独立经营者设计的本地 AI 工作台。它把项目记忆�
 
 需要 Node.js 24+。运行 `npm start`，打开 http://127.0.0.1:4173。
 
-默认可体验示例记忆、修订、模拟发布与固定漏洞案例。要启用实时对话，复制 `.env.example` 为 `.env` 并填写新的 OpenCode API Key。模型端点和模型 ID 可配置，应用使用 Chat Completions。相关记忆和近期对话会发送给配置的模型服务。SQLite 数据在被 Git 忽略的 `data/` 中。
+默认可体验示例记忆、修订、模拟发布与固定漏洞案例。SQLite 数据保存在本机的 `data/` 目录。
+
+## 模型 API 配置 / Model API setup
+
+实时对话需要你自己的 API Key。运行 `cp .env.example .env`，在本机填写 `OPENAI_API_KEY`，然后重启 Daymark。默认使用 OpenCode Console 的 Chat Completions 接口。使用其他兼容服务时，同时填写该服务的 `OPENAI_BASE_URL` 和 `MODEL_ID`。相关记忆和近期对话会发送给你配置的服务。
+
+Live chat requires your own API key. Copy `.env.example` to `.env`, set `OPENAI_API_KEY`, and restart Daymark. For another Chat Completions provider, also set its `OPENAI_BASE_URL` and `MODEL_ID`. Git ignores the local `.env` and `data/` directory.
 
 ## 试一次
 
