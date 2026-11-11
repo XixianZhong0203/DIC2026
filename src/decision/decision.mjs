@@ -2,10 +2,18 @@
 //
 // Code ownership (aligned with the memory window):
 //   this module — card construction, deterministic triggers, calendar slot
-//     previews, confirmation dispatch, and returning the user's choice to the
-//     conversation context (decisionContext);
+//     previews, confirmation dispatch, recheck at confirm time, and returning
+//     the user's choice to the conversation context (decisionContext);
 //   src/memory/* — long-term memory extraction, project scope, and the
 //     old-vs-new memory conflict judgment.
+//
+// Shared routes (aligned with the task-log window, which owns 待办日志):
+//   recheckDecision only READS tasks and memory. The actual writes still go
+//   through the existing routes — /api/task (revision-gated) and /api/memory
+//   (snapshot-gated) — whose contracts are unchanged. /api/decision calls
+//   recheckDecision before dispatching a card effect; when it reports stale,
+//   no write happens and the card is updated in place (recheck.reason +
+//   refreshed options) so the owner can continue from the same card.
 //
 // The memory window (or the chat pipeline) hands this module the same four
 // pieces of information for every decision it wants the owner to make:
@@ -19,21 +27,35 @@
 //     title?, current?, proposal?, reason?, recordIds?: number[],
 //     records?: [{ id, kind, source, body }],
 //     asks?: [{ title?, reason?, options?: [option] }],
-//     options?: [option] }
+//     options?: [option], anchor?: number | null }
 //   option = { id?, label (required), consequence?, preview?,
 //     effect: { kind, payload } }
 //   effect.kind — 'view' (open calendar / sources, no write) | 'question'
-//     (draft a clarification, no write) | 'temporary' (one-turn exception,
-//     no memory write) | 'task' (reuses /api/task, revision-gated confirm)
-//     | 'memory' (reuses /api/memory + the impact-review snapshot).
+//     (draft a clarification or a source supplement, no write) | 'temporary'
+//     (one-turn exception, no memory write) | 'task' (reuses /api/task,
+//     revision-gated confirm) | 'memory' (reuses /api/memory + the
+//     impact-review snapshot).
 //
 // The produced payload is stored on the assistant message as review.decision:
-//   { kind, title, current, reason, proposal, records, options, status, choice }
+//   { kind, title, current, reason, proposal, records, options, anchor,
+//     recheck, status, choice }
 //   status: 'open' -> 'choosing' -> 'applied' | 'failed'
+//   anchor: the long-term memory record the card's memory options are anchored
+//     on (preference cards only); recheck re-validates it at confirm time.
+//   recheck: null | { at, stale, reason } — set by the server when a confirm
+//     is paused because the live state changed after the card was generated.
 //   choice: { option_id, at, receipt, temporary?, temporary_text? }
+//
+// Receipt wording distinguishes three claims that must never be conflated:
+//   我方选了某个时间 (the owner selected an option — recorded, nothing written)
+//   本地日历已更新 (the local write actually happened)
+//   客户已确认 (a claim about the counterparty — only ever stated by saved
+//     records, never inferred from a local selection or write)
+// A time merely proposed by the counterparty stays a proposal (卡片里的
+// proposal 行标注「未确认」) until the owner confirms and the write succeeds.
 
 import { rankRecords } from '../chat/local-chat.mjs';
-import { memoryCandidates } from '../memory/memory-impact.mjs';
+import { memoryCandidates, scopeMatches } from '../memory/memory-impact.mjs';
 
 export const DECISION_KINDS = ['reschedule', 'preference', 'clarify'];
 export const EFFECT_KINDS = ['view', 'question', 'temporary', 'task', 'memory'];
@@ -78,9 +100,13 @@ export function nextDayKey(date) {
 }
 
 const minutesOf = value => Number(value.slice(11, 13)) * 60 + Number(value.slice(14, 16));
+const fmtTime = value => value.replace('T', ' ');
+const describeEvent = event => '"' + event.title + '" ' + fmtTime(event.starts) + ' → ' + fmtTime(event.ends);
 
 // Which other events overlap a candidate slot. `excludeId` removes the event
 // being moved itself so the preview shows what the new slot lands next to.
+// The recheck at confirm time uses this exact function, so the card preview
+// and the recheck always agree on what counts as a conflict.
 export function slotPreview(tasks, starts, ends, excludeId = null) {
   const events = (tasks ?? [])
     .filter(task => task.id !== excludeId && !task.deleted && task.starts < ends && task.ends > starts)
@@ -95,7 +121,7 @@ export function slotPreview(tasks, starts, ends, excludeId = null) {
   };
 }
 
-export function buildDecision({ kind, title, current, proposal, reason, recordIds, records, asks, options, status = 'open' }) {
+export function buildDecision({ kind, title, current, proposal, reason, recordIds, records, asks, options, status = 'open', anchor = null }) {
   if (!DECISION_KINDS.includes(kind)) throw new Error('Decision card kind must be reschedule, preference, or clarify.');
   const ask = Array.isArray(asks) ? asks[0] : asks ?? {};
   const source = options ?? ask?.options ?? [];
@@ -124,6 +150,8 @@ export function buildDecision({ kind, title, current, proposal, reason, recordId
     proposal: typeof proposal === 'string' ? proposal.trim().slice(0, 800) : '',
     records: shown,
     options: normalized,
+    anchor: Number.isSafeInteger(anchor) ? anchor : null,
+    recheck: null,
     status,
     choice: null,
   };
@@ -142,6 +170,66 @@ function resolveRecords({ target = null, review = {}, memories = [] }) {
   if (!ids.size) return [];
   return (memories ?? []).filter(record => ids.has(record.id))
     .map(record => ({ id: record.id, kind: record.kind, source: record.source, body: record.body }));
+}
+
+// --- Reschedule option builders (shared by detection and confirm-time recheck)
+
+export function rescheduleKeepOption(target, tasks) {
+  return {
+    id: 'keep', label: '保持原时间',
+    consequence: '日历不变，事件仍按原时间进行。',
+    preview: slotPreview(tasks, target.starts, target.ends, null),
+    effect: { kind: 'view', payload: { calendar: target.starts.slice(0, 10) } },
+  };
+}
+
+export function rescheduleChangeOption({ id, target, tasks, starts, ends, consequence }) {
+  const preview = slotPreview(tasks, starts, ends, target.id);
+  return {
+    id,
+    label: '改到 ' + fmtTime(starts) + ' → ' + fmtTime(ends),
+    consequence,
+    preview,
+    effect: {
+      kind: 'task',
+      payload: {
+        id: target.id, revision: target.revision, title: target.title,
+        starts, ends, memory_id: target.memory_id ?? null,
+        all_day: false, location: target.location ?? '', notes: target.notes ?? '',
+      },
+    },
+  };
+}
+
+export function rescheduleCalendarOption({ tasks, date, excludeId }) {
+  return {
+    id: 'calendar', label: '打开日历选择时间',
+    consequence: '到日历查看当天安排并确认新时间。',
+    preview: slotPreview(tasks, date + 'T00:00', nextDayKey(date) + 'T00:00', excludeId ?? null),
+    effect: { kind: 'view', payload: { calendar: date } },
+  };
+}
+
+// The earliest start time from `fromTime` (HH:MM) onward on `date` that fits
+// `duration` minutes without overlapping other open timed events (the event
+// being moved itself, `excludeId`, is ignored). Returns null when nothing
+// fits before 23:59. Used to suggest a concrete free slot after a recheck
+// finds the proposed slot blocked.
+export function suggestSlot(tasks, date, duration, excludeId = null, fromTime = '08:00') {
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) || duration <= 0) return null;
+  const busy = (tasks ?? [])
+    .filter(task => task.id !== excludeId && !task.deleted && !task.done && !task.all_day
+      && task.starts.slice(0, 10) === date && task.ends.slice(0, 10) === date)
+    .map(task => [minutesOf(task.starts), minutesOf(task.ends)])
+    .sort((a, b) => a[0] - b[0]);
+  let cursor = minutesOf(date + 'T' + fromTime);
+  for (const [start, end] of busy) {
+    if (cursor + duration <= start) break;
+    cursor = Math.max(cursor, end);
+  }
+  if (cursor + duration > 23 * 60 + 59) return null;
+  const fmt = m => date + 'T' + String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+  return { starts: fmt(cursor), ends: fmt(cursor + duration) };
 }
 
 function rescheduleDecision({ question, review, tasks, memories }) {
@@ -166,7 +254,7 @@ function rescheduleDecision({ question, review, tasks, memories }) {
   if (!target) return null;
 
   const records = resolveRecords({ target, review, memories });
-  const current = '当前安排：' + target.title + ' · ' + target.starts.replace('T', ' ') + ' → ' + target.ends.replace('T', ' ');
+  const current = '当前安排：' + target.title + ' · ' + fmtTime(target.starts) + ' → ' + fmtTime(target.ends);
   const base = {
     kind: 'reschedule',
     title: '确认改期 "' + target.title + '"',
@@ -186,18 +274,8 @@ function rescheduleDecision({ question, review, tasks, memories }) {
         title: base.title,
         reason: base.reason,
         options: [
-          {
-            id: 'keep', label: '保持原时间',
-            consequence: '日历不变，事件仍按原时间进行。',
-            preview: slotPreview(tasks, target.starts, target.ends, null),
-            effect: { kind: 'view', payload: { calendar: target.starts.slice(0, 10) } },
-          },
-          {
-            id: 'calendar', label: '打开日历选择时间',
-            consequence: '到日历查看当天安排并确认新时间。',
-            preview: slotPreview(tasks, date + 'T00:00', nextDayKey(date) + 'T00:00', target.id),
-            effect: { kind: 'view', payload: { calendar: date } },
-          },
+          rescheduleKeepOption(target, tasks),
+          rescheduleCalendarOption({ tasks, date, excludeId: target.id }),
         ],
       }],
     });
@@ -212,34 +290,64 @@ function rescheduleDecision({ question, review, tasks, memories }) {
   const preview = slotPreview(tasks, start, end, target.id);
   return buildDecision({
     ...base,
-    proposal: '新时间：' + start.replace('T', ' ') + ' → ' + end.replace('T', ' '),
+    proposal: '新时间：' + fmtTime(start) + ' → ' + fmtTime(end),
     asks: [{
       title: base.title,
       reason: base.reason,
       options: [
-        {
-          id: 'keep', label: '保持原时间',
-          consequence: '日历不变，事件仍按原时间进行。',
-          preview: slotPreview(tasks, target.starts, target.ends, null),
-          effect: { kind: 'view', payload: { calendar: target.starts.slice(0, 10) } },
-        },
-        {
-          id: 'reschedule', label: '改到 ' + start.replace('T', ' ') + ' → ' + end.replace('T', ' '),
+        rescheduleKeepOption(target, tasks),
+        rescheduleChangeOption({
+          id: 'reschedule', target, tasks, starts: start, ends: end,
           consequence: '事件更新为新时间，日历和待办同步。' +
             (preview.conflict ? '注意：该时段与其他事件重叠，请再核对。' : '该时段无冲突。'),
-          preview,
-          effect: {
-            kind: 'task',
-            payload: {
-              id: target.id, revision: target.revision, title: target.title,
-              starts: start, ends: end, memory_id: target.memory_id ?? null,
-              all_day: false, location: target.location ?? '', notes: target.notes ?? '',
-            },
-          },
-        },
+        }),
       ],
     }],
   });
+}
+
+// --- Preference option builder (shared by detection and confirm-time recheck)
+
+function preferenceAskOptions({ anchor, intents, scope, body }) {
+  const impact = memoryCandidates({ kind: anchor.kind, scope, body },
+    intents.filter(record => record.id !== anchor.id)).slice(0, 5)
+    .map(record => ({ id: record.id, kind: record.kind, scope: record.scope, body: record.body }));
+  const records = [...intents].map(record => ({ id: record.id, kind: record.kind, scope: record.scope, source: record.source, body: record.body }));
+  return {
+    records,
+    options: [
+      {
+        id: 'once', label: '仅本次',
+        consequence: '该请求只在本对话中记为本次例外，长期偏好不变。',
+        preview: { text: '本次例外（仅本对话）：' + body },
+        effect: { kind: 'temporary', payload: { text: body } },
+      },
+      {
+        id: 'keepboth', label: '并存',
+        consequence: '新记录独立保存，与记录 #' + anchor.id + ' 并存且都长期生效；其他可能受影响的记录会在保存前列出核对。',
+        preview: { impact },
+        effect: {
+          kind: 'memory',
+          payload: {
+            kind: anchor.kind, scope, body,
+            source: '对话决策 · 长期偏好冲突',
+          },
+        },
+      },
+      {
+        id: 'longterm', label: '更新长期偏好',
+        consequence: '将修订记录 #' + anchor.id + '，新偏好长期生效；其他可能受影响的记录会在保存前列出核对。',
+        preview: { replaces: anchor.id, impact },
+        effect: {
+          kind: 'memory',
+          payload: {
+            kind: anchor.kind, scope, body,
+            source: '对话决策 · 长期偏好冲突', replaces: anchor.id,
+          },
+        },
+      },
+    ],
+  };
 }
 
 function preferenceDecision({ question, review, memories, scope }) {
@@ -251,13 +359,10 @@ function preferenceDecision({ question, review, memories, scope }) {
   const scored = rankRecords(question + ' ' + review.conflict, intents);
   const base = scored.find(row => row.score >= 1)?.record;
   if (!base) return null;
+  // A replacement keeps the anchored record's type (a rule stays a rule).
   const body = question.trim().slice(0, 4000);
   if (!body) return null;
-  // A replacement keeps the anchored record's type (a rule stays a rule).
-  const impact = memoryCandidates({ kind: base.kind, scope: scope ?? 'DIC2026', body },
-    intents.filter(record => record.id !== base.id)).slice(0, 5)
-    .map(record => ({ id: record.id, kind: record.kind, scope: record.scope, body: record.body }));
-  const records = [...intents].map(record => ({ id: record.id, kind: record.kind, scope: record.scope, source: record.source, body: record.body }));
+  const { records, options } = preferenceAskOptions({ anchor: base, intents, scope: scope ?? 'DIC2026', body });
   return buildDecision({
     kind: 'preference',
     title: '长期偏好冲突',
@@ -266,41 +371,11 @@ function preferenceDecision({ question, review, memories, scope }) {
     proposal: question,
     recordIds: records.map(record => record.id),
     records,
+    anchor: base.id,
     asks: [{
       title: '长期偏好冲突',
       reason: review.conflict,
-      options: [
-        {
-          id: 'once', label: '仅本次',
-          consequence: '该请求只在本对话中记为本次例外，长期偏好不变。',
-          preview: { text: '本次例外（仅本对话）：' + question },
-          effect: { kind: 'temporary', payload: { text: question } },
-        },
-        {
-          id: 'keepboth', label: '并存',
-          consequence: '新记录独立保存，与记录 #' + base.id + ' 并存且都长期生效；其他可能受影响的记录会在保存前列出核对。',
-          preview: { impact },
-          effect: {
-            kind: 'memory',
-            payload: {
-              kind: base.kind, scope: scope ?? 'DIC2026', body,
-              source: '对话决策 · 长期偏好冲突',
-            },
-          },
-        },
-        {
-          id: 'longterm', label: '更新长期偏好',
-          consequence: '将修订记录 #' + base.id + '，新偏好长期生效；其他可能受影响的记录会在保存前列出核对。',
-          preview: { replaces: base.id, impact },
-          effect: {
-            kind: 'memory',
-            payload: {
-              kind: base.kind, scope: scope ?? 'DIC2026', body,
-              source: '对话决策 · 长期偏好冲突', replaces: base.id,
-            },
-          },
-        },
-      ],
+      options,
     }],
   });
 }
@@ -328,6 +403,12 @@ function clarifyDecision({ review }) {
           effect: { kind: 'view', payload: { sources: true } },
         },
         {
+          id: 'source', label: '补充资料',
+          consequence: '把能证明该问题的原文或出处发进来，证据核对后再继续。',
+          preview: { text: '仍缺证据：' + gap },
+          effect: { kind: 'question', payload: { text: '请补充资料 · ' + gap + '\n\n在下方粘贴原文（并尽量注明来源）：' } },
+        },
+        {
           id: 'draft', label: '起草澄清问题',
           consequence: '根据缺失的证据起草澄清问题，填入输入框发送即可确认。',
           preview: { text: gap },
@@ -345,6 +426,149 @@ export function detectDecision({ question, review, tasks = [], memories = [], sc
   const preference = preferenceDecision({ question, review, memories, scope });
   if (preference) return preference;
   return clarifyDecision({ review });
+}
+
+// ---------------------------------------------------------------------------
+// Confirm-time recheck (确认时重查):
+//
+// Before a card effect is applied, re-read the live workspace state and
+// compare it with what the card was generated against. If the relevant state
+// changed after generation, the write is paused: no mutation happens, the
+// card is updated in place with a specific reason plus refreshed options,
+// and the owner continues from the same card.
+//
+//   - 'task' effects: the referenced event must still exist and keep its
+//     revision, and the candidate slot is re-previewed with the live
+//     calendar (same slotPreview the card used, so they always agree).
+//     A newly overlapping task pauses the write and the refreshed options
+//     add a concrete free-slot suggestion (suggestSlot) plus the calendar.
+//   - 'memory' effects: the anchored record (effect payload `replaces`, or
+//     the card's `anchor`) must still be the valid one — if it was revised
+//     after the card was generated, an old card must not overwrite a later
+//     confirmed decision. The impact set is also re-derived against the
+//     current active preferences/rules; drift requires re-confirmation with
+//     options re-anchored on the valid successor record.
+//
+// recheckDecision returns { stale, reason, options }:
+//   stale=false → safe to apply the write;
+//   stale=true  → pause; `reason` says concretely what changed and
+//     `options` (when present) are the refreshed options for the card.
+// ---------------------------------------------------------------------------
+
+export function recheckDecision({ decision, option, tasks = [], memories = [] }) {
+  const effect = option?.effect ?? {};
+  if (effect.kind === 'task') return taskRecheck({ option, tasks });
+  if (effect.kind === 'memory') return memoryRecheck({ decision, option, memories });
+  // 'view', 'question', 'temporary' change nothing on the server side.
+  return { stale: false };
+}
+
+function taskRecheck({ option, tasks }) {
+  const payload = option.effect?.payload ?? {};
+  if (!Number.isSafeInteger(payload.id) || typeof payload.starts !== 'string' || typeof payload.ends !== 'string') {
+    return { stale: true, reason: '卡片选项缺少有效的事件和时间信息，请重新打开卡片确认。' };
+  }
+  const target = (tasks ?? []).find(task => task.id === payload.id && !task.deleted) ?? null;
+  if (!target) {
+    return { stale: true, reason: '卡片引用的事件 #' + payload.id + ' 已不存在（可能已被删除或修改），请先在日历中核对当前安排。' };
+  }
+  const problems = [];
+  if (target.revision !== payload.revision) {
+    problems.push('事件已被修改，当前为 ' + fmtTime(target.starts) + ' → ' + fmtTime(target.ends) +
+      '（卡片基于旧版本 ' + fmtTime(payload.starts) + ' → ' + fmtTime(payload.ends) + '）');
+  }
+  const now = slotPreview(tasks, payload.starts, payload.ends, target.id);
+  const storedBusy = (option.preview?.events ?? []).filter(event => !event.done);
+  const nowBusy = now.events.filter(event => !event.done);
+  const added = nowBusy.filter(event => !storedBusy.some(item => item.id === event.id));
+  const removed = storedBusy.filter(event => !nowBusy.some(item => item.id === event.id));
+  if (added.length) problems.push('该时段在卡片生成后新增未完成任务：' + added.map(describeEvent).join('；'));
+  if (removed.length) problems.push('原先重叠的 ' + removed.map(describeEvent).join('；') + ' 已不在该时段，该时段现在空闲。');
+  if (!problems.length) return { stale: false };
+
+  // Refresh the card in place: same target event, live previews, and a
+  // concrete alternative slot when the proposed time is now blocked.
+  const date = payload.starts.slice(0, 10);
+  const duration = Math.max(60, minutesOf(target.ends) - minutesOf(target.starts));
+  const options = [rescheduleKeepOption(target, tasks)];
+  const sameAsCurrent = target.starts === payload.starts && target.ends === payload.ends;
+  const endTotal = minutesOf(payload.starts) + duration;
+  let proposedEnd = null;
+  if (!sameAsCurrent && endTotal <= 1439) {
+    proposedEnd = payload.starts.slice(0, 11) + String(Math.floor(endTotal / 60)).padStart(2, '0') + ':' + String(endTotal % 60).padStart(2, '0');
+    options.push(rescheduleChangeOption({
+      id: 'reschedule', target, tasks, starts: payload.starts, ends: proposedEnd,
+      consequence: '事件更新为新时间，日历和待办同步。' +
+        (now.conflict ? '注意：该时段与其他事件重叠，请再核对。' : '该时段无冲突。'),
+    }));
+  }
+  if (now.conflict && proposedEnd) {
+    const alt = suggestSlot(tasks, date, duration, target.id, payload.starts.slice(11));
+    if (alt && (alt.starts !== payload.starts || alt.ends !== proposedEnd)) {
+      options.push(rescheduleChangeOption({
+        id: 'reschedule-alt', target, tasks, starts: alt.starts, ends: alt.ends,
+        consequence: '避开该时段新增的事件，事件更新为该时间，日历和待办同步。',
+      }));
+    }
+  }
+  options.push(rescheduleCalendarOption({ tasks, date, excludeId: target.id }));
+  return { stale: true, reason: problems.join('；'), options };
+}
+
+function memoryRecheck({ decision, option, memories }) {
+  const payload = option.effect?.payload ?? {};
+  const anchorId = payload.replaces ?? decision?.anchor ?? null;
+  const problems = [];
+  let successor = null;
+  if (anchorId != null) {
+    const record = (memories ?? []).find(item => item.id === anchorId) ?? null;
+    if (!record) {
+      problems.push('卡片引用的记录 #' + anchorId + ' 已不存在。');
+    } else if (record.superseded) {
+      const chain = (memories ?? []).filter(item => item.replaces === anchorId && !item.superseded).sort((a, b) => a.id - b.id);
+      successor = chain.length ? chain[chain.length - 1] : null;
+      problems.push('卡片引用的长期偏好 #' + record.id + ' 已被修订' +
+        (successor ? '（现行有效版本 #' + successor.id + '：' + successor.body + '）' : '') +
+        '，为避免用旧卡覆盖后来确认的决定，请重新确认。');
+    }
+  }
+  // Re-derive the impact set against the current active preferences/rules;
+  // if it drifted since the card was generated, the owner must re-review.
+  const scope = payload.scope ?? 'DIC2026';
+  const intents = (memories ?? []).filter(record => !record.superseded
+    && ['preference', 'rule'].includes(record.kind) && scopeMatches(record.scope, scope));
+  const excludeId = successor?.id ?? anchorId;
+  const fresh = memoryCandidates({ kind: payload.kind, scope, body: payload.body },
+    intents.filter(record => record.id !== excludeId)).map(record => record.id);
+  const original = (option.preview?.impact ?? []).map(record => record.id);
+  if (original.some(id => !fresh.includes(id)) || fresh.some(id => !original.includes(id))) {
+    problems.push('卡片生成后，该范围内的长期偏好/规则已变化，可能受影响的记录需重新核对。');
+  }
+  if (!problems.length) return { stale: false };
+
+  // Re-anchor the options on a currently valid record so the owner can
+  // continue from the same card with the live state.
+  let newAnchor = successor;
+  if (!newAnchor && intents.length) {
+    const scored = rankRecords((decision?.proposal ?? '') + ' ' + (decision?.reason ?? ''), intents);
+    newAnchor = scored.find(row => row.score >= 1)?.record ?? null;
+  }
+  const options = newAnchor
+    ? preferenceAskOptions({ anchor: newAnchor, intents, scope, body: payload.body }).options
+    : [
+        {
+          id: 'once', label: '仅本次',
+          consequence: '该请求只在本对话中记为本次例外，长期偏好不变。',
+          preview: { text: '本次例外（仅本对话）：' + (decision?.proposal ?? '') },
+          effect: { kind: 'temporary', payload: { text: decision?.proposal ?? '' } },
+        },
+        {
+          id: 'view', label: '查看原文',
+          consequence: '在证据面板中查看检索到的记录、推断和待核实项。',
+          effect: { kind: 'view', payload: { sources: true } },
+        },
+      ];
+  return { stale: true, reason: problems.join('；'), options };
 }
 
 // ---------------------------------------------------------------------------

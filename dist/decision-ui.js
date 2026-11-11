@@ -2,8 +2,17 @@
 // hits a conflict or an information gap. Follows the Shanghai-RITS pattern:
 // a structured payload (review.decision), an interactive card, and the
 // choice returned to the conversation through POST /api/decision.
+//
+// The card keeps three claims visually separate (mirroring the server
+// receipts): a selection is only "你已选择" (nothing written yet); a
+// successful confirm is "本地日历已更新" / "本地长期偏好已更新"; and a
+// counterparty time proposal stays labeled 未确认 until the owner confirms.
+// When the server pauses a confirm (确认时重查 found the live state changed),
+// the card shows decision.recheck.reason plus the refreshed options, so the
+// owner continues from the same card.
 export function createDecisionUI({ t, element, action, request, fetchResult, language, openSources, copyText, fillComposer, jumpToCalendar, jumpToTask }) {
   const kindLabels = { reschedule: '确认改期', preference: '长期偏好冲突', clarify: '证据不足 · 待确认' };
+  const proposalLabels = { reschedule: '新时间提议（未确认）', preference: '新要求（待你决定）', clarify: '缺口（待核实）' };
   const recordLabels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议', source: '原始资料', task: '日历' };
 
   function runView(effect, message) {
@@ -108,7 +117,8 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
     const decision = message.review?.decision;
     if (!decision) return;
     const applied = decision.status === 'applied';
-    const section = element('section', '', 'decision' + (applied ? ' applied' : '') + (decision.status === 'failed' ? ' failed' : ''));
+    const stale = Boolean(decision.recheck?.stale);
+    const section = element('section', '', 'decision' + (applied ? ' applied' : '') + (decision.status === 'failed' ? ' failed' : '') + (stale ? ' stale' : ''));
     const head = element('div', '', 'decision-head');
     head.append(element('span', t(kindLabels[decision.kind] ?? '请确认'), 'decision-kind'));
     head.append(element('strong', decision.title));
@@ -118,7 +128,7 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
     head.append(element('span', status, 'decision-status'));
     section.append(head);
     if (decision.current) section.append(element('p', t('当前已确认') + ' · ' + decision.current));
-    if (decision.proposal) section.append(element('p', t('新要求') + ' · ' + decision.proposal));
+    if (decision.proposal) section.append(element('p', t(proposalLabels[decision.kind] ?? '新要求') + ' · ' + decision.proposal));
     if (decision.reason) section.append(element('p', t('为什么需要你决定') + ' · ' + decision.reason));
     if (decision.records?.length) {
       const row = element('p', t('相关记录') + ' · ', 'decision-records');
@@ -145,6 +155,17 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
       }, false);
       confirm.disabled = !decision.choice;
       actions.append(confirm);
+    }
+    // A selection is recorded but writes nothing: the receipt wording stays
+    // separate from the "本地日历已更新" that only a successful confirm shows.
+    if (decision.choice && !applied && !stale) {
+      const chosen = (decision.options ?? []).find(item => item.id === decision.choice.option_id);
+      actions.append(element('p', t('你已选择：') + (chosen?.label ?? decision.choice.option_id) + t('（尚未确认，本地数据未变更）'), 'decision-note'));
+    }
+    // 确认时重查 found the live state changed: the write was paused and the
+    // card's options were refreshed — the owner continues from this card.
+    if (stale) {
+      actions.append(element('p', t('情况已变化 · ') + decision.recheck.reason, 'decision-stale'));
     }
     if (decision.choice?.receipt) {
       actions.append(element('p', (applied ? '✓ ' : '× ') + decision.choice.receipt, applied ? 'decision-ok' : 'decision-err'));

@@ -8,7 +8,7 @@ import { opportunityWorkflow } from './src/opportunity/opportunities.mjs';
 import { actionDecision, runAlignmentBenchmark } from './src/alignment/alignment.mjs';
 import { calendarFile } from './src/calendar/calendar.mjs';
 import { GLOBAL_SCOPE, demoRecords, releaseStatus, release, repository } from './src/policy/policy.mjs';
-import { detectDecision, decisionContext } from './src/decision/decision.mjs';
+import { detectDecision, decisionContext, recheckDecision } from './src/decision/decision.mjs';
 // 待办操作留痕（audit window）：task_audit 表、前后快照与决策卡回执文案。
 import { createTaskAudit, changeReceipt } from './src/tasks/task-audit.mjs';
 
@@ -381,6 +381,15 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
   // (returned to the conversation); confirm=true then runs the option's effect
   // through the same handlers and confirmation rules as its direct route
   // (/api/task is revision-gated, /api/memory checks the impact snapshot).
+  //
+  // 确认时重查 (confirm-time recheck): before any write, recheckDecision
+  // re-reads the live tasks/memory and compares them with what the card was
+  // generated against. When the situation changed, the write is PAUSED —
+  // nothing is mutated — and the card is updated in place (decision.recheck
+  // carries the specific reason, decision.options are refreshed), so the
+  // owner continues from the same card. Shared with the task-log window:
+  // this route only reads tasks and memory itself; all writes still go
+  // through /api/task and /api/memory, whose contracts are unchanged.
   '/api/decision': async ({ message_id, option_id, confirm }) => {
     if (!Number.isSafeInteger(message_id) || typeof option_id !== 'string') fail(400, '请求内容不正确。');
     const row = db.prepare('SELECT * FROM messages WHERE id = ? AND role = ?').get(message_id, 'assistant');
@@ -396,6 +405,19 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
     const at = new Date().toISOString();
     let receipt = '';
     if (confirm === true) {
+      const recheck = recheckDecision({ decision, option, tasks: tasks(), memories: memories() });
+      if (recheck.stale) {
+        // 情况已变化：暂缓写入，就地更新卡片（具体原因 + 刷新后的可选项）。
+        decision.recheck = { at, stale: true, reason: recheck.reason };
+        if (recheck.options?.length) {
+          decision.options = recheck.options;
+          if (decision.choice && !decision.options.some(item => item.id === decision.choice.option_id)) {
+            decision.choice = null;
+          }
+        }
+        db.prepare('UPDATE messages SET review = ? WHERE id = ?').run(JSON.stringify(review), message_id);
+        return state();
+      }
       try {
         if (effect.kind === 'task') {
           // 决策卡触发的改期：关联该次选择，回执给出原时间、新时间和实际结果。
@@ -404,7 +426,7 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
             decision: message_id, option: option.id, option_label: option.label, at,
           } });
           const updated = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(effect.payload?.id ?? -1);
-          receipt = changeReceipt('updated', previous, updated);
+          receipt = '本地日历已更新 · ' + changeReceipt('updated', previous, updated);
         } else if (effect.kind === 'memory') {
           const payload = effect.payload ?? {};
           const impact = await mutations['/api/memory-impact']({
@@ -412,14 +434,15 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
           });
           mutations['/api/memory']({ ...payload, snapshot: impact.snapshot, review_base: payload.replaces ?? null, message_id });
           const saved = db.prepare('SELECT id FROM memory WHERE message_id = ? ORDER BY id DESC LIMIT 1').get(message_id);
-          receipt = '长期偏好已更新 · 新记录 #' + (saved?.id ?? '');
+          receipt = '本地长期偏好已更新' + (payload.replaces != null ? ' · 修订 #' + payload.replaces : '') + ' · 新记录 #' + (saved?.id ?? '');
         } else if (effect.kind === 'temporary') {
           receipt = '已记为本次例外，长期偏好不变';
         } else if (effect.kind === 'question') {
-          receipt = '澄清问题已起草，填入输入框发送即可';
+          receipt = '已填入输入框，发送后继续';
         } else {
-          receipt = '已确认查看';
+          receipt = '已确认查看，本地数据未变更';
         }
+        decision.recheck = null;
       } catch (error) {
         if (!error.status) throw error;
         decision.status = 'failed';

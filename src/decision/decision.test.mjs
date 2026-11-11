@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   extractTimes, extractDates, nextDayKey, slotPreview, buildDecision, detectDecision, decisionContext,
+  suggestSlot, recheckDecision,
 } from './decision.mjs';
 
 const memory = (id, kind, body, extra = {}) => ({
@@ -193,7 +194,7 @@ test('detectDecision: an unrelated conflict does not create a preference card', 
   assert.equal(decision, null);
 });
 
-test('detectDecision: uncited reply with a gap offers source review and a draft', () => {
+test('detectDecision: uncited reply offers 查看原文 / 补充资料 / 起草澄清问题', () => {
   const decision = detectDecision({
     question: '客户上次说预算大概多少？',
     review: review({
@@ -206,9 +207,15 @@ test('detectDecision: uncited reply with a gap offers source review and a draft'
     tasks: [], memories: [memory(6, 'source', '原文')],
   });
   assert.equal(decision.kind, 'clarify');
+  assert.deepEqual(decision.options.map(option => option.id), ['view', 'source', 'draft']);
   assert.equal(decision.options[0].effect.kind, 'view');
-  assert.equal(decision.options[1].effect.kind, 'question');
-  assert.equal(decision.options[1].effect.payload.text, '需要确认客户提到的预算区间是多少。');
+  const source = decision.options[1];
+  assert.equal(source.effect.kind, 'question');
+  assert.match(source.effect.payload.text, /请补充资料/);
+  assert.match(source.effect.payload.text, /需要确认客户提到的预算区间是多少。/);
+  const draft = decision.options[2];
+  assert.equal(draft.effect.kind, 'question');
+  assert.equal(draft.effect.payload.text, '需要确认客户提到的预算区间是多少。');
   assert.deepEqual(decision.records.map(record => record.id), [6]);
 });
 
@@ -262,4 +269,168 @@ test('detectDecision: reschedule wins over preference when both could fire', () 
     memories: [memory(4, 'preference', '客户会议相关偏好')],
   });
   assert.equal(decision.kind, 'reschedule');
+});
+
+// ---------------------------------------------------------------------------
+// 确认时重查 (confirm-time recheck): the write is only allowed when the live
+// tasks/memory still match what the card was generated against.
+// ---------------------------------------------------------------------------
+
+test('suggestSlot: earliest free slot that avoids the new blocker', () => {
+  const tasks = [
+    task(7, '客户会议', '2026-11-13T15:00', '2026-11-13T16:30'),
+    task(8, '评审', '2026-11-17T15:00', '2026-11-17T16:00'),
+  ];
+  // A 90-minute move proposed at 15:30 is blocked 15:00→16:00, so 16:00 is the
+  // earliest free start.
+  assert.deepEqual(suggestSlot(tasks, '2026-11-17', 90, 7, '15:30'),
+    { starts: '2026-11-17T16:00', ends: '2026-11-17T17:30' });
+  // With no overlap from 17:00 on, the proposed time itself is kept.
+  assert.deepEqual(suggestSlot(tasks, '2026-11-17', 90, 7, '17:00'),
+    { starts: '2026-11-17T17:00', ends: '2026-11-17T18:30' });
+  // A packed day has nothing left.
+  const packed = [task(9, '全天评审', '2026-11-18T15:00', '2026-11-18T23:59')];
+  assert.equal(suggestSlot(packed, '2026-11-18', 90, 7, '15:30'), null);
+});
+
+test('recheckDecision: a confirm passes when the calendar and target are unchanged', () => {
+  const tasks = [task(7, '客户会议', '2026-11-13T15:00', '2026-11-13T16:30')];
+  const decision = detectDecision({
+    question: '客户会议改到 2026-11-14 15:30',
+    review: review(),
+    tasks, memories: [],
+  });
+  const option = decision.options.find(item => item.id === 'reschedule');
+  assert.equal(recheckDecision({ decision, option, tasks, memories: [] }).stale, false);
+});
+
+test('recheckDecision: a new task in the slot pauses the write with a reason and refreshed options', () => {
+  const tasks = [task(7, '客户会议', '2026-11-13T15:00', '2026-11-13T16:30')];
+  const decision = detectDecision({
+    question: '客户会议改到 2026-11-14 15:30',
+    review: review(),
+    tasks, memories: [],
+  });
+  assert.equal(decision.options.find(option => option.id === 'reschedule').preview.conflict, false);
+  // After the card was generated, another todo occupies the proposed slot.
+  const tasksNow = [...tasks, task(8, '周二评审', '2026-11-14T15:00', '2026-11-14T16:00')];
+  const option = decision.options.find(item => item.id === 'reschedule');
+  const recheck = recheckDecision({ decision, option, tasks: tasksNow, memories: [] });
+  assert.equal(recheck.stale, true);
+  assert.match(recheck.reason, /新增未完成任务/);
+  assert.match(recheck.reason, /周二评审/);
+  const refreshed = recheck.options;
+  assert.equal(refreshed[0].id, 'keep');
+  const change = refreshed.find(option => option.id === 'reschedule');
+  assert.equal(change.preview.conflict, true);
+  const alt = refreshed.find(option => option.id === 'reschedule-alt');
+  assert.deepEqual([alt.effect.payload.starts, alt.effect.payload.ends],
+    ['2026-11-14T16:00', '2026-11-14T17:30']);
+  assert.equal(alt.preview.conflict, false);
+  assert.ok(refreshed.some(option => option.id === 'calendar'));
+});
+
+test('recheckDecision: a revised target event is re-derived from the live state', () => {
+  const tasks = [task(7, '客户会议', '2026-11-13T15:00', '2026-11-13T16:30', { revision: 2 })];
+  const decision = detectDecision({
+    question: '客户会议改到 2026-11-14 15:30',
+    review: review(),
+    tasks, memories: [],
+  });
+  // The event was edited in the meantime (new start, longer span, new revision).
+  const tasksNow = [task(7, '客户会议', '2026-11-13T14:00', '2026-11-13T16:00', { revision: 3 })];
+  const option = decision.options.find(item => item.id === 'reschedule');
+  const recheck = recheckDecision({ decision, option, tasks: tasksNow, memories: [] });
+  assert.equal(recheck.stale, true);
+  assert.match(recheck.reason, /事件已被修改/);
+  const change = recheck.options.find(option => option.id === 'reschedule');
+  assert.equal(change.effect.payload.revision, 3);
+  assert.equal(change.effect.payload.ends, '2026-11-14T17:30'); // keeps the new 120-minute span
+});
+
+test('recheckDecision: a cleared overlap is surfaced too, so the card refreshes', () => {
+  const tasks = [
+    task(7, '客户会议', '2026-11-13T15:00', '2026-11-13T16:30'),
+    task(8, '评审', '2026-11-14T15:30', '2026-11-14T16:00'),
+  ];
+  const decision = detectDecision({
+    question: '客户会议改到 2026-11-14 15:30',
+    review: review(),
+    tasks, memories: [],
+  });
+  assert.equal(decision.options.find(option => option.id === 'reschedule').preview.conflict, true);
+  const tasksNow = tasks.map(item => (item.id === 8 ? { ...item, done: 1 } : item));
+  const recheck = recheckDecision({
+    decision, option: decision.options.find(item => item.id === 'reschedule'), tasks: tasksNow, memories: [],
+  });
+  assert.equal(recheck.stale, true);
+  assert.match(recheck.reason, /现在空闲/);
+  assert.equal(recheck.options.find(option => option.id === 'reschedule').preview.conflict, false);
+  assert.equal(recheck.options.some(option => option.id === 'reschedule-alt'), false);
+});
+
+test('recheckDecision: a superseded preference anchor requires re-confirmation and re-anchors', () => {
+  const memories = [
+    memory(4, 'preference', '回复客户邮件用中文'),
+    memory(5, 'rule', '对外沟通先确认收件人'),
+  ];
+  const decision = detectDecision({
+    question: '以后这个客户的邮件都用英文',
+    review: review({ conflict: '长期偏好要求用中文回复客户，与新的英文请求冲突' }),
+    tasks: [], memories,
+  });
+  assert.equal(decision.anchor, 4);
+  const option = decision.options.find(item => item.id === 'longterm');
+  assert.equal(option.effect.payload.replaces, 4);
+  // Record #4 is later revised: #7 now supersedes it.
+  const memoriesNow = [
+    memory(4, 'preference', '回复客户邮件用中文', { superseded: true }),
+    memory(5, 'rule', '对外沟通先确认收件人'),
+    memory(7, 'preference', '回复客户邮件用英文', { replaces: 4 }),
+  ];
+  const recheck = recheckDecision({ decision, option, tasks: [], memories: memoriesNow });
+  assert.equal(recheck.stale, true);
+  assert.match(recheck.reason, /已被修订/);
+  assert.match(recheck.reason, /#7/);
+  const refreshed = recheck.options;
+  assert.equal(refreshed.find(item => item.id === 'longterm').effect.payload.replaces, 7);
+  assert.equal(refreshed.find(item => item.id === 'longterm').effect.payload.kind, 'preference');
+  assert.equal(refreshed.find(item => item.id === 'keepboth').effect.payload.replaces, undefined);
+  assert.ok(refreshed.some(item => item.id === 'once'));
+  // The re-anchored card passes recheck against the same live state.
+  const again = recheckDecision({
+    decision: { ...decision, options: refreshed },
+    option: refreshed.find(item => item.id === 'longterm'),
+    tasks: [], memories: memoriesNow,
+  });
+  assert.equal(again.stale, false);
+});
+
+test('recheckDecision: a withdrawn anchor with no successor falls back to non-memory options', () => {
+  const memories = [memory(4, 'preference', '回复客户邮件用中文')];
+  const decision = detectDecision({
+    question: '以后这个客户的邮件都用英文',
+    review: review({ conflict: '长期偏好要求用中文回复客户，与新的英文请求冲突' }),
+    tasks: [], memories,
+  });
+  const option = decision.options.find(item => item.id === 'longterm');
+  const memoriesNow = [memory(4, 'preference', '回复客户邮件用中文', { superseded: true })];
+  const recheck = recheckDecision({ decision, option, tasks: [], memories: memoriesNow });
+  assert.equal(recheck.stale, true);
+  assert.match(recheck.reason, /已被修订/);
+  assert.deepEqual(recheck.options.map(item => item.id), ['once', 'view']);
+});
+
+test('recheckDecision: a deleted memory anchor pauses the write', () => {
+  const memories = [memory(4, 'preference', '回复客户邮件用中文')];
+  const decision = detectDecision({
+    question: '以后这个客户的邮件都用英文',
+    review: review({ conflict: '长期偏好要求用中文回复客户，与新的英文请求冲突' }),
+    tasks: [], memories,
+  });
+  const option = decision.options.find(item => item.id === 'longterm');
+  const recheck = recheckDecision({ decision, option, tasks: [], memories: [] });
+  assert.equal(recheck.stale, true);
+  assert.match(recheck.reason, /已不存在/);
+  assert.deepEqual(recheck.options.map(item => item.id), ['once', 'view']);
 });

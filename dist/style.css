@@ -478,3 +478,8 @@ main:has([data-panel="chat"]:not([hidden])) { padding: 0; }
   #composer { padding: 0 10px 8px; }
   .badge { display: none; }
 }
+/* 决策卡「确认时重查」（decision 窗口）：暂缓写入的状态样式。
+   并行窗口合并时以本注释位置为准，只向下追加。 */
+.decision.stale { border-color: #f0e2c0; background: #fdfaf2; }
+.decision-note { margin: 0; font-size: 13px; color: #5b6578; }
+.decision-stale { margin: 0; font-size: 13px; color: #b45309; white-space: pre-wrap; }

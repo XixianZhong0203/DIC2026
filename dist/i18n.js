@@ -446,7 +446,15 @@ const english = {
   "关联来源": "Linked source",
   "经决策卡": "Via decision card",
   "消息": "Message",
-  "查看待办": "View task"
+  "查看待办": "View task",
+  // 决策卡「确认时重查」（decision 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "新时间提议（未确认）": "New-time proposal (not yet confirmed)",
+  "新要求（待你决定）": "New request (awaiting your decision)",
+  "缺口（待核实）": "Open question (needs evidence)",
+  "你已选择：": "You selected: ",
+  "（尚未确认，本地数据未变更）": " (not confirmed yet; nothing has changed locally)",
+  "情况已变化 · ": "Situation changed · "
 };
 
 export function translate(language, phrase) {
