@@ -20,6 +20,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   };
 
   const sourceKindLabels = { evidence: '证据原文', customer: '客户记录', founder: '创始人提供' };
+  // 人工复核过期的原因（由服务端 reviewStale 给出）：明确是草稿变了还是来源变了。
+  const reviewStaleLabels = { draft_changed: '草稿变了', source_changed: '来源变了', review_unbound: '复核缺少来源版本' };
+  const reviewStaleText = item => (item.reviewStale ?? []).map(code => t(reviewStaleLabels[code] ?? code)).join('、');
   const claimStatusLabels = { supported: '支持', refuted: '反驳', unknown: '证据不足', conflict: '来源冲突', incomplete: '未完成核查' };
   const stanceLabels = { supports: '支持', refutes: '反驳', withdraws: '撤回' };
   const checkReasonLabels = {
@@ -138,10 +141,13 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
 
   // 当前状态：从创始人批准视角看已保存草稿的发送门槛状态。
   // 需要处理 / 核查过期 / 待批准；尚无草稿或尚无针对草稿的核查记录时给出前置状态。
-  // 人工复核结论绑定草稿版本：针对当前草稿的复核直接放行，旧草稿的复核不再放行。
+  // 人工复核结论绑定当前草稿与当前来源版本：复核过期（草稿变了或来源变了）时不再显示待批准。
   function approvalStatus(item) {
     if (!item.draft_id) return { label: '尚未保存草稿', tone: 'muted' };
-    if (item.review && item.review_draft === item.draft_id) return { label: '待批准', tone: 'muted' };
+    if (item.review) {
+      if (!item.reviewStale) return { label: '待批准', tone: 'muted' };
+      return { label: t('复核已过期') + ' · ' + reviewStaleText(item), tone: 'attention' };
+    }
     const review = item.claims;
     if (!review || review.target !== 'draft') return { label: '尚未核查', tone: 'attention' };
     if (item.claimsStale) return { label: '核查过期', tone: 'attention' };
@@ -185,12 +191,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(details(t('模型原始输出'), result.raw));
       if (item.review) card.append(details(t('人工核实'), item.review));
     }
-    // 人工复核结论绑定到当前草稿版本：旧草稿上的复核不能解锁新草稿的发送门禁，
-    // 草稿换新版本后（或尚无草稿但已存在复核时）表单重新出现，供针对当前草稿记录结论。
-    const reviewOutOfDate = item.draft_id && item.review && item.review_draft !== item.draft_id;
-    const reviewCoversDraft = Boolean(item.review) && item.review_draft === item.draft_id;
+    // 人工复核结论绑定到当前草稿版本与当前来源版本：草稿换新版本或来源变化后，
+    // 旧复核不能解锁当前草稿的发送门禁，表单重新出现，供针对当前草稿与来源记录结论。
+    const reviewCurrent = Boolean(item.review) && item.review_draft === item.draft_id && !item.reviewStale;
     if ((!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) ||
-      (item.draft_id && !reviewCoversDraft)) {
+      (item.draft_id && !reviewCurrent)) {
       const reviewForm = element('form', '');
       const resolution = element('textarea', '');
       resolution.required = true;
@@ -241,18 +246,19 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       form.onsubmit = event => { event.preventDefault(); save.click(); };
       form.append(recipient, body, save);
       editor.append(form);
-      const evidenceLabel = item.review ? t('已人工核实')
+      const evidenceLabel = item.review ? (item.reviewStale ? t('人工核实已过期') : t('已人工核实'))
         : result?.status === 'supported' ? t('模型判断有依据')
         : result ? t('模型判断待核实')
         : t('无证据：未分析、未复核');
       card.append(element('p', t('证据状态') + ' · ' + evidenceLabel,
-        !item.review && result?.status !== 'supported' ? 'attention' : 'muted'));
+        item.reviewStale || (!item.review && result?.status !== 'supported') ? 'attention' : 'muted'));
       if (!item.sent) {
         const status = approvalStatus(item);
         card.append(element('p', t('当前状态') + ' · ' + t(status.label), status.tone));
       }
       if (item.review) card.append(element('p', t('核实记录') +
-        (reviewOutOfDate ? ' · ' + t('草稿已变更，此记录未针对当前草稿') : '') + ' · ' + item.review, 'muted'));
+        (item.reviewStale ? ' · ' + t('复核已过期') + ' · ' + reviewStaleText(item) : '') + ' · ' + item.review,
+        item.reviewStale ? 'attention' : 'muted'));
       if (item.draft_id) {
         editor.open = true;
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
@@ -264,7 +270,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           editor.append(action(t(item.claims?.target === 'draft' ? '重新核查' : '核查关键声明'), () => request('opportunity-claims', {
             id: item.id, target: 'draft', draft_id: item.draft_id, language: language(),
           }), false));
-          if (!item.review && !result) {
+          if (item.reviewStale) {
+            editor.append(element('p', t('人工核实已过期') + ' · ' + reviewStaleText(item) +
+              ' · ' + t('请重新核查，或针对当前草稿记录人工复核结论。'), 'attention'));
+          } else if (!item.review && !result) {
             editor.append(element('p', t('还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。'), 'attention'));
           } else if (!item.review && result.status !== 'supported') {
             editor.append(element('p', t('请先记录如何处理不确定性，再批准发送。'), 'attention'));

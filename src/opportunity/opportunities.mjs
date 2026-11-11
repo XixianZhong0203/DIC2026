@@ -43,6 +43,9 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   if (!opportunityColumns.some(column => column.name === 'review_draft')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review_draft TEXT');
   }
+  if (!opportunityColumns.some(column => column.name === 'review_evidence')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN review_evidence TEXT');
+  }
   const get = id => db.prepare('SELECT * FROM opportunities WHERE id=?').get(required(id, 100)) ?? fail(404, '找不到此机会。');
   const mode = action => db.prepare('SELECT mode FROM delegation WHERE action=?').get(action)?.mode;
   const audit = (id, action, detail) => db.prepare('INSERT INTO opportunity_log(opportunity,action,time,detail) VALUES (?,?,?,?)')
@@ -94,6 +97,17 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     }
     const analysis = item.analysis ? safeParse(item.analysis) : null;
     return !analysis || review.analysisId !== analysis.analysisId;
+  };
+  // 人工复核同时绑定当前草稿版本（review_draft）与当前来源集合（review_evidence = evidenceHash）。
+  // 正文或收件人变化会产生新的草稿 ID → draft_changed；来源变化 → source_changed；
+  // 早于该绑定的旧记录没有来源版本（review_evidence 为空）→ review_unbound，提示重新复核。
+  const reviewStale = (item, sourceRows) => {
+    if (!item.review) return null;
+    const reasons = [];
+    if (item.review_draft !== item.draft_id) reasons.push('draft_changed');
+    if (item.review_evidence == null) reasons.push('review_unbound');
+    else if (item.review_evidence !== evidenceHash(item, sourceRows)) reasons.push('source_changed');
+    return reasons.length ? reasons : null;
   };
   // 模型请求或结构解析失败时不中断：存一份"未完成核查"的核查结果，界面显示原因并可重试。
   async function runClaimsReview(id, target, language) {
@@ -156,7 +170,8 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         .map(item => {
           const sources = byOpportunity.get(item.id) ?? [];
           const claims = item.claims_review ? safeParse(item.claims_review) : null;
-          return { ...item, sources, claims, claimsStale: claimsStale(item, claims, sources) };
+          return { ...item, sources, claims, claimsStale: claimsStale(item, claims, sources),
+            reviewStale: reviewStale(item, sources) };
         });
       return {
         opportunities,
@@ -257,9 +272,13 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         // 针对草稿记录的人工复核结论只对当前草稿版本有效；草稿换新版本后失效。
         if (draft_id != null && draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
         const review = required(resolution, 2000);
+        // 复核同时绑定当前来源集合：保存后任何来源变化都会使该复核过期（reviewStale）。
+        const evidence = evidenceHash(item, sourcesFor(id));
         transaction(() => {
-          db.prepare('UPDATE opportunities SET review=?, review_draft=? WHERE id=?').run(review, draft_id ?? null, id);
-          audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, draftId: draft_id ?? null, resolution: review });
+          db.prepare('UPDATE opportunities SET review=?, review_draft=?, review_evidence=? WHERE id=?')
+            .run(review, draft_id ?? null, evidence, id);
+          audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, draftId: draft_id ?? null,
+            evidence, resolution: review });
         });
       },
       '/api/opportunity-draft': ({ id, recipient, body }) => {
@@ -298,10 +317,13 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         }
         // 当前草稿的声明核查门槛：有反驳、证据不足、来源冲突、核查未完成或结果过期时先处理；
         // 可改写后重新核查，或针对当前草稿记录人工复核结论后再批准发送。
-        const humanOverride = Boolean(item.review) && item.review_draft === item.draft_id;
+        const sourceRows = sourcesFor(id);
+        // 人工复核放行同时校验两个绑定：当前草稿版本 + 当前来源集合。
+        // 旧记录缺少来源版本（review_evidence 为空）时不放行，需重新复核。
+        const humanOverride = Boolean(item.review) && item.review_draft === item.draft_id &&
+          item.review_evidence === evidenceHash(item, sourceRows);
         if (!humanOverride) {
           const review = item.claims_review ? safeParse(item.claims_review) : null;
-          const sourceRows = sourcesFor(id);
           if (!review || review.target !== 'draft') {
             audit(id, 'blocked', { action: 'send', reason: 'claims_not_verified' });
             fail(409, '草稿声明尚未核查。请先核查关键声明，或针对当前草稿记录人工复核结论。');
