@@ -654,6 +654,24 @@ summary { cursor: pointer; font-size: 13.5px; font-weight: 550; color: var(--tex
 #thread-project:hover { background: #ececec; }
 #thread-project:focus { outline: none; border-color: #c9c9c9; box-shadow: none; }
 
+/* Cross-workspace record import (workspace-isolation window). */
+.import-source-label { display: block; margin: 14px 0 6px; font-size: 12.5px; color: var(--muted); }
+.import-source {
+  display: block; width: 100%; padding: 6px 10px;
+  font-size: 13px; color: var(--text);
+  border: 1px solid var(--line-strong); border-radius: 8px; background: #fff;
+}
+.import-list { display: grid; gap: 8px; }
+.import-row {
+  display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; cursor: pointer;
+}
+.import-row:hover { background: #fafafa; }
+.import-row input[type="checkbox"] { margin-top: 4px; }
+.import-text { min-width: 0; }
+.import-text small { display: block; margin-bottom: 4px; }
+.import-text p { margin: 0; white-space: pre-wrap; }
+
 /* Pre-send prompt card: holds the input until the user picks an option. */
 .switch-card {
   margin: 0 0 10px; padding: 12px 14px;

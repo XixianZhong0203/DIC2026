@@ -56,8 +56,14 @@ function dayLabel(time) {
 // that project (a conversation without a project falls back to the default).
 function currentProjectScope() {
   const chat = (current?.conversations ?? []).find(item => item.id === activeChat);
-  return (chat?.project ?? '').trim() || 'DIC2026';
+  return workspaceScope(chat?.project);
 }
+
+// A conversation's effective workspace: ungrouped sessions belong to the
+// default workspace (same rule as the server's projectOf, server.mjs).
+const workspaceScope = project => (project ?? '').trim() || 'DIC2026';
+
+const hasChatMessages = id => (current?.messages ?? []).some(message => message.conversation_id === id);
 
 function setActiveChat(id) {
   activeChat = id;
@@ -878,11 +884,90 @@ function showSwitchCard(text, intent) {
     actions.append(action(t('继续当前会话'), sendAs(null)));
   } else {
     actions.append(action(t('在当前项目继续'), sendAs(null), false));
+    // 跨工作区隔离：不移动历史，而是明确选择要带入的记录（保留原工作区与出处）。
+    const other = (intent.involved ?? []).find(item => workspaceScope(item) !== currentProjectScope());
+    actions.append(action(t('选择要带入的记录'), () => {
+      heldSwitch = null;
+      hideSwitchCard();
+      openImportPanel({ source: other ?? '' });
+    }));
   }
   actions.append(action(t('取消'), () => { heldSwitch = null; hideSwitchCard(); get('question').focus(); }, false));
   card.append(title, detail, note, actions);
   card.hidden = false;
 }
+
+// Cross-workspace record import (workspace-isolation window): the owner picks
+// which records of another workspace to bring into the current one. Each
+// selected record is copied by /api/memory-import; the copy keeps its
+// original workspace and source in its provenance, and the original stays.
+function openImportPanel({ source = '', target = currentProjectScope() } = {}) {
+  const content = get('import-content');
+  content.replaceChildren();
+  const known = projectNames().filter(name => name !== target);
+  if (!known.length) {
+    showNotice(t('没有其他工作区可以带入记录。'));
+    return;
+  }
+  const label = element('label', t('来源工作区'), 'import-source-label');
+  const select = element('select', '', 'import-source');
+  select.setAttribute('aria-label', t('来源工作区'));
+  for (const name of known) {
+    const option = element('option', name);
+    option.value = name;
+    select.append(option);
+  }
+  select.value = known.includes(source) ? source : known[0];
+  label.append(select);
+  const list = element('div', '', 'import-list');
+  const renderList = () => {
+    list.replaceChildren();
+    const scope = select.value;
+    const records = (current?.memory ?? []).filter(record => record.scope === scope && !record.superseded);
+    if (!records.length) {
+      list.append(element('p', t('这个工作区还没有可带入的记录。'), 'muted'));
+      return;
+    }
+    const labels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议', source: '原始资料' };
+    for (const record of records) {
+      const row = element('label', '', 'import-row entry');
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = record.id;
+      const text = element('span', '', 'import-text');
+      text.append(element('small', '#' + record.id + ' · ' + t(labels[record.kind]) + ' · ' + record.source));
+      text.append(element('p', t(record.body)));
+      row.append(box, text);
+      list.append(row);
+    }
+  };
+  select.onchange = renderList;
+  renderList();
+  content.append(label, list, action(t('带入所选记录'), async () => {
+    const checked = [...list.querySelectorAll('input[type=checkbox]')]
+      .filter(box => box.checked).map(box => Number(box.value));
+    if (!checked.length) {
+      showNotice(t('请先选择要带入的记录。'));
+      return;
+    }
+    let count = 0;
+    for (const recordId of checked) {
+      try {
+        await request('memory-import', { record_id: recordId, scope: target });
+        count += 1;
+        renderList();
+      } catch (error) {
+        showNotice(error.message);
+        return;
+      }
+    }
+    showNotice(t('已带入 {n} 条记录，保留了原工作区与出处。').replaceAll('{n}', String(count)));
+    get('import-panel').close();
+  }, false));
+  get('import-panel').show();
+}
+get('close-import').onclick = () => get('import-panel').close();
+get('import-records').onclick = () => openImportPanel();
 
 const PROMPT_CHIPS = ['有哪些待办？', '我们做到哪了？', '当前版本可以发布吗？'];
 
@@ -1125,7 +1210,19 @@ function renderThreadBar() {
 }
 get('thread-project').onchange = async () => {
   if (activeChat == null) return;
-  await request('conversation-edit', { id: activeChat, project: get('thread-project').value });
+  const target = get('thread-project').value;
+  const own = activeChatProject();
+  // 跨工作区隔离：带消息的当前会话不能直接换工作区（服务端同样拒绝），
+  // 给出说明并提供建设性出口——明确带入需要的记录。
+  if (target !== own && workspaceScope(target) !== workspaceScope(own) && hasChatMessages(activeChat)) {
+    get('thread-project').value = own;
+    if (window.confirm(t('当前会话有消息，不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡进入新工作区。要引用那边的资料，可以明确带入「{target}」的记录。')
+      .replaceAll('{target}', workspaceScope(target)))) {
+      openImportPanel({ source: workspaceScope(own), target: workspaceScope(target) });
+    }
+    return;
+  }
+  await request('conversation-edit', { id: activeChat, project: target });
 };
 
 // Starting a project means opening the first session inside it: projects are
@@ -1162,6 +1259,14 @@ function chatRow(chat) {
   merge.hidden = chat.id === activeChat;
   merge.onclick = () => withButton(merge, async () => {
     if (activeChat == null || chat.id === activeChat) return;
+    // 跨工作区不能直接并入（服务端同样拒绝）：旧聊天里的报价、承诺和决策卡
+    // 不能跟着历史移动。建设性出口是明确选择要带入的记录。
+    if (workspaceScope(chat.project) !== currentProjectScope()) {
+      if (window.confirm(t('两个会话不在同一工作区，不能直接并入：旧对话的报价、承诺和决策卡不会跟着历史一起移动。要引用那边的资料，可以明确选择要带入的记录。'))) {
+        openImportPanel({ source: workspaceScope(chat.project) });
+      }
+      return;
+    }
     if (!window.confirm(t('把这个会话并入当前会话？消息和记忆都会一起跟过去。'))) return;
     await request('conversation-merge', { id: chat.id, target: activeChat });
     renderChatHistory();
@@ -1223,6 +1328,15 @@ function startMove(chat, row) {
     }
     finish();
     if (target !== (chat.project ?? '').trim()) {
+      // 跨工作区隔离：带消息的会话不能直接换工作区（服务端同样拒绝），
+      // 给出说明并提供建设性出口——明确带入需要的记录。
+      if (workspaceScope(target) !== workspaceScope(chat.project) && hasChatMessages(chat.id)) {
+        if (window.confirm(t('这个会话有消息，不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡一起过去。要引用这边的资料，可以明确带入「{target}」的记录。')
+          .replaceAll('{target}', workspaceScope(target)))) {
+          openImportPanel({ source: workspaceScope(chat.project), target: workspaceScope(target) });
+        }
+        return;
+      }
       await request('conversation-edit', { id: chat.id, project: target });
     }
   };

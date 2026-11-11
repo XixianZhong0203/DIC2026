@@ -113,6 +113,10 @@
   <div class="source-heading"><h2 id="candidate-title" data-i18n>记忆候选</h2><button id="close-candidates" type="button" class="secondary" data-i18n>关闭</button></div>
   <div id="candidate-content"></div>
 </dialog>
+<dialog id="import-panel" class="source-panel" aria-labelledby="import-title">
+  <div class="source-heading"><h2 id="import-title" data-i18n>从其他工作区带入记录</h2><button id="close-import" type="button" class="secondary" data-i18n>关闭</button></div>
+  <div id="import-content"></div>
+</dialog>
 <div class="grid">
   <section class="card wide" data-panel="opportunities">
     <div class="card-head"><h2 data-i18n>客户线索与改进想法</h2></div>
@@ -218,6 +222,7 @@
     <p class="muted" data-i18n>本次例外写在会话里。长期变更请修订原记录，保留出处和适用范围。</p>
     <div id="memory"></div>
     <button class="secondary" id="seed" data-i18n>载入示例记忆</button>
+    <button class="secondary" id="import-records" data-i18n>从其他工作区带入记录</button>
     <form id="memoryForm">
       <p id="revision" hidden></p><blockquote id="revision-original" hidden></blockquote>
       <section id="memory-review" class="memory-review" hidden>

@@ -392,6 +392,28 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
       throw error;
     }
   },
+  // 跨工作区显式带入记录（workspace-isolation 窗口）：用户明确勾选要带入的
+  // 记录后，服务端把它复制到目标工作区；新记录的 source 保留原工作区、原
+  // 记录编号和原出处，原记录不动。不关联 message_id，避免删除原工作区会话
+  // 时误删其他工作区已带入的副本。重复带入是幂等的。
+  '/api/memory-import': ({ record_id, scope }) => {
+    if (!Number.isSafeInteger(record_id)) fail(400, '请求内容不正确。');
+    if (typeof scope !== 'string' || !scope.trim() || scope.trim().length > 100) fail(400, '请检查输入内容。');
+    const origin = db.prepare('SELECT * FROM memory WHERE id = ?').get(record_id);
+    if (!origin) fail(404, '找不到要带入的记录。');
+    if (db.prepare('SELECT 1 FROM memory WHERE replaces = ? LIMIT 1').get(record_id)) {
+      fail(409, '这条记录已被修订，请带入修订后的版本。');
+    }
+    const target = scope.trim();
+    if (origin.scope === target) fail(400, '记录已属于该工作区。');
+    if (origin.scope === GLOBAL_SCOPE) fail(400, '全局记录已对所有工作区可见，无需带入。');
+    const provenance = ('来自「' + origin.scope + '」的记录 #' + origin.id + ' · ' + origin.source).slice(0, 500);
+    const existing = db.prepare('SELECT id FROM memory WHERE scope = ? AND source = ?').get(target, provenance);
+    if (existing) return { ...state(), imported: existing.id, already: true };
+    const result = db.prepare('INSERT INTO memory(kind, scope, body, source) VALUES (?,?,?,?)')
+      .run(origin.kind, target, origin.body, provenance);
+    return { ...state(), imported: Number(result.lastInsertRowid), already: false };
+  },
   // Decision-card interaction: a selection is recorded as soon as it is made
   // (returned to the conversation); confirm=true then runs the option's effect
   // through the same handlers and confirmation rules as its direct route
@@ -614,16 +636,33 @@ compare — 跨工作区比较/对照，或同时涉及多个工作区的资料
     }
     if (project != null) {
       if (typeof project !== 'string' || project.length > 60) fail(400, '请检查输入内容。');
+      // 跨工作区隔离（workspace-isolation 窗口）：带历史消息的会话跨工作区
+      // 移动，会把旧报价、承诺和决策卡带进新工作区的后续上下文，因此拒绝；
+      // 没有消息的会话只是换个归属，可以移动。
+      const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
+      if (projectOf(conversation) !== projectOf({ project }) &&
+          db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? LIMIT 1').get(id)) {
+        fail(409, '带消息的会话不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡进入新工作区。请在目标工作区开新对话，或明确带入需要的记录。');
+      }
       sets.push('project = ?');
       args.push(project.trim());
     }
     if (sets.length) db.prepare(`UPDATE conversations SET ${sets.join(', ')} WHERE id = ?`).run(...args, id);
   },
+  // 跨工作区上下文隔离（workspace-isolation 窗口；与负责普通聊天/不确定性回复的
+  // 窗口对齐：只改对话路由，不动 reply()/modelReply()/决策卡链路）：
+  // 同一工作区内的合并照常搬移历史；跨工作区合并会把旧聊天里的报价、客户
+  // 承诺和决策卡带进目标工作区后续回答的上下文，因此拒绝。跨工作区继续
+  // 工作请在目标工作区开新对话（带入当前输入），需要引用对方资料时通过
+  // /api/memory-import 明确带入记录。
   '/api/conversation-merge': ({ id, target }) => {
     if (!Number.isSafeInteger(id) || !Number.isSafeInteger(target) || id === target) fail(400, '请求内容不正确。');
-    const source = db.prepare('SELECT id FROM conversations WHERE id = ?').get(id);
-    const goal = db.prepare('SELECT id FROM conversations WHERE id = ?').get(target);
+    const source = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
+    const goal = db.prepare('SELECT * FROM conversations WHERE id = ?').get(target);
     if (!source || !goal) fail(404, '找不到这个对话。');
+    if (projectOf(source) !== projectOf(goal)) {
+      fail(409, '跨工作区不能直接并入：旧对话的报价、承诺和决策卡不会跟着历史一起移动。请在目标工作区开新对话，或明确带入需要的记录。');
+    }
     db.exec('BEGIN');
     db.prepare('UPDATE messages SET conversation_id = ? WHERE conversation_id = ?').run(target, id);
     db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
