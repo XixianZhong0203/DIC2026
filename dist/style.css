@@ -49,6 +49,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 #task-audit summary { font-size: .9rem; }
 #task-audit p { margin: 2px 0; }
 .task-flash { animation: task-flash 1.8s ease-out; }
+.entry-flash { animation: task-flash 1.8s ease-out; }
 @keyframes task-flash {
   0% { background: #fff3c4; }
   100% { background: #f3f4ee; }
@@ -57,7 +58,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 /* ── Icon rail ─────────────────────────────────────────────────────────── */
 .rail {
   display: flex; flex-direction: column; align-items: center; gap: 4px;
-  padding: 12px 0 14px; min-height: 100dvh;
+  padding: 12px 0 14px;
+  position: sticky; top: 0; height: 100dvh; min-height: 100dvh;
   background: var(--chrome); border-right: 1px solid var(--line);
 }
 .rail-button {
@@ -82,7 +84,8 @@ input:focus-visible, textarea:focus-visible, select:focus-visible { outline: non
 /* ── Sidebar ───────────────────────────────────────────────────────────── */
 .sidebar {
   display: flex; flex-direction: column;
-  min-height: 100dvh; padding: 12px 10px 14px;
+  position: sticky; top: 0; height: 100dvh; min-height: 100dvh;
+  padding: 12px 10px 14px;
   background: var(--chrome); border-right: 1px solid var(--line);
   overflow: hidden;
 }

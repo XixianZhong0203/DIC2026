@@ -196,6 +196,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
 
   function opportunityCard(item, audit) {
     const card = element('article', '', 'entry');
+    card.setAttribute('data-opportunity-id', item.id);
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
     card.append(details(t('出处') + ' · ' + item.source, item.evidence));
     card.append(sourceBlock(item));

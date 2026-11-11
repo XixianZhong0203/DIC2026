@@ -1047,17 +1047,33 @@ function openProject(name) {
   else newChatIn(name);
 }
 
+// Scroll a rendered card into view and briefly highlight it, so sidebar
+// shortcuts land on the exact item instead of the top of a long list.
+function focusEntry(selector) {
+  const node = document.querySelector(selector);
+  if (!node) return false;
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  node.classList.remove('entry-flash');
+  void node.offsetWidth;
+  node.classList.add('entry-flash');
+  setTimeout(() => node.classList.remove('entry-flash'), 1800);
+  return true;
+}
+
 // Fill each contextual sidebar section with live content, so switching the
 // rail changes the list, not just the highlighted icon.
 function renderSidebarContext() {
   const leads = get('lead-nav');
-  const recent = [...(current?.opportunities ?? [])].sort((a, b) => b.id - a.id).slice(0, 6);
+  const recent = (current?.opportunities ?? []).slice(0, 6);
   leads.replaceChildren(...(recent.length
     ? recent.map(item => {
       const button = element('button', item.title, 'sidebar-item');
       button.type = 'button';
       button.title = item.title;
-      button.onclick = () => navigateView('opportunities');
+      button.onclick = () => {
+        navigateView('opportunities');
+        requestAnimationFrame(() => focusEntry(`[data-opportunity-id="${item.id}"]`));
+      };
       return button;
     })
     : [element('p', t('还没有线索。'), 'sidebar-empty')]));
@@ -1072,7 +1088,10 @@ function renderSidebarContext() {
       const button = element('button', task.title, 'sidebar-item');
       button.type = 'button';
       button.title = task.title;
-      button.onclick = () => navigateView('tasks');
+      button.onclick = () => {
+        navigateView('tasks');
+        requestAnimationFrame(() => focusEntry('#task-card-' + task.id));
+      };
       return button;
     })
     : [element('p', t('还没有待办。'), 'sidebar-empty')]));
