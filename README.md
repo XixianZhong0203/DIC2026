@@ -5,10 +5,11 @@ Daymark is a local AI workspace for a one-person company. It helps the owner org
 ## What you can do
 
 - **Chat and projects.** Create, organize, and resume conversations. Open the evidence panel to see retrieved records, verified excerpts when available, inferences, and open questions.
-- **Records and memory.** Save source material, facts, preferences, rules, and proposals. Review overlapping records before changing a saved rule. Chat history is saved automatically. Long-term memory is added through explicit saves.
+- **Records and memory.** Save source material, facts, preferences, rules, and proposals. Chat history is saved automatically; long-term memory is added through explicit saves. Memories are project-scoped: a chat only retrieves records of its own project and records saved as global, so a change in one project never touches another. Review overlapping records before changing a saved rule. Extract memory candidates from a conversation — content, type, scope, confirmation status, and source message — and confirm them before they are saved. Requests from the other side (like a client proposing a new delivery date) are kept as unconfirmed proposals; the previously confirmed rule stays valid until you accept, and accepting revises the old rule with a change record.
 - **Customer leads and improvement ideas.** Open a public search link, record sources manually, ask the model to assess an opportunity, and prepare a follow-up or an outreach draft.
 - **Claim verification.** Add dated sources to a lead, then verify its key claims against that evidence: verdicts with verbatim source quotes, concrete gaps and supported rewrites for unsupported claims, and automatic re-verification when the evidence or the draft changes.
 - **Tasks and calendar.** Create and update local tasks, link them to source records, and export calendar events as ICS files.
+- **Decision cards.** When a reply hits a conflict (a reschedule, a long-term preference clash) or an evidence gap, an interactive card appears next to the reply: what is currently confirmed, why you must decide, and what each option will do. A selection returns to the conversation so follow-ups can refer to it; confirming runs the option through its normal flow — calendar/task updates with conflict checks, the memory impact review for long-term preference changes, or a drafted clarification question — and shows the result. A one-time exception applies only to the next reply.
 - **Approval and activity.** Review saved drafts, require evidence review for simulated outreach, and inspect approval, blocking, and simulation events. Simulated publishing checks the draft and the current version's verification record.
 
 ## Safety boundaries
@@ -60,5 +61,5 @@ Restart Daymark after changing the configuration. Hosted providers receive relev
 
 - `server.mjs` wires the local API, database, and frontend.
 - `dist/` contains the browser interface.
-- `src/` contains chat retrieval, memory, opportunities, calendar, release policy, and action checks.
-- `evaluation/` and `scripts/` contain developer tooling. Run `npm test` for automated code checks.
+- `src/` contains chat retrieval, memory, opportunities, calendar, release policy, action checks, and decision cards (`src/decision/`).
+- `evaluation/` and `scripts/` contain developer tooling. Run `npm test` for automated code checks, and `node scripts/memory-acceptance.mjs` for the end-to-end memory save and conflict acceptance (chat steps run when a model is reachable; otherwise they are skipped and the trace is written to `docs/evidence/`).

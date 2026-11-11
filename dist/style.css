@@ -513,3 +513,39 @@ main { padding: 20px clamp(14px, 4vw, 44px) 28px; }
   .chat-empty { padding: 48px 16px; }
   #conversation { padding-inline: 16px; }
 }
+
+/* Decision card: what is confirmed, why a choice is needed, each outcome */
+.decision { margin: 14px 0 0; padding: 14px 16px; border: 1px solid #e5e7ef; border-radius: 12px; background: #fafbfe; }
+.decision.applied { border-color: #cfe3d6; background: #f6fbf8; }
+.decision.failed { border-color: #f0e2c0; background: #fdfaf2; }
+.decision-head { display: flex; align-items: center; gap: 8px; }
+.decision-head strong { font-size: 15px; }
+.decision-kind { flex: none; padding: 2px 9px; background: #eef1f8; color: #5b6578; border-radius: 999px; font-size: 12px; }
+.decision-status { margin-left: auto; flex: none; font-size: 12px; color: #8b8b8b; }
+.decision > p { margin: 8px 0 0; font-size: 13.5px; line-height: 1.55; }
+.decision-records { margin-top: 8px; }
+.decision-record { display: inline-block; margin: 3px 4px 0 0; padding: 2px 8px; background: #f0f2f7; border-radius: 999px; font-size: 12px; color: #5b6578; }
+.decision-options { margin-top: 12px; display: grid; gap: 8px; }
+.decision-option { display: block; padding: 10px 12px; border: 1px solid #e5e7ef; border-radius: 10px; background: #fff; cursor: pointer; }
+.decision-option:has(input:checked) { border-color: #262626; background: #f6f7fb; }
+.decision-option input { width: auto; margin: 0 8px 0 0; }
+.decision-option-body strong { font-size: 14px; }
+.decision-option-body > p { margin: 5px 0 0; font-size: 13px; line-height: 1.5; color: #5b6578; }
+.decision-option-body > button { margin-top: 8px; padding: 4px 10px; font-size: 12.5px; }
+.decision-preview { margin-top: 8px; padding: 8px 10px; background: #f6f7fb; border-radius: 8px; font-size: 13px; }
+.decision-preview small { color: #5b6578; }
+.decision-preview p { margin: 4px 0 0; line-height: 1.5; white-space: pre-wrap; }
+.decision-actions { margin-top: 12px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.decision-ok { margin: 0; font-size: 13px; color: #1f7a4d; }
+.decision-err { margin: 0; font-size: 13px; color: #b45309; white-space: pre-wrap; }
+
+/* Unconfirmed proposal card: a request from the other side that is not yet
+   accepted, so the previously confirmed rule stays valid. */
+.proposal-card { margin: 10px 0 0; padding: 10px 12px; border: 1px solid #f0e2c0; border-radius: 10px; background: #fdfaf2; }
+.proposal-card p { margin: 5px 0; }
+.proposal-card .attention { margin: 0; padding: 6px 10px; }
+.proposal-card button { margin-top: 4px; }
+
+/* Memory candidates extracted from a chat */
+.candidate-content { padding: 8px 2px; }
+.candidate-row button { margin-top: 6px; }

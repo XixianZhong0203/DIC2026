@@ -1,5 +1,6 @@
 import { createOpportunityUI } from '/opportunity-ui.js';
-import { demoReport } from '/policy.mjs';
+import { createDecisionUI } from '/decision-ui.js';
+import { GLOBAL_SCOPE, demoReport } from '/policy.mjs';
 import { translate } from '/i18n.js';
 
 let language = localStorage.getItem('daymark-language') === 'zh-CN' ? 'zh-CN' : 'en';
@@ -35,6 +36,13 @@ function reconcileChat() {
 function chatMessages() {
   if (!current || activeChat == null) return [];
   return (current.messages ?? []).filter(message => message.conversation_id === activeChat);
+}
+
+// The project scope of the active chat: memories saved from the chat apply to
+// that project (a conversation without a project falls back to the default).
+function currentProjectScope() {
+  const chat = (current?.conversations ?? []).find(item => item.id === activeChat);
+  return (chat?.project ?? '').trim() || 'DIC2026';
 }
 
 function setActiveChat(id) {
@@ -182,8 +190,24 @@ async function request(path, body) {
 }
 
 let visibleEvidence = null;
+// Panels are shown non-modally (show, not showModal): the page behind them
+// stays fully interactive, so an open panel can never make the rest of the
+// page inert. Esc still closes any open panel.
 get('close-sources').onclick = () => get('source-panel').close();
 get('source-panel').addEventListener('close', () => { visibleEvidence = null; });
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  for (const panel of document.querySelectorAll('dialog[open]')) panel.close();
+});
+
+// Extract memory candidates from the active chat and show them for confirmation.
+get('close-candidates').onclick = () => get('candidate-panel').close();
+get('chat-extract').onclick = () => withButton(get('chat-extract'), async () => {
+  if (!chatMessages().length) { showNotice(t('先发送一条消息再提取记忆。')); return; }
+  const result = await fetchResult('memory-candidates', { conversation_id: activeChat, language });
+  renderCandidatePanel(result);
+  get('candidate-panel').show();
+});
 
 function openSources(review) {
   visibleEvidence = review;
@@ -221,7 +245,7 @@ function openSources(review) {
     }
     body.append(trace);
   }
-  if (!get('source-panel').open) get('source-panel').showModal();
+  if (!get('source-panel').open) get('source-panel').show();
 }
 
 function clearRevision() {
@@ -268,13 +292,20 @@ function render() {
       const body = element('div', '', 'message-body');
       body.innerHTML = markdown(message.body);
       main.append(body);
-      if (message.review?.conflict) main.append(element('p', message.review.conflict, 'attention'));
-      if (message.review?.question) main.append(element('p', message.review.question, 'attention'));
+      const decision = message.review?.decision;
+      if (message.review?.conflict && !(decision && decision.reason === message.review.conflict)) {
+        main.append(element('p', message.review.conflict, 'attention'));
+      }
+      if (message.review?.question && !(decision && decision.reason === message.review.question)) {
+        main.append(element('p', message.review.question, 'attention'));
+      }
       if (message.review?.understood) {
         const understanding = element('details', '', 'message-detail');
         understanding.append(element('summary', t('我对当前任务的理解')), element('p', message.review.understood));
         main.append(understanding);
       }
+      if (decision) renderDecision(main, message);
+      renderProposal(main, message);
       const evidence = element('div', '', 'evidence-line');
       if (message.review?.fallbackReason) evidence.append(element('span', t(message.review.fallbackReason), 'meta-note'));
       if (message.review?.plain) evidence.append(element('span', t('模型未返回结构化答复，按纯文本展示。'), 'meta-note'));
@@ -296,8 +327,7 @@ function render() {
       });
       actions.append(copy);
       actions.append(iconButton('bookmark', '存入记忆', async () => {
-        const chat = (current.conversations ?? []).find(item => item.id === activeChat);
-        await request('memory', { kind: 'source', scope: chat?.project || 'DIC2026',
+        await request('memory', { kind: 'source', scope: currentProjectScope(),
           source: t('项目对话') + ' #' + message.id, body: message.body, message_id: message.id });
         showView('capture');
       }));
@@ -817,13 +847,98 @@ get('temporary-memory').onclick = () => {
   get('question').focus();
 };
 
-formAction('memoryForm', async data => {
+// An unconfirmed proposal surfaced from the exchange (e.g. a customer
+// asking to change a confirmed date): shown as a proposal card. Saving it
+// keeps kind=proposal, so the previously confirmed rule stays valid until
+// the owner explicitly accepts it.
+function renderProposal(parent, message) {
+  const proposal = message.review?.proposal;
+  if (!proposal) return;
+  const project = currentProjectScope();
+  // A duplicate proposal (same content, visible in this scope) is not shown twice.
+  if ((current.memory ?? []).some(record => !record.superseded && record.kind === 'proposal' &&
+      record.body === proposal.body && (record.scope === project || record.scope === GLOBAL_SCOPE))) return;
+  const card = element('div', '', 'proposal-card');
+  card.append(element('p', t('新要求') + ' · ' + proposal.body, 'attention'));
+  card.append(element('p', t('已确认的规则在你明确接受前仍然有效。'), 'meta-note'));
+  card.append(action(t('保存为未确认提议'), async () => {
+    await request('memory', { kind: 'proposal', scope: project, body: proposal.body,
+      source: t('项目对话') + ' #' + message.id, message_id: proposal.message_id ?? null });
+    showNotice(t('已保存为未确认提议'));
+  }));
+  parent.append(card);
+}
+
+// Model-extracted memory candidates from the chat: each keeps content, kind,
+// scope, confirmation status and the source message. Saving goes through the
+// normal memory form (preferences and rules still get the pre-save review).
+function renderCandidatePanel(result) {
+  const box = get('candidate-content');
+  box.replaceChildren();
+  const candidates = result.candidates ?? [];
+  if (!candidates.length) {
+    box.append(element('p', t('没有提取到记忆候选。'), 'muted'));
+    return;
+  }
+  const kindLabels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议' };
+  for (const item of candidates) {
+    const row = element('article', '', 'entry candidate-row');
+    row.append(element('p', item.content));
+    row.append(element('small',
+      t('类型') + ' · ' + t(kindLabels[item.kind]) +
+      ' · ' + t('适用范围') + ' · ' + (item.scope === GLOBAL_SCOPE ? t('全局') : item.scope) +
+      ' · ' + t(item.status === 'pending' ? '待确认' : '已确认') +
+      ' · ' + t('来源消息') + ' · ' + (item.message_id != null ? '#' + item.message_id : t('来源未定'))));
+    row.append(action(t(item.kind === 'proposal' ? '保存为未确认提议' : '确认保存'), () => startMemorySave({
+      kind: item.kind, scope: item.scope, body: item.content,
+      source: item.message_id != null ? t('项目对话') + ' #' + item.message_id : t('对话提取'),
+      message_id: item.message_id,
+    })));
+    box.append(row);
+  }
+}
+
+// Prefill the memory form from a chat candidate or proposal and submit it.
+function startMemorySave({ kind, scope, body, source, message_id = null }) {
+  clearRevision();
+  const form = get('memoryForm');
+  form.elements.kind.value = kind;
+  syncScopeMode(scope);
+  form.elements.body.value = body;
+  form.elements.source.value = source;
+  form.elements.message_id.value = message_id ?? '';
+  showView('memory');
+  form.requestSubmit();
+}
+
+function syncScopeMode(scope) {
+  const mode = get('scope-mode');
+  if (scope === GLOBAL_SCOPE) mode.value = GLOBAL_SCOPE;
+  else if (scope === currentProjectScope()) mode.value = '';
+  else { mode.value = 'custom'; get('memoryForm').elements.scope.value = scope; }
+  get('scope-custom').hidden = mode.value !== 'custom';
+}
+get('scope-mode').addEventListener('change', () => {
+  get('scope-custom').hidden = get('scope-mode').value !== 'custom';
+});
+
+formAction('memoryForm', async (data, form) => {
+  // Resolve the scope control (current project / global / custom) and the
+  // source-message link before the existing review or direct save.
+  const scopeMode = get('scope-mode').value;
+  data.scope = scopeMode === 'custom' ? form.elements.scope.value.trim()
+    : scopeMode === GLOBAL_SCOPE ? GLOBAL_SCOPE : currentProjectScope();
+  data.message_id = data.message_id ? Number(data.message_id) : null;
   const previousKind = current.memory.find(record => record.id === editing)?.kind;
   if (![data.kind, previousKind].some(kind => ['preference', 'rule'].includes(kind))) return saveMemory(data, editing);
   const replaces = editing;
-  const form = get('memoryForm');
   const result = await fetchResult('memory-impact', { ...data, replaces });
-  if (JSON.stringify(Object.fromEntries(new FormData(form))) !== JSON.stringify(data) || editing !== replaces) return;
+  // The form is re-read after the review request to catch edits made meanwhile;
+  // scope and message_id are re-derived the same way so they don't false-positive.
+  const recheck = Object.fromEntries(new FormData(form));
+  recheck.scope = data.scope;
+  recheck.message_id = data.message_id;
+  if (JSON.stringify(recheck) !== JSON.stringify(data) || editing !== replaces) return;
   const review = { data, replaces, candidates: result.impact, snapshot: result.snapshot };
   if (!result.impact.length) return saveMemory(data, replaces, review);
   pendingMemory = review;
@@ -939,6 +1054,26 @@ const renderOpportunities = createOpportunityUI({ get, t, element, action, reque
     get('task-form').elements.title.value = item.title;
     get('task-source').value = record?.id ?? '';
     showDateHints();
+  },
+});
+const renderDecision = createDecisionUI({
+  t, element, action, request, fetchResult, language: () => language,
+  openSources: review => openSources(review),
+  copyText,
+  fillComposer: text => {
+    const question = get('question');
+    question.value = text;
+    growQuestion();
+    get('chat-send').disabled = !current?.live || !question.value.trim();
+    question.focus();
+  },
+  jumpToCalendar: dateKey => {
+    const [year, month, day] = dateKey.split('-').map(Number);
+    calendarMonth = new Date(year, month - 1, day);
+    const next = new Date(year, month - 1, day + 1);
+    selectedDay = { key: dateKey, next: dateKey(next.getFullYear(), next.getMonth(), next.getDate()) };
+    showView('calendar');
+    renderCalendar();
   },
 });
 applyLanguage();

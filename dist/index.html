@@ -64,6 +64,10 @@
   <div class="source-heading"><h2 id="source-title" data-i18n>核查这条回答</h2><button id="close-sources" type="button" class="secondary" data-i18n>关闭</button></div>
   <div id="source-content"></div>
 </dialog>
+<dialog id="candidate-panel" class="source-panel" aria-labelledby="candidate-title">
+  <div class="source-heading"><h2 id="candidate-title" data-i18n>记忆候选</h2><button id="close-candidates" type="button" class="secondary" data-i18n>关闭</button></div>
+  <div id="candidate-content"></div>
+</dialog>
 <div class="grid">
   <section class="card wide" data-panel="opportunities">
     <div class="card-head"><h2 data-i18n>客户线索与改进想法</h2></div>
@@ -148,6 +152,7 @@
           <textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="给 Daymark 发消息"></textarea>
           <div class="composer-footer">
             <span id="composer-model"></span>
+            <button id="chat-extract" type="button" class="secondary" data-i18n>提取记忆</button>
             <span id="chat-progress" class="muted" role="status" hidden data-i18n>正在查询…</span>
             <button id="chat-send" class="send-button" type="submit"><span class="sr-only" data-i18n>发送</span><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>
@@ -176,7 +181,9 @@
         </div>
       </section>
       <label><span data-i18n>记录类型</span><select name="kind"><option value="fact" data-i18n>事实</option><option value="preference" data-i18n>偏好</option><option value="rule" data-i18n>已确认规则</option><option value="proposal" data-i18n>未确认提议</option><option value="source" data-i18n>原始资料</option></select></label>
-      <label><span data-i18n>适用范围</span><input name="scope" value="DIC2026" required maxlength="100"></label>
+      <label><span data-i18n>适用范围</span><select name="scope_mode" id="scope-mode"><option value="" data-i18n>当前项目</option><option value="*" data-i18n>全局（所有项目）</option><option value="custom" data-i18n>自定义</option></select></label>
+      <label id="scope-custom" hidden><span data-i18n>自定义范围</span><input name="scope" value="DIC2026" required maxlength="100"></label>
+      <input type="hidden" name="message_id">
       <label><span data-i18n>记录</span><textarea name="body" required maxlength="4000" data-placeholder placeholder="例如：对外项目简介用英文"></textarea></label>
       <label><span data-i18n>出处</span><input name="source" required maxlength="500" data-placeholder placeholder="例如：11 月 10 日的项目讨论"></label>
       <div class="buttons"><button data-i18n>保存记录</button><button type="button" class="secondary" id="cancel" hidden data-i18n>取消修订</button></div>

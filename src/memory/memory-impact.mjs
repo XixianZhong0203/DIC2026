@@ -1,4 +1,19 @@
 import { rankRecords, words } from '../chat/local-chat.mjs';
+import { GLOBAL_SCOPE } from '../policy/policy.mjs';
+
+// Scope matching for project-scoped memory. A record is visible to a project
+// when its scope names that project or is global; a global edit is checked
+// against every scope.
+export function scopeMatches(recordScope, project) {
+  const record = String(recordScope ?? '').trim();
+  const target = String(project ?? '').trim();
+  return record === GLOBAL_SCOPE || target === GLOBAL_SCOPE || record === target;
+}
+
+// Select the memories visible in a conversation's project scope.
+export function recordsInScope(records, project) {
+  return records.filter(record => scopeMatches(record.scope, project));
+}
 
 // Personalized PageRank with restart at the incoming edit. This small graph
 // links memory records through shared terms and scopes.
@@ -30,6 +45,30 @@ export function memoryCandidates(edit, records, limit = 8) {
   }
   return ranked.map(({ record }, i) => ({ ...record, relevance: relevance[i] }))
     .filter(record => record.relevance > 0).sort((a, b) => b.relevance - a.relevance).slice(0, limit);
+}
+
+// Normalize the model's memory candidates from a conversation. Each keeps
+// content, kind, scope, confirmation status, and the source message.
+export const MEMORY_KINDS = ['fact', 'preference', 'rule', 'proposal'];
+export const MEMORY_STATUSES = ['confirmed', 'pending'];
+
+export function normalizeCandidates(raw, { messageIds = [], project = '' }) {
+  const items = Array.isArray(raw) ? raw : [];
+  const ids = new Set(messageIds);
+  const out = [];
+  for (const item of items.slice(0, 6)) {
+    if (typeof item?.content !== 'string' || !item.content.trim() || item.content.length > 1000) continue;
+    if (!MEMORY_KINDS.includes(item.kind) || !MEMORY_STATUSES.includes(item.status)) continue;
+    let scope = typeof item.scope === 'string' ? item.scope.trim() : '';
+    if (!scope) scope = project;
+    if (!scope || scope.length > 100) continue;
+    if (scope === 'global' || scope.toLowerCase() === 'global') scope = GLOBAL_SCOPE;
+    const messageId = item.message_id == null ? null
+      : (Number.isSafeInteger(item.message_id) && ids.has(item.message_id) ? item.message_id : null);
+    out.push({ content: item.content.trim(), kind: item.kind, scope,
+      status: item.status, message_id: messageId });
+  }
+  return out;
 }
 
 export function verifiedQuotes(facts, records) {
