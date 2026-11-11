@@ -72,7 +72,7 @@ function activeChatProject() {
   return (chat?.project ?? '').trim();
 }
 
-// Create a fresh conversation in a workspace (new chats inherit it) and open it.
+// Create a fresh conversation in a project (new chats inherit it) and open it.
 async function newChatIn(project) {
   const data = await fetchResult('conversation', { project });
   current = { ...data, tasks: data.tasks ?? [] };
@@ -167,6 +167,7 @@ const ICONS = {
   bookmark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7.5 19.5 3 21l1.5-4.5Z"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
 };
 
 function iconButton(name, label, callback) {
@@ -280,9 +281,9 @@ function openSources(review) {
   if (review.trace) {
     const trace = element('details', '', 'entry');
     trace.append(element('summary', t('处理记录')));
-    // Which workspace this answer actually read, so the user can confirm the
+    // Which project this answer actually read, so the user can confirm the
     // material range (ungrouped chats fall back to the default scope).
-    trace.append(element('p', t('实际使用工作区') + ' · ' + (review.trace.scope || t('未分组'))));
+    trace.append(element('p', t('实际使用项目') + ' · ' + (review.trace.scope || t('未分组'))));
     if (review.trace.retrievalQuery) trace.append(element('p', t('检索词') + ' · ' + review.trace.retrievalQuery));
     if (review.trace.gapRetrieval) {
       const { query, ids, status } = review.trace.gapRetrieval;
@@ -321,10 +322,11 @@ function render() {
   get('scroll-bottom').setAttribute('aria-label', t('回到底部'));
   layoutComposer(messages.length > 0);
   renderChatHistory();
-  renderWorkspaceBar();
+  renderSidebarContext();
+  renderThreadBar();
   if (view === 'chat') {
     const chat = (current.conversations ?? []).find(item => item.id === activeChat);
-    get('view-title').textContent = t(chat?.title ?? '对话');
+    get('view-title').textContent = t(chat?.title ?? '工作台');
   }
   get('chat-welcome').hidden = messages.length > 0;
   const conversation = get('conversation');
@@ -389,7 +391,7 @@ function render() {
       actions.append(copy);
       actions.append(iconButton('bookmark', '存入记忆', async () => {
         await request('memory', { kind: 'source', scope: currentProjectScope(),
-          source: t('项目对话') + ' #' + message.id, body: message.body, message_id: message.id });
+          source: t('项目会话') + ' #' + message.id, body: message.body, message_id: message.id });
         navigateView('capture');
       }));
       main.append(actions);
@@ -446,15 +448,23 @@ function render() {
 }
 
 const viewButtons = [...document.querySelectorAll('[data-view]')];
-const groupViews = { chat: ['chat'], plan: ['tasks', 'calendar'], records: ['capture', 'memory', 'delegation', 'evaluation'] };
-let expandedGroups = new Set(['chat']);
+// The left rail is the primary navigation. Each rail section owns the second
+// column: the workbench shows projects and sessions, leads its recent leads,
+// plan the upcoming schedule, and records the source/memory tools.
+const sectionOfView = {
+  chat: 'workbench',
+  opportunities: 'leads',
+  tasks: 'plan', calendar: 'plan',
+  capture: 'records', memory: 'records', delegation: 'records', evaluation: 'records',
+};
+let section = 'workbench';
 let view = 'chat';
 let calendarMonth = new Date();
 let selectedDay = null;
 let taskEditing = null;
 const taskForm = get('task-form');
 
-// Back / forward history across the workspace views.
+// Back / forward history across the app views.
 const viewHistory = [view];
 let viewCursor = 0;
 function syncHistoryButtons() {
@@ -477,22 +487,21 @@ function stepView(delta) {
 get('history-back').onclick = () => stepView(-1);
 get('history-forward').onclick = () => stepView(1);
 
-// Thin icon rail: jump straight into each area and mark the active one.
-const railViews = { chat: 'chat', opportunities: 'leads', tasks: 'plan', calendar: 'plan',
-  capture: 'records', memory: 'records', delegation: 'records', evaluation: 'records' };
+// Icon rail: the primary navigation. The active rail section decides what the
+// second column shows.
 const railButtons = [...document.querySelectorAll('.rail [data-rail]')];
 function syncRail() {
-  const active = railViews[view];
   for (const button of railButtons) {
-    if (button.dataset.rail === active) button.setAttribute('aria-current', 'page');
+    if (button.dataset.rail === section) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
 }
+const lastViewInSection = { workbench: 'chat', leads: 'opportunities', plan: 'tasks', records: 'capture' };
 const railActions = {
-  chat: () => navigateView('chat'),
+  workbench: () => navigateView('chat'),
   leads: () => navigateView('opportunities'),
-  plan: () => { expandedGroups = new Set(['plan']); syncNavState(); navigateView('tasks'); },
-  records: () => { expandedGroups = new Set(['records']); syncNavState(); navigateView('capture'); },
+  plan: () => navigateView(lastViewInSection.plan),
+  records: () => navigateView(lastViewInSection.records),
 };
 for (const button of railButtons) button.onclick = () => railActions[button.dataset.rail]?.();
 
@@ -543,30 +552,23 @@ get('calendar-add').onclick = () => {
   }
 };
 
-const viewTitles = { chat: '对话', opportunities: '线索', tasks: '待办', calendar: '日历',
+const viewTitles = { chat: '工作台', opportunities: '线索', tasks: '待办', calendar: '日历',
   capture: '收集', memory: '记忆', delegation: '授权', evaluation: '评估' };
 
-function activeGroup() {
-  return Object.keys(groupViews).find(key => groupViews[key].includes(view)) ?? '';
-}
-
-function syncNavState() {
-  for (const key of Object.keys(groupViews)) {
-    const open = expandedGroups.has(key);
-    get('group-' + key).setAttribute('aria-expanded', String(open));
-    get('children-' + key).hidden = !open;
-    document.querySelector(`.nav-caret[data-toggle="${key}"]`)?.classList.toggle('closed', !open);
-    if (key === activeGroup()) get('group-' + key).setAttribute('aria-current', 'page');
-    else get('group-' + key).removeAttribute('aria-current');
+function showSidebarSection(name) {
+  for (const panel of document.querySelectorAll('[data-section-panel]')) {
+    panel.hidden = panel.dataset.sectionPanel !== name;
   }
 }
 
 function showView(name) {
   view = name;
+  section = sectionOfView[name] ?? section;
+  lastViewInSection[section] = name;
   get('view-title').textContent = t(viewTitles[name]);
   document.body.classList.remove('sidebar-open');
   get('sidebar-toggle').setAttribute('aria-expanded', 'false');
-  syncNavState();
+  showSidebarSection(section);
   for (const panel of document.querySelectorAll('[data-panel]')) panel.hidden = panel.dataset.panel !== name;
   for (const button of viewButtons) {
     if (button.dataset.view === name) button.setAttribute('aria-current', 'page');
@@ -580,17 +582,15 @@ get('sidebar-toggle').onclick = () => {
   const open = document.body.classList.toggle('sidebar-open');
   get('sidebar-toggle').setAttribute('aria-expanded', String(open));
 };
+// On small screens the sidebar is a slide-over: tapping anywhere outside it
+// (the dimmed backdrop or the page behind) closes it again.
+document.addEventListener('click', event => {
+  if (!document.body.classList.contains('sidebar-open')) return;
+  if (event.target.closest('#sidebar') || event.target.closest('#sidebar-toggle')) return;
+  document.body.classList.remove('sidebar-open');
+  get('sidebar-toggle').setAttribute('aria-expanded', 'false');
+});
 for (const button of viewButtons) button.onclick = () => navigateView(button.dataset.view);
-for (const button of document.querySelectorAll('.nav-group')) button.onclick = () => {
-  const group = button.dataset.group;
-  expandedGroups = expandedGroups.has(group) ? new Set() : new Set([group]);
-  syncNavState();
-};
-for (const button of document.querySelectorAll('.nav-caret')) button.onclick = () => {
-  const group = button.dataset.toggle;
-  expandedGroups = expandedGroups.has(group) ? new Set() : new Set([group]);
-  syncNavState();
-};
 showView(view);
 
 function dateKey(year, month, day) {
@@ -776,7 +776,7 @@ formAction('task-form', async data => {
 });
 // The input held by an open prompt card. Once the user picks an option the
 // text is delivered exactly once (a fresh conversation in the target
-// workspace, or the current conversation); cancel keeps it in the box.
+// project, or the current conversation); cancel keeps it in the box.
 let heldSwitch = null;
 
 function setChatBusy(busy) {
@@ -787,7 +787,7 @@ function setChatBusy(busy) {
 }
 
 // The single send path. `target` is null for the current conversation, or
-// { project } for a fresh conversation that inherits that workspace.
+// { project } for a fresh conversation that inherits that project.
 async function sendChat(text, target) {
   const question = get('question');
   setChatBusy(true);
@@ -810,7 +810,7 @@ async function sendChat(text, target) {
 }
 
 // Before the formal answer (and memory retrieval) the input is checked for a
-// possible topic or workspace change. A 'continue' judgment sends directly;
+// possible topic or project change. A 'continue' judgment sends directly;
 // anything else holds the input and shows the prompt card. If the check
 // fails, the original input goes through as a normal message and the manual
 // switch entry stays available.
@@ -853,17 +853,17 @@ function showSwitchCard(text, intent) {
   const note = element('p', '', 'switch-card-note');
   const actions = element('div', '', 'switch-card-actions');
   if (intent.action === 'switch') {
-    title.textContent = t('检测到跨工作区切换');
-    detail.textContent = t('当前工作区：') + name(currentName) + ' → ' + t('目标工作区：') + name(intent.workspace);
-    note.textContent = t('确认后将在 {ws} 开新对话，读取 {ws} 的资料和全局记忆。').replaceAll('{ws}', name(intent.workspace));
+    title.textContent = t('检测到跨项目切换');
+    detail.textContent = t('当前项目：') + name(currentName) + ' → ' + t('目标项目：') + name(intent.workspace);
+    note.textContent = t('确认后将在 {ws} 开新会话，读取 {ws} 的资料和全局记忆。').replaceAll('{ws}', name(intent.workspace));
   } else if (intent.action === 'new') {
-    title.textContent = t('检测到同工作区的新任务');
-    detail.textContent = t('当前工作区：') + name(currentName);
-    note.textContent = t('确认后在当前工作区开新对话；原对话仍可访问，新对话仍读取该工作区的长期记忆。');
+    title.textContent = t('检测到同项目的新任务');
+    detail.textContent = t('当前项目：') + name(currentName);
+    note.textContent = t('确认后在当前项目开新会话；原会话仍可访问，新会话仍读取该项目的长期记忆。');
   } else {
-    title.textContent = t('跨工作区请求');
+    title.textContent = t('跨项目请求');
     detail.textContent = t('这条输入同时涉及：') + (intent.involved.length ? intent.involved.map(name).join('、') : currentName);
-    note.textContent = t('现在发送只会读取当前工作区的资料；如需其他工作区的资料，请先手动切换。');
+    note.textContent = t('现在发送只会读取当前项目的资料；如需其他项目的资料，请先手动切换。');
   }
   const sendAs = target => async () => {
     heldSwitch = null;
@@ -871,13 +871,13 @@ function showSwitchCard(text, intent) {
     await sendChat(text, target);
   };
   if (intent.action === 'switch') {
-    actions.append(action(t('切换到 {ws} 并开新对话').replaceAll('{ws}', name(intent.workspace)), sendAs({ project: intent.workspace }), false));
-    actions.append(action(t('继续当前对话'), sendAs(null)));
+    actions.append(action(t('切换到 {ws} 并开新会话').replaceAll('{ws}', name(intent.workspace)), sendAs({ project: intent.workspace }), false));
+    actions.append(action(t('继续当前会话'), sendAs(null)));
   } else if (intent.action === 'new') {
-    actions.append(action(t('在 {ws} 开新对话').replaceAll('{ws}', name(currentName)), sendAs({ project: activeChatProject() }), false));
-    actions.append(action(t('继续当前对话'), sendAs(null)));
+    actions.append(action(t('在 {ws} 开新会话').replaceAll('{ws}', name(currentName)), sendAs({ project: activeChatProject() }), false));
+    actions.append(action(t('继续当前会话'), sendAs(null)));
   } else {
-    actions.append(action(t('在当前工作区继续'), sendAs(null), false));
+    actions.append(action(t('在当前项目继续'), sendAs(null), false));
   }
   actions.append(action(t('取消'), () => { heldSwitch = null; hideSwitchCard(); get('question').focus(); }, false));
   card.append(title, detail, note, actions);
@@ -965,58 +965,81 @@ get('chat-search').addEventListener('input', event => {
 get('chat-search').addEventListener('keydown', event => {
   if (event.key === 'Escape') closeSearch();
 });
-// The sidebar shows workspaces first, each keeping its independent chats;
-// ungrouped chats stay accessible as their own entry. Workspaces that only
-// hold memory so far are listed too, so they can be entered (and opened with
-// a new chat) before any conversation exists there.
+// Project names known to the workbench: conversation projects plus any
+// memory-only scopes, so a project can be opened before it has a session.
+function projectNames() {
+  const names = new Set((current?.workspaces ?? []).filter(Boolean));
+  for (const chat of current?.conversations ?? []) {
+    const name = (chat.project ?? '').trim();
+    if (name) names.add(name);
+  }
+  return [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+}
+
+// Collapsed project groups persist for the session.
+const collapsedProjects = new Set();
+
+// Sessions are grouped by project. A project header opens its latest session
+// (or starts one), the caret folds the group, and + starts a session there.
 function renderChatHistory() {
   const list = get('chat-list');
   list.replaceChildren();
   const chats = [...(current?.conversations ?? [])].sort((a, b) => b.id - a.id)
     .filter(chat => !chatFilter || chat.title.toLowerCase().includes(chatFilter));
-  if (!chats.length) {
-    list.append(element('p', t(chatFilter ? '没有找到相关对话。' : '还没有对话。发消息或点「新对话」开始。'), 'muted'));
+  if (!chats.length && !projectNames().length) {
+    list.append(element('p', t(chatFilter ? '没有找到相关会话。' : '还没有会话。发消息或点「新建会话」开始。'), 'muted'));
     return;
   }
-  const byWorkspace = new Map();
+  const byProject = new Map();
   for (const chat of chats) {
     const name = (chat.project ?? '').trim();
-    if (!byWorkspace.has(name)) byWorkspace.set(name, []);
-    byWorkspace.get(name).push(chat);
+    if (!byProject.has(name)) byProject.set(name, []);
+    byProject.get(name).push(chat);
   }
-  const named = [...byWorkspace.entries()].filter(([name]) => name);
-  named.sort((a, b) => b[1].reduce((m, c) => Math.max(m, c.id), 0) - a[1].reduce((m, c) => Math.max(m, c.id), 0));
-  const memoryOnly = (current?.workspaces ?? []).filter(name => !byWorkspace.has(name));
+  const named = projectNames().map(name => [name, byProject.get(name) ?? []]);
+  // While searching, only keep groups that actually contain a match.
   const groups = [
-    ...named,
-    ...memoryOnly.map(name => [name, []]),
-    ...(byWorkspace.has('') ? [['', byWorkspace.get('')]] : []),
+    ...(chatFilter ? named.filter(([, items]) => items.length) : named),
+    ...(byProject.has('') ? [['', byProject.get('')]] : []),
   ];
-  for (const [name, items] of groups) list.append(workspaceGroupRow(name, items));
+  for (const [name, items] of groups) list.append(projectGroupRow(name, items));
+  if (chatFilter && !chats.length) list.append(element('p', t('没有找到相关会话。'), 'muted'));
 }
 
-function workspaceGroupRow(name, chats) {
-  const group = element('div', '', 'chat-workspace');
-  const head = element('div', '', 'chat-workspace-head');
-  const label = element('button', name || t('未分组'), 'chat-workspace-name');
+function projectGroupRow(name, chats) {
+  const group = element('div', '', 'chat-project');
+  const head = element('div', '', 'chat-project-head');
+  const collapsed = collapsedProjects.has(name);
+  const caret = element('button', '', 'chat-project-caret' + (collapsed ? ' closed' : ''));
+  caret.type = 'button';
+  caret.setAttribute('aria-expanded', String(!collapsed));
+  caret.setAttribute('aria-label', t('展开或收起'));
+  caret.textContent = '⌄';
+  caret.onclick = () => {
+    if (collapsedProjects.has(name)) collapsedProjects.delete(name);
+    else collapsedProjects.add(name);
+    renderChatHistory();
+  };
+  const label = element('button', name || t('未分组'), 'chat-project-name');
   label.type = 'button';
-  label.title = t('切换到这个工作区');
-  label.onclick = () => { showView('chat'); switchToWorkspace(name); };
-  const add = element('button', '+', 'chat-workspace-add');
+  label.title = t('切换到项目');
+  label.onclick = () => { showView('chat'); openProject(name); };
+  const add = element('button', '+', 'chat-project-add');
   add.type = 'button';
-  add.title = t('在此工作区新建对话');
-  add.setAttribute('aria-label', t('在此工作区新建对话'));
+  add.title = t('在此项目新建会话');
+  add.setAttribute('aria-label', t('在此项目新建会话'));
   add.onclick = () => withButton(add, () => newChatIn(name));
-  head.append(label, add);
-  const body = element('div', '', 'chat-workspace-chats');
+  head.append(caret, label, add);
+  const body = element('div', '', 'chat-project-chats');
+  body.hidden = collapsed;
+  if (!chats.length) body.append(element('p', t('还没有会话。'), 'muted chat-project-empty'));
   for (const chat of chats) body.append(chatRow(chat));
   group.append(head, body);
   return group;
 }
 
-// Manual workspace switch: open the most recent chat of that workspace, or
-// create the first conversation there when none exists yet.
-function switchToWorkspace(name) {
+// Open a project: its most recent session, or start the first one.
+function openProject(name) {
   const chats = (current?.conversations ?? [])
     .filter(chat => (chat.project ?? '').trim() === name)
     .sort((a, b) => b.id - a.id);
@@ -1024,12 +1047,50 @@ function switchToWorkspace(name) {
   else newChatIn(name);
 }
 
-// Chat header: which workspace the active chat belongs to, plus the manual
-// switcher. The input itself is never changed by switching.
-function renderWorkspaceBar() {
-  const bar = get('workspace-bar');
-  const select = get('workspace-select');
-  const names = [...(current?.workspaces ?? [])];
+// Fill each contextual sidebar section with live content, so switching the
+// rail changes the list, not just the highlighted icon.
+function renderSidebarContext() {
+  const leads = get('lead-nav');
+  const recent = [...(current?.opportunities ?? [])].sort((a, b) => b.id - a.id).slice(0, 6);
+  leads.replaceChildren(...(recent.length
+    ? recent.map(item => {
+      const button = element('button', item.title, 'sidebar-item');
+      button.type = 'button';
+      button.title = item.title;
+      button.onclick = () => navigateView('opportunities');
+      return button;
+    })
+    : [element('p', t('还没有线索。'), 'sidebar-empty')]));
+
+  const plan = get('plan-nav');
+  const upcoming = [...(current?.tasks ?? [])]
+    .filter(task => !task.done && task.starts)
+    .sort((a, b) => a.starts.localeCompare(b.starts))
+    .slice(0, 6);
+  plan.replaceChildren(...(upcoming.length
+    ? upcoming.map(task => {
+      const button = element('button', task.title, 'sidebar-item');
+      button.type = 'button';
+      button.title = task.title;
+      button.onclick = () => navigateView('tasks');
+      return button;
+    })
+    : [element('p', t('还没有待办。'), 'sidebar-empty')]));
+
+  const summary = get('record-summary');
+  const sources = (current?.memory ?? []).length;
+  const records = (current?.opportunities ?? []).length;
+  summary.replaceChildren(
+    element('p', t('来源') + ' · ' + sources, 'sidebar-item'),
+    element('p', t('线索') + ' · ' + records, 'sidebar-item'),
+  );
+}
+
+// The bar under the chat header moves the current session to another project.
+function renderThreadBar() {
+  const bar = get('thread-bar');
+  const select = get('thread-project');
+  const names = projectNames();
   select.replaceChildren(
     ...names.map(name => {
       const option = element('option', name);
@@ -1040,11 +1101,21 @@ function renderWorkspaceBar() {
   const ungrouped = element('option', t('未分组'));
   ungrouped.value = '';
   select.append(ungrouped);
-  const project = activeChatProject();
-  select.value = names.includes(project) ? project : '';
-  bar.hidden = !(view === 'chat' && (activeChat != null || names.length));
+  select.value = activeChatProject();
+  bar.hidden = !(view === 'chat' && activeChat != null);
 }
-get('workspace-select').onchange = () => switchToWorkspace(get('workspace-select').value);
+get('thread-project').onchange = async () => {
+  if (activeChat == null) return;
+  await request('conversation-edit', { id: activeChat, project: get('thread-project').value });
+};
+
+// Starting a project means opening the first session inside it: projects are
+// defined by their sessions (plus any memory scope already saved to them).
+get('new-project').onclick = () => {
+  const name = (window.prompt(t('项目名称')) ?? '').trim();
+  if (!name) return;
+  newChatIn(name);
+};
 
 function chatRow(chat) {
   const row = element('div', '', 'chat-row' + (chat.id === activeChat ? ' current' : ''));
@@ -1053,6 +1124,12 @@ function chatRow(chat) {
   title.title = chat.title;
   title.onclick = () => { navigateView('chat'); setActiveChat(chat.id); closeSearch(); };
   const tools = element('div', '', 'chat-row-tools');
+  const move = element('button', '', 'chat-row-tool');
+  move.type = 'button';
+  move.title = t('移入项目');
+  move.setAttribute('aria-label', t('移入项目'));
+  move.innerHTML = ICONS.folder;
+  move.onclick = () => startMove(chat, row);
   const rename = element('button', '', 'chat-row-tool');
   rename.type = 'button';
   rename.title = t('重命名');
@@ -1061,22 +1138,22 @@ function chatRow(chat) {
   rename.onclick = () => startRename(chat, row, title);
   const merge = element('button', '⇥', 'chat-row-tool');
   merge.type = 'button';
-  merge.title = t('并入当前对话');
-  merge.setAttribute('aria-label', t('并入当前对话'));
+  merge.title = t('并入当前会话');
+  merge.setAttribute('aria-label', t('并入当前会话'));
   merge.hidden = chat.id === activeChat;
   merge.onclick = () => withButton(merge, async () => {
     if (activeChat == null || chat.id === activeChat) return;
-    if (!window.confirm(t('把这个对话并入当前对话？消息和记忆都会一起跟过去。'))) return;
+    if (!window.confirm(t('把这个会话并入当前会话？消息和记忆都会一起跟过去。'))) return;
     await request('conversation-merge', { id: chat.id, target: activeChat });
     renderChatHistory();
   });
   const remove = element('button', '', 'chat-row-tool');
   remove.type = 'button';
-  remove.title = t('删除对话');
-  remove.setAttribute('aria-label', t('删除对话'));
+  remove.title = t('删除会话');
+  remove.setAttribute('aria-label', t('删除会话'));
   remove.innerHTML = ICONS.close;
   remove.onclick = () => withButton(remove, async () => {
-    if (!window.confirm(t('删除这个对话？对话里的消息和由对话保存的记忆会一起删除。'))) return;
+    if (!window.confirm(t('删除这个会话？会话里的消息和由会话保存的记忆会一起删除。'))) return;
     await request('conversation-delete', { id: chat.id });
     if (activeChat === chat.id) {
       const chats = current.conversations ?? [];
@@ -1085,17 +1162,59 @@ function chatRow(chat) {
     localStorage.setItem('daymark-chat', activeChat);
     renderChatHistory();
   });
-  tools.append(rename, merge, remove);
-  const project = element('input', '', 'chat-row-project');
-  project.value = chat.project;
-  project.placeholder = t('未分组');
-  project.maxLength = 40;
-  project.setAttribute('aria-label', t('项目'));
-  project.onchange = () => {
-    if (project.value.trim() !== chat.project) request('conversation-edit', { id: chat.id, project: project.value.trim() });
-  };
-  row.append(title, tools, project);
+  tools.append(move, rename, merge, remove);
+  row.append(title, tools);
   return row;
+}
+
+// Inline project picker: the folder tool on a session row opens a select in
+// place so the session can be moved without leaving the list.
+function startMove(chat, row) {
+  if (row.querySelector('.chat-row-move')) return;
+  const select = element('select', '', 'chat-row-move');
+  select.setAttribute('aria-label', t('移入项目'));
+  const ungrouped = element('option', t('未分组'));
+  ungrouped.value = '';
+  select.append(ungrouped);
+  const names = projectNames();
+  const own = (chat.project ?? '').trim();
+  if (own && !names.includes(own)) names.push(own);
+  for (const name of names) {
+    const option = element('option', name);
+    option.value = name;
+    select.append(option);
+  }
+  const create = element('option', t('新建项目…'));
+  create.value = '__new__';
+  select.append(create);
+  select.value = (chat.project ?? '').trim();
+  row.append(select);
+  select.focus();
+  let finished = false;
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    select.remove();
+  };
+  select.onchange = async () => {
+    let target = select.value;
+    if (target === '__new__') {
+      target = (window.prompt(t('项目名称')) ?? '').trim();
+      if (!target) { finish(); return; }
+    }
+    finish();
+    if (target !== (chat.project ?? '').trim()) {
+      await request('conversation-edit', { id: chat.id, project: target });
+    }
+  };
+  select.onblur = finish;
+  select.onkeydown = event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      select.onblur = null;
+      finish();
+    }
+  };
 }
 
 function startRename(chat, row, titleButton) {
@@ -1103,7 +1222,7 @@ function startRename(chat, row, titleButton) {
   const input = element('input', '', 'chat-row-name');
   input.value = chat.title;
   input.maxLength = 60;
-  input.setAttribute('aria-label', t('重命名对话'));
+  input.setAttribute('aria-label', t('重命名会话'));
   titleButton.replaceWith(input);
   input.focus();
   input.select();
@@ -1180,7 +1299,7 @@ function renderProposal(parent, message) {
   card.append(element('p', t('已确认的规则在你明确接受前仍然有效。'), 'meta-note'));
   card.append(action(t('保存为未确认提议'), async () => {
     await request('memory', { kind: 'proposal', scope: project, body: proposal.body,
-      source: t('项目对话') + ' #' + message.id, message_id: proposal.message_id ?? null });
+      source: t('项目会话') + ' #' + message.id, message_id: proposal.message_id ?? null });
     showNotice(t('已保存为未确认提议'));
   }));
   parent.append(card);
@@ -1208,7 +1327,7 @@ function renderCandidatePanel(result) {
       ' · ' + t('来源消息') + ' · ' + (item.message_id != null ? '#' + item.message_id : t('来源未定'))));
     row.append(action(t(item.kind === 'proposal' ? '保存为未确认提议' : '确认保存'), () => startMemorySave({
       kind: item.kind, scope: item.scope, body: item.content,
-      source: item.message_id != null ? t('项目对话') + ' #' + item.message_id : t('对话提取'),
+      source: item.message_id != null ? t('项目会话') + ' #' + item.message_id : t('会话提取'),
       message_id: item.message_id,
     })));
     box.append(row);
