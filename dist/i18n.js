@@ -433,7 +433,20 @@ const english = {
   // 声明提取覆盖边界（claim-coverage）新增键：同样只追加在末尾。
   "本次核查范围": "Verification scope",
   "未提取到声明": "No claims extracted",
-  "本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。": "No claims were extracted, so this verification covered nothing and cannot count as passed."
+  "本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。": "No claims were extracted, so this verification covered nothing and cannot count as passed.",
+  // 待办操作留痕与回执（audit 分支）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "待办操作记录": "Task activity log",
+  "创建": "Created",
+  "修改": "Updated",
+  "删除": "Deleted",
+  "原时间": "Original time",
+  "新时间": "New time",
+  "结果": "Result",
+  "关联来源": "Linked source",
+  "经决策卡": "Via decision card",
+  "消息": "Message",
+  "查看待办": "View task"
 };
 
 export function translate(language, phrase) {

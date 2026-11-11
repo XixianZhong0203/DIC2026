@@ -2,7 +2,7 @@
 // hits a conflict or an information gap. Follows the Shanghai-RITS pattern:
 // a structured payload (review.decision), an interactive card, and the
 // choice returned to the conversation through POST /api/decision.
-export function createDecisionUI({ t, element, action, request, fetchResult, language, openSources, copyText, fillComposer, jumpToCalendar }) {
+export function createDecisionUI({ t, element, action, request, fetchResult, language, openSources, copyText, fillComposer, jumpToCalendar, jumpToTask }) {
   const kindLabels = { reschedule: '确认改期', preference: '长期偏好冲突', clarify: '证据不足 · 待确认' };
   const recordLabels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议', source: '原始资料', task: '日历' };
 
@@ -148,6 +148,13 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
     }
     if (decision.choice?.receipt) {
       actions.append(element('p', (applied ? '✓ ' : '× ') + decision.choice.receipt, applied ? 'decision-ok' : 'decision-err'));
+    }
+    // 已确认的改期：从回执直接找到对应待办（原时间见卡片「当前已确认」与回执）。
+    if (applied && jumpToTask) {
+      const chosen = (decision.options ?? []).find(item => item.id === decision.choice?.option_id);
+      if (chosen?.effect?.kind === 'task' && chosen.effect.payload?.id != null) {
+        actions.append(action(t('查看待办'), () => jumpToTask(chosen.effect.payload.id)));
+      }
     }
     section.append(actions);
     parent.append(section);

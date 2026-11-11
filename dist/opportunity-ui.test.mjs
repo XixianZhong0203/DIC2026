@@ -43,7 +43,16 @@ function harness() {
     render({ opportunities: [entry], delegation: {}, audit: [] });
     return elements.get('opportunity-list').children.at(-1);
   };
-  return { renderOne, requests, reviewButton, reviewTextarea, submitReview, fullText };
+  return { render, nodes, renderOne, requests, reviewButton, reviewTextarea, submitReview, fullText };
+}
+
+function find(nodes, predicate) {
+  for (const node of nodes) {
+    if (predicate(node)) return node;
+    const hit = find(node.children ?? [], predicate);
+    if (hit) return hit;
+  }
+  return null;
 }
 
 const analysis = (status, analysisId) => JSON.stringify({
@@ -199,4 +208,23 @@ test('the current status shows an expired review instead of awaiting approval', 
   const text = fullText(card);
   assert.ok(text.includes('复核已过期 · 来源变了'), 'approval status reflects the expired review');
   assert.ok(!text.includes('待批准'), 'an expired review does not show as awaiting approval');
+});
+
+test('a blocked send shows the block reason in the draft editor while the draft stays', () => {
+  const { render, nodes } = harness();
+  render({
+    opportunities: [item({
+      draft_id: 'd2', recipient: 'client@example.test', body: '第二版草稿（未核查）。',
+    })], delegation: {},
+    audit: [
+      { id: 9, opportunity: 'o1', action: 'blocked', time: '2026-11-11T09:00:00.000Z',
+        detail: JSON.stringify({ action: 'send', reason: 'claims_not_verified' }) },
+      { id: 8, opportunity: 'o1', action: 'drafted', time: '2026-11-11T08:59:00.000Z',
+        detail: JSON.stringify({ draftId: 'd2', recipient: 'client@example.test' }) },
+    ],
+  });
+  const blocked = find(nodes, node => node.tag === 'p' && String(node.text).startsWith('操作被拦截 · 草稿声明尚未核查'));
+  assert.ok(blocked, 'the draft editor shows the latest block reason on the spot');
+  const draftBody = find(nodes, node => node.tag === 'textarea' && node.value === '第二版草稿（未核查）。');
+  assert.ok(draftBody, 'the draft content is still present for editing');
 });

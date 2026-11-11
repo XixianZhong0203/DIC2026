@@ -197,8 +197,22 @@ async function fetchResult(path, body) {
 }
 
 async function request(path, body) {
-  const data = await fetchResult(path, body);
-  current = { ...data, tasks: data.tasks ?? [] };
+  try {
+    const data = await fetchResult(path, body);
+    current = { ...data, tasks: data.tasks ?? [] };
+  } catch (error) {
+    // 失败请求也可能留下记录（发送拦截、重复 409）：拉回最新状态，
+    // 让活动记录当场刷新，再把错误交给按钮处理器显示拦截原因。
+    try {
+      const state = await fetchResult('state');
+      current = { ...state, tasks: state.tasks ?? [] };
+    } catch {
+      // 连不上服务时保留原始错误
+    }
+    reconcileChat();
+    render();
+    throw error;
+  }
   reconcileChat();
   render();
 }
@@ -571,6 +585,7 @@ function showDateHints() {
 
 function taskCard(task) {
   const card = element('article', '', 'entry task-entry');
+  card.id = 'task-card-' + task.id;
   const duration = task.all_day
     ? t('全天') + ' · ' + task.starts.slice(0, 10) + ' → ' + task.ends.slice(0, 10)
     : task.starts.replace('T', ' ') + ' → ' + task.ends.replace('T', ' ');
@@ -637,6 +652,42 @@ function renderCalendar() {
   );
 }
 
+// 待办操作留痕：时间、对象、改动前后、关联来源，以及经决策卡触发的选择。
+// 复用现有活动记录的展示样式（details + summary + 明细行）。
+const taskAuditActionLabels = { created: '创建', updated: '修改', done: '标记完成', reopened: '重新打开', deleted: '删除' };
+const taskAuditFieldLabels = { title: '事项', location: '地点', notes: '备注' };
+const taskAuditTime = value => String(value).replace('T', ' ');
+function taskAuditRow(event) {
+  const detail = JSON.parse(event.detail);
+  const before = detail.before ?? null;
+  const after = detail.after ?? null;
+  const row = element('details', '');
+  row.append(element('summary',
+    t(taskAuditActionLabels[event.action] ?? event.action) + ' · #' + event.task + ' ' +
+    t(after?.title ?? before?.title ?? '') + ' · ' + new Date(event.time).toLocaleString(language)));
+  if (before?.starts && after?.starts && (before.starts !== after.starts || before.ends !== after.ends)) {
+    row.append(element('p', t('原时间') + ' · ' + taskAuditTime(before.starts) + ' → ' + taskAuditTime(before.ends), 'muted'));
+    row.append(element('p', t('新时间') + ' · ' + taskAuditTime(after.starts) + ' → ' + taskAuditTime(after.ends), 'muted'));
+  }
+  if (event.action === 'created' && after?.starts) {
+    row.append(element('p', t('新时间') + ' · ' + taskAuditTime(after.starts) + ' → ' + taskAuditTime(after.ends), 'muted'));
+  }
+  for (const key of ['title', 'location', 'notes']) {
+    if (before?.[key] != null && after?.[key] != null && before[key] !== after[key]) {
+      row.append(element('p', t(taskAuditFieldLabels[key]) + ' · ' + before[key] + ' → ' + after[key], 'muted'));
+    }
+  }
+  if (event.action === 'done' || event.action === 'reopened') {
+    row.append(element('p', t('结果') + ' · ' + t(after?.done ? '已完成' : '待处理'), 'muted'));
+  }
+  row.append(element('p', detail.source != null ? t('关联来源') + ' · #' + detail.source : t('不关联记录'), 'muted'));
+  if (detail.via?.decision) {
+    row.append(element('p', t('经决策卡') + ' · ' + t('消息') + ' #' + detail.via.decision +
+      (detail.via.option_label ? ' · ' + detail.via.option_label : ''), 'muted'));
+  }
+  return row;
+}
+
 function renderPlanner() {
   const source = get('task-source');
   const selection = source.value;
@@ -665,6 +716,7 @@ function renderPlanner() {
     }));
     return card;
   }));
+  get('task-audit').replaceChildren(...(current.taskAudit ?? []).map(taskAuditRow));
   renderCalendar();
 }
 
@@ -1169,6 +1221,16 @@ const renderDecision = createDecisionUI({
     selectedDay = { key: dateKey, next: dateKey(next.getFullYear(), next.getMonth(), next.getDate()) };
     navigateView('calendar');
     renderCalendar();
+  },
+  // 决策卡回执「查看待办」：跳到待办列表并高亮对应事件。
+  jumpToTask: taskId => {
+    showView('tasks');
+    const card = get('task-card-' + taskId);
+    if (card) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.classList.add('task-flash');
+      setTimeout(() => card.classList.remove('task-flash'), 1800);
+    }
   },
 });
 applyLanguage();
