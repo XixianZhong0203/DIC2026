@@ -238,6 +238,23 @@ async function request(path, body) {
   render();
 }
 
+// 人工复核来源记录：展开来源原文时，服务端记下查看动作（来源 ID 属于当前线索，带时间戳进审计）。
+// 静默更新状态、不整页重渲染：创始人正在读的展开原文不会被收起。失败时提示并拉回最新状态。
+async function viewSource(id, sourceId) {
+  try {
+    const data = await fetchResult('opportunity-review-view', { id, source_id: sourceId });
+    current = { ...data, tasks: data.tasks ?? [] };
+  } catch (error) {
+    showNotice(error.message);
+    try {
+      const state = await fetchResult('state');
+      current = { ...state, tasks: state.tasks ?? [] };
+    } catch {
+      // 连不上服务时保留原始提示
+    }
+  }
+}
+
 let visibleEvidence = null;
 // Panels are shown non-modally (show, not showModal): the page behind them
 // stays fully interactive, so an open panel can never make the rest of the
@@ -1501,7 +1518,7 @@ get('language').onchange = event => {
   localStorage.setItem('daymark-language', language);
   applyLanguage();
 };
-const renderOpportunities = createOpportunityUI({ get, t, element, action, request, formAction, language: () => language,
+const renderOpportunities = createOpportunityUI({ get, t, element, action, request, formAction, language: () => language, viewSource,
   async createTask(item) {
     await request('memory', { kind: 'source', scope: 'DIC2026', source: item.source, body: item.evidence });
     const record = current.memory.find(row => row.kind === 'source' && row.source === item.source && row.body === item.evidence);

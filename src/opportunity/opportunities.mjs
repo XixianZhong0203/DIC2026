@@ -1,6 +1,11 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaims, verifyClaims, evidenceHash, sha256 } from './claims.mjs';
 
+// 代码归属（窗口对齐）：人工复核来源记录窗口负责 review_viewed 列、/api/opportunity-review-view、
+// reviewSourceIndex/currentViewed、human_reviewed 审计中的 viewed/viewedNames 与 state().reviewViewed。
+// 发送门槛由窗口 1 负责：/api/opportunity-send 只读取 review/review_draft/review_evidence/claims_review，
+// 不读 review_viewed——来源查看记录是审计凭证，不是放行条件。
+
 const modes = ['auto', 'draft', 'approval', 'human'];
 const scenarios = [
   { id: 'neutral', request: 'Does this prospect have confirmed intent to buy?', evidence: 'E1: The prospect posted a request for portfolio examples. There is no purchase commitment.', expected: 'unknown' },
@@ -45,6 +50,10 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   }
   if (!opportunityColumns.some(column => column.name === 'review_evidence')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review_evidence TEXT');
+  }
+  // 人工复核的查看状态（JSON：{draftId, evidence, viewed: [来源 ID]}），绑定当前草稿 + 当前来源集合。
+  if (!opportunityColumns.some(column => column.name === 'review_viewed')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN review_viewed TEXT');
   }
   const get = id => db.prepare('SELECT * FROM opportunities WHERE id=?').get(required(id, 100)) ?? fail(404, '找不到此机会。');
   const mode = action => db.prepare('SELECT mode FROM delegation WHERE action=?').get(action)?.mode;
@@ -109,6 +118,24 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     else if (item.review_evidence !== evidenceHash(item, sourceRows)) reasons.push('source_changed');
     return reasons.length ? reasons : null;
   };
+  // 人工复核的查看状态：创始人在核查区展开过哪些来源原文。E1 = 线索证据原文，S<id> = 逐条添加的来源。
+  // 与复核结论共用同一套绑定检查：查看状态绑定 (draft_id, 来源集合哈希)，草稿或来源集合变化后
+  // 视为空——旧复核与旧查看记录留在审计历史里，新复核从新的查看状态开始。
+  // 保存复核时以此为准：来源 ID 逐条校验属于当前线索，不接收客户端自报的列表。
+  const reviewSourceIndex = (item, sourceRows) => {
+    const index = new Map([['E1', { id: 'E1', name: item.source, kind: 'evidence' }]]);
+    for (const row of sourceRows) index.set('S' + row.id, { id: 'S' + row.id, name: row.name, kind: row.kind });
+    return index;
+  };
+  const currentViewed = (item, sourceRows) => {
+    const evidence = evidenceHash(item, sourceRows);
+    const stored = safeParse(item.review_viewed);
+    const index = reviewSourceIndex(item, sourceRows);
+    const current = stored && Array.isArray(stored.viewed) &&
+      stored.draftId === (item.draft_id ?? null) && stored.evidence === evidence;
+    return { draftId: item.draft_id ?? null, evidence,
+      viewed: current ? [...new Set(stored.viewed)].filter(id => index.has(id)) : [] };
+  };
   // 模型请求或结构解析失败时不中断：存一份"未完成核查"的核查结果，界面显示原因并可重试。
   async function runClaimsReview(id, target, language) {
     const item = get(id);
@@ -171,7 +198,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           const sources = byOpportunity.get(item.id) ?? [];
           const claims = item.claims_review ? safeParse(item.claims_review) : null;
           return { ...item, sources, claims, claimsStale: claimsStale(item, claims, sources),
-            reviewStale: reviewStale(item, sources) };
+            reviewStale: reviewStale(item, sources), reviewViewed: currentViewed(item, sources) };
         });
       return {
         opportunities,
@@ -261,6 +288,23 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         }
         await runClaimsReview(id, target, language);
       },
+      // 人工复核来源记录：创始人在核查区展开某条来源原文时，服务端记下来源 ID（查看动作，带时间戳进审计）。
+      // 只接受属于当前线索的来源；查看状态绑定当前草稿 + 当前来源集合（currentViewed），
+      // 草稿或来源变化后自动从空开始。查看记录不是发送门槛，只随复核结论写入审计。
+      '/api/opportunity-review-view': ({ id, source_id }) => {
+        const item = get(id);
+        const sourceRows = sourcesFor(id);
+        const known = typeof source_id === 'string' ? reviewSourceIndex(item, sourceRows).get(source_id) : undefined;
+        if (!known) fail(400, '来源不属于当前线索，请刷新后重试。');
+        const viewed = currentViewed(item, sourceRows);
+        if (viewed.viewed.includes(source_id)) return; // 已记录过：不重复写入
+        transaction(() => {
+          db.prepare('UPDATE opportunities SET review_viewed=? WHERE id=?').run(
+            JSON.stringify({ draftId: viewed.draftId, evidence: viewed.evidence, viewed: [...viewed.viewed, source_id] }), id);
+          audit(id, 'review_source_viewed', { sourceId: source_id, name: known.name, kind: known.kind,
+            draftId: viewed.draftId, evidence: viewed.evidence });
+        });
+      },
       '/api/opportunity-review': ({ id, analysis_id, draft_id, resolution }) => {
         const item = get(id);
         const result = item.analysis && JSON.parse(item.analysis);
@@ -273,12 +317,21 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         if (draft_id != null && draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
         const review = required(resolution, 2000);
         // 复核同时绑定当前来源集合：保存后任何来源变化都会使该复核过期（reviewStale）。
-        const evidence = evidenceHash(item, sourcesFor(id));
+        const sourceRows = sourcesFor(id);
+        const evidence = evidenceHash(item, sourceRows);
+        // 已展开的来源取自服务端查看状态（currentViewed：绑定当前草稿 + 当前来源版本，
+        // 且来源 ID 逐条校验属于当前线索），不接收客户端自报的列表。
+        // 查看动作只是记录：创始人仍须写下自己的复核结论（resolution 必填）。
+        const viewed = currentViewed(item, sourceRows);
+        const index = reviewSourceIndex(item, sourceRows);
         transaction(() => {
           db.prepare('UPDATE opportunities SET review=?, review_draft=?, review_evidence=? WHERE id=?')
             .run(review, draft_id ?? null, evidence, id);
+          // 审计写入：已展开来源、草稿 ID、来源版本、复核结论。
           audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, draftId: draft_id ?? null,
-            evidence, resolution: review });
+            evidence, viewed: viewed.viewed,
+            viewedNames: viewed.viewed.map(sourceId => index.get(sourceId)?.name ?? sourceId),
+            resolution: review });
         });
       },
       '/api/opportunity-draft': ({ id, recipient, body }) => {

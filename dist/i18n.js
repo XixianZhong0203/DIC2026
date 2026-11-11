@@ -522,7 +522,14 @@ const english = {
   "本次例外写在会话里。长期变更请修订原记录，保留出处和适用范围。": "Keep one-time exceptions in the session. Revise the original record for lasting changes, with a source and scope.",
   "以下是可能受影响的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review potentially affected rules and preferences. Replace, keep both, or use the change in this session.",
   "仅用于本次会话": "Use once in this session",
-  "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once."
+  "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once.",
+  // 人工复核来源记录（review-source-record 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "已展开来源": "Sources opened",
+  "尚未展开来源": "No sources opened yet",
+  "展开来源原文": "Opened source original",
+  "展开来源原文会记录下来，保存复核时随结论写入审计。": "Opened sources are recorded; saving the review writes them to the audit with your conclusion.",
+  "来源不属于当前线索，请刷新后重试。": "The source does not belong to the current lead. Refresh and try again."
 };
 
 export function translate(language, phrase) {

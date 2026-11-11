@@ -375,3 +375,62 @@ test('a failed model run records the failed case without scoring it', async () =
   assert.equal(state().benchmark.results[0].statusMatched, null);
   assert.equal(state().benchmark.results[0].error, 'HTTP 401');
 });
+
+// 人工复核来源记录：展开来源原文时记下来源 ID；保存复核时把已展开来源、草稿 ID、
+// 来源版本与结论写入审计；草稿或来源变化后新复核从空的查看状态开始。
+test('a review audit records exactly the sources opened; stale views never carry into a new review', async () => {
+  const { call, state } = fixture(user => JSON.stringify({ status: 'supported' }));
+  const { id } = state().opportunities[0];
+  const lead = () => state().opportunities.find(row => row.id === id);
+  await call('opportunity-source', { id, name: '客户邮件', date: '2026-07-01', kind: 'customer', text: '客户确认周五交付。' });
+  await call('opportunity-source', { id, name: '创始人笔记', kind: 'founder', text: '创始人记得已向客户承诺周五。' });
+  // 尚未展开任何来源。
+  assert.equal(lead().reviewViewed.viewed.length, 0);
+  // 展开 S1 与 E1（不展开 S2）。
+  call('opportunity-review-view', { id, source_id: 'S1' });
+  call('opportunity-review-view', { id, source_id: 'E1' });
+  assert.deepEqual(lead().reviewViewed.viewed, ['S1', 'E1']);
+  // 重复展开不重复写入。
+  call('opportunity-review-view', { id, source_id: 'S1' });
+  assert.equal(state().audit.filter(event => event.action === 'review_source_viewed').length, 2);
+  // 不属于当前线索的来源被拒（本线索没有 S9；另一条线索的来源也不属于这条线索）。
+  assert.throws(() => call('opportunity-review-view', { id, source_id: 'S9' }), { status: 400 });
+  call('opportunity', { kind: 'lead', title: '另一条线索', source: '另一会话', evidence: '其他证据。' });
+  const otherId = state().opportunities[0].id;
+  await call('opportunity-source', { id: otherId, name: '另一来源', kind: 'customer', text: '其他原文。' });
+  const otherSourceId = 'S' + state().opportunities[0].sources[0].id;
+  assert.throws(() => call('opportunity-review-view', { id, source_id: otherSourceId }), { status: 400 });
+  // 保存复核：审计只包含已展开的来源，并带草稿 ID、来源版本与结论。
+  call('opportunity-review', { id, analysis_id: null, draft_id: null, resolution: '读了客户邮件与证据原文，日期仍未确认。' });
+  const detail = JSON.parse(state().audit.find(event => event.action === 'human_reviewed').detail);
+  assert.deepEqual(detail.viewed, ['S1', 'E1']);
+  assert.deepEqual(detail.viewedNames, ['客户邮件', 'Client thread']);
+  assert.equal(detail.draftId, null);
+  assert.equal(typeof detail.evidence, 'string');
+  assert.equal(detail.evidence.length, 64);
+  assert.equal(detail.resolution, '读了客户邮件与证据原文，日期仍未确认。');
+  // 更换草稿：查看状态从空开始，旧复核留在历史里。
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: 'We will deliver on Friday.' });
+  assert.deepEqual(lead().reviewViewed.viewed, []);
+  assert.deepEqual(lead().reviewStale, ['draft_changed']);
+  call('opportunity-review', { id, analysis_id: null, draft_id: lead().draft_id, resolution: '重新核对了新草稿。' });
+  let reviews = state().audit.filter(event => event.action === 'human_reviewed');
+  assert.equal(reviews.length, 2);
+  assert.deepEqual(JSON.parse(reviews[0].detail).viewed, [], 'the new review starts from a fresh viewing state');
+  assert.deepEqual(JSON.parse(reviews[1].detail).viewed, ['S1', 'E1'], 'the old review keeps its own record in history');
+  // 加入新来源：查看状态再次重置，旧查看记录不会出现在新复核上。
+  call('opportunity-review-view', { id, source_id: 'S1' });
+  await call('opportunity-source', { id, name: '客户撤回邮件', date: '2026-07-10', kind: 'customer', text: '客户撤回。' });
+  assert.deepEqual(lead().reviewViewed.viewed, []);
+  call('opportunity-review', { id, analysis_id: null, draft_id: lead().draft_id, resolution: '按新来源重新核对，未展开来源。' });
+  reviews = state().audit.filter(event => event.action === 'human_reviewed');
+  assert.deepEqual(JSON.parse(reviews[0].detail).viewed, [], 'no expanded sources under the new evidence set');
+  assert.deepEqual(JSON.parse(reviews[1].detail).viewed, [], 'the previous new-draft review is not reattributed');
+  // 在新绑定下展开 S1 再保存：新记录只包含本次展开。
+  call('opportunity-review-view', { id, source_id: 'S1' });
+  call('opportunity-review', { id, analysis_id: null, draft_id: lead().draft_id, resolution: '按新来源重新核对，已展开 S1 查看。' });
+  reviews = state().audit.filter(event => event.action === 'human_reviewed');
+  assert.deepEqual(JSON.parse(reviews[0].detail).viewed, ['S1']);
+  // 审计保留全部查看动作（S1、E1；更换草稿后 S1；加入新来源后 S1）。
+  assert.equal(state().audit.filter(event => event.action === 'review_source_viewed').length, 4);
+});

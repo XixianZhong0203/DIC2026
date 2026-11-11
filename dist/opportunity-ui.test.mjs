@@ -7,10 +7,15 @@ import { createOpportunityUI } from './opportunity-ui.js';
 function harness() {
   const nodes = [];
   const element = (tag, text = '') => {
-    const node = { tag, text, children: [],
+    const node = { tag, text, children: [], open: false, listeners: {},
+      get textContent() { return this.text; },
+      set textContent(value) { this.text = value; },
       append(...kids) { this.children.push(...kids); },
       replaceChildren(...kids) { this.children = [...kids]; },
       setAttribute(name, value) { this.attributes ??= {}; this.attributes[name] = value; },
+      addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); },
+      // 模拟浏览器 details 的 toggle 事件：展开/收起时触发已绑定的监听。
+      openToggle(open) { this.open = open; (this.listeners['toggle'] ?? []).forEach(fn => fn()); },
       reportValidity() { return true; },
     };
     nodes.push(node);
@@ -25,9 +30,11 @@ function harness() {
   const elements = new Map();
   const get = id => elements.get(id) ?? (elements.set(id, element('div', '')), elements.get(id));
   const requests = [];
+  const views = [];
   const render = createOpportunityUI({
     get, t: key => key, element, action,
     request: async (name, payload) => { requests.push({ name, payload }); },
+    viewSource: async (id, sourceId) => { views.push({ id, sourceId }); },
     formAction: () => {}, language: () => 'en', createTask: () => {},
   });
   const reviewButton = () => nodes.find(node => node.tag === 'button' && node.text === '保存核实结果');
@@ -43,7 +50,13 @@ function harness() {
     render({ opportunities: [entry], delegation: {}, audit: [] });
     return elements.get('opportunity-list').children.at(-1);
   };
-  return { render, nodes, renderOne, requests, reviewButton, reviewTextarea, submitReview, fullText };
+  // 按 summary 文案定位可展开的 details（来源原文块、冲突来源块）。
+  const detailsWith = summary => nodes.find(node =>
+    node.tag === 'details' && (node.children ?? [])[0]?.text === summary);
+  const auditPanel = () => elements.get('opportunity-audit');
+  const auditText = () => fullText(auditPanel());
+  return { render, nodes, renderOne, requests, views, reviewButton, reviewTextarea,
+    submitReview, fullText, detailsWith, auditPanel, auditText };
 }
 
 function find(nodes, predicate) {
@@ -63,9 +76,11 @@ const item = overrides => ({
   id: 'o1', kind: 'lead', title: '客户线索', source: '客户邮件', evidence: '客户表示希望周五交付。',
   analysis: null, review: null, review_draft: null, draft_id: null,
   recipient: null, body: null, sent: 0, sources: [], claims: null, claimsStale: null,
-  reviewStale: null,
+  reviewStale: null, reviewViewed: { draftId: null, evidence: '', viewed: [] },
   ...overrides,
 });
+const sourceRow = (id, name, kind = 'customer', date = null, text = '原文。') =>
+  ({ id, name, kind, date, text });
 
 test('the review form submits a conclusion bound to the current draft', () => {
   const { renderOne, requests, reviewButton, submitReview } = harness();
@@ -227,4 +242,128 @@ test('a blocked send shows the block reason in the draft editor while the draft 
   assert.ok(blocked, 'the draft editor shows the latest block reason on the spot');
   const draftBody = find(nodes, node => node.tag === 'textarea' && node.value === '第二版草稿（未核查）。');
   assert.ok(draftBody, 'the draft content is still present for editing');
+});
+
+// 人工复核来源记录：复核区显示「已展开哪些来源 / 尚未展开来源」，展开来源原文时
+// 记录来源 ID（服务端权威），草稿或来源变化后新复核从空的查看状态开始。
+
+test('the review area shows that no source has been opened yet', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    sources: [sourceRow(1, '客户邮件')],
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('尚未展开来源'), 'the review area names the empty viewing state');
+  assert.ok(text.includes('展开来源原文会记录下来，保存复核时随结论写入审计。'),
+    'the form explains that opened sources are recorded with the conclusion');
+});
+
+test('expanding a source records its ID and updates the review area live', () => {
+  const { renderOne, fullText, views, detailsWith } = harness();
+  const card = renderOne(item({
+    sources: [sourceRow(1, '客户邮件', 'customer', '2026-07-01', '客户确认周五交付。'),
+      sourceRow(2, '创始人笔记', 'founder', null, '创始人记得周五已答应客户。')],
+  }));
+  const s1 = detailsWith('客户记录 · 2026-07-01 · 客户邮件');
+  assert.ok(s1, 'the source details are expandable');
+  s1.openToggle(true);
+  assert.deepEqual(views, [{ id: 'o1', sourceId: 'S1' }], 'the view action is sent with the source ID');
+  assert.ok(fullText(card).includes('已展开来源 · 客户邮件'), 'the review area lists the opened source');
+  assert.ok(!fullText(card).includes('尚未展开来源'), 'the empty-state label goes away once a source is opened');
+  // 引文摘录（不展示来源原文）不计为展开来源；重复展开不重复发送。
+  s1.openToggle(true);
+  assert.equal(views.length, 1);
+});
+
+test('the conflict source block also counts as opening that source', () => {
+  const { renderOne, fullText, views, detailsWith } = harness();
+  renderOne(item({
+    sources: [sourceRow(1, '客户邮件'), sourceRow(2, '撤回邮件', 'customer', '2026-07-10', '撤回此前承诺。')],
+    claims: { target: 'draft', at: '2026-07-10T00:00:00Z', error: null, draftId: 'd1',
+      recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
+      claims: [{ id: '对外承诺', dimension: '对外承诺', text: '我们保证周五交付', status: 'conflict',
+        items: [{ evidenceId: 'S1', stance: 'supports', quote: '确认', note: 'n', revises: [],
+          source: { id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: '确认周五。' }, valid: true, reasons: [] }],
+        missing: '', rewrite: '', withdrawn: false, failedChecks: [],
+        conflict: {
+          supports: [{ evidenceId: 'S1', stance: 'supports', quote: '确认', note: 'n', revises: [],
+            source: { id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: '确认周五。' }, valid: true, reasons: [] }],
+          opposes: [{ evidenceId: 'S2', stance: 'refutes', quote: '撤回', note: 'n', revises: [],
+            source: { id: 'S2', source: '撤回邮件', date: '2026-07-10', kind: 'customer', text: '撤回此前承诺。' }, valid: true, reasons: [] }],
+        } }] },
+  }));
+  const block = detailsWith('反驳 · 撤回邮件 · 2026-07-10');
+  assert.ok(block, 'the conflict entry shows the source original');
+  assert.ok(block.children.some(kid => kid.tag === 'p' && String(kid.text).includes('来源原文')));
+  block.openToggle(true);
+  assert.deepEqual(views, [{ id: 'o1', sourceId: 'S2' }]);
+});
+
+test('a viewing state from the server is restored after a re-render', () => {
+  const { renderOne, detailsWith, fullText } = harness();
+  const entry = () => item({
+    sources: [sourceRow(1, '客户邮件')],
+    reviewViewed: { draftId: 'd1', evidence: 'e1', viewed: ['S1'] },
+  });
+  renderOne(entry());
+  const first = detailsWith('客户记录 · 客户邮件');
+  assert.equal(first?.open, true, 'an already-opened source stays open across renders');
+  const card = renderOne(entry());
+  assert.ok(fullText(card).includes('已展开来源 · 客户邮件'), 'the opened source is still listed after a re-render');
+});
+
+test('a new draft starts a fresh viewing state; the old record stays in the audit', () => {
+  const { render, auditText } = harness();
+  render({
+    opportunities: [item({
+      draft_id: 'd1', sources: [sourceRow(1, '客户邮件')],
+      reviewViewed: { draftId: 'd1', evidence: 'e1', viewed: ['S1'] },
+    })], delegation: {},
+    audit: [{ id: 9, opportunity: 'o1', action: 'human_reviewed', time: '2026-11-11T09:00:00.000Z',
+      detail: JSON.stringify({ analysisId: null, draftId: 'd1', evidence: 'e1', viewed: ['S1'],
+        viewedNames: ['客户邮件'], resolution: '已核对。' }) }],
+  });
+  assert.ok(auditText().includes('已展开来源 · 客户邮件'), 'the audit names the sources the review had opened');
+  render({
+    opportunities: [item({
+      draft_id: 'd2', sources: [sourceRow(1, '客户邮件')],
+      reviewViewed: { draftId: 'd2', evidence: 'e2', viewed: [] },
+    })], delegation: {},
+    audit: [{ id: 10, opportunity: 'o1', action: 'human_reviewed', time: '2026-11-11T09:30:00.000Z',
+      detail: JSON.stringify({ analysisId: null, draftId: 'd2', evidence: 'e2', viewed: [],
+        viewedNames: [], resolution: '重新核对新草稿。' }) }],
+  });
+  assert.ok(auditText().includes('尚未展开来源'), 'the fresh review is shown without the stale viewing record');
+  assert.ok(!auditText().includes('已展开来源 · 客户邮件'), 'old opened sources are not carried into the new review');
+});
+
+test('the audit lists each opened-source action and a review with no opened sources', () => {
+  const { render, auditText, auditPanel } = harness();
+  render({
+    opportunities: [item({})], delegation: {},
+    audit: [
+      { id: 5, opportunity: 'o1', action: 'human_reviewed', time: '2026-11-11T09:30:00.000Z',
+        detail: JSON.stringify({ analysisId: null, draftId: 'd1', evidence: 'e1', viewed: [],
+          viewedNames: [], resolution: '未展开来源直接复核。' }) },
+      { id: 4, opportunity: 'o1', action: 'review_source_viewed', time: '2026-11-11T09:20:00.000Z',
+        detail: JSON.stringify({ sourceId: 'S1', name: '客户邮件', kind: 'customer', draftId: 'd1', evidence: 'e1' }) },
+      { id: 3, opportunity: 'o1', action: 'human_reviewed', time: '2026-11-11T09:00:00.000Z',
+        detail: JSON.stringify({ analysisId: null, draftId: 'd0', evidence: 'e0', viewed: ['S1', 'E1'],
+          viewedNames: ['客户邮件', '客户邮件'], resolution: '已展开 S1 与证据原文。' }) },
+      { id: 2, opportunity: 'o1', action: 'human_reviewed', time: '2026-11-11T08:00:00.000Z',
+        detail: JSON.stringify({ analysisId: null, draftId: 'd0', evidence: 'e0', resolution: '旧记录（无查看状态字段）。' }) },
+    ],
+  });
+  const text = auditText();
+  assert.ok(text.includes('尚未展开来源'), 'a review without opened sources says so');
+  assert.ok(text.includes('已展开来源 · 客户邮件、客户邮件'), 'a review lists the sources it had opened');
+  assert.ok(text.includes('展开来源原文 · 客户邮件'), 'each opened-source action is auditable');
+  // 功能上线前的旧记录没有 viewed 字段：只有一条（id 5）被标注「尚未展开来源」。
+  const emptyNotes = [];
+  const walk = node => {
+    if (node.tag === 'p' && node.text === '尚未展开来源') emptyNotes.push(node);
+    (node.children ?? []).forEach(walk);
+  };
+  (auditPanel().children ?? []).forEach(walk);
+  assert.equal(emptyNotes.length, 1, 'legacy review rows without a viewing state are not mislabeled');
 });
