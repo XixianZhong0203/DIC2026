@@ -78,11 +78,18 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     article.append(element('strong', (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文'))));
     article.append(element('small', t(claimStatusLabels[claim.status] ?? claim.status) +
       (claim.withdrawn ? ' · ' + t('该承诺已被撤回') : '')));
-    const cited = entry => details(t(stanceLabels[entry.stance] ?? entry.stance) +
-      ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : ''),
-      entry.quote + (entry.note ? '（' + entry.note + '）' : ''));
+    const cited = (entry, original) => {
+      const summary = t(stanceLabels[entry.stance] ?? entry.stance) +
+        ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : '');
+      if (!original) return details(summary, entry.quote + (entry.note ? '（' + entry.note + '）' : ''));
+      const block = element('details', '');
+      block.append(element('summary', summary),
+        element('p', entry.quote + (entry.note ? '（' + entry.note + '）' : '')));
+      if (entry.source.text) block.append(element('p', t('来源原文') + ' · ' + entry.source.text));
+      return block;
+    };
     if (claim.conflict) {
-      for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry));
+      for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry, true));
     } else {
       for (const entry of claim.items ?? []) if (entry.valid) article.append(cited(entry));
     }

@@ -60,16 +60,16 @@ test('citing a source that does not exist leaves the claim incomplete', () => {
   assert.ok(claim.failedChecks.some(check => check.reason === 'unknown_source'));
 });
 
-test('a newer explicit withdrawal supersedes an older promise by date and scope', () => {
+test('a newer record that explicitly withdraws the older record supersedes it', () => {
   const sources = [
     { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' },
-    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示暂不推进签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示撤回此前的签约意向。' },
   ];
   const [claim] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'refuted',
     items: [
       { evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '早前的意向' },
-      { evidenceId: 'S2', stance: 'withdraws', quote: '暂不推进签约', note: '后来的撤回' },
+      { evidenceId: 'S2', stance: 'withdraws', quote: '撤回此前的签约意向', note: '明确撤回早前的表态', revises: ['S1'] },
     ],
   }], sources);
   assert.equal(claim.status, 'refuted');
@@ -107,6 +107,154 @@ test('undated records cannot be ordered either, so the claim stays a conflict', 
     ],
   }], sources);
   assert.equal(claim.status, 'conflict');
+});
+
+test('a newer record that only contradicts, without an explicit revision, keeps the conflict with both originals', () => {
+  const sources = [
+    { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示暂不推进签约。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'conflict',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '早前的意向' },
+      { evidenceId: 'S2', stance: 'refutes', quote: '暂不推进签约', note: '后来的反驳，没有指明修订哪条' },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'conflict');
+  assert.equal(claim.conflict.supports.length, 1);
+  assert.equal(claim.conflict.opposes.length, 1);
+  assert.equal(claim.conflict.supports[0].source.text, '客户表示希望在本季度签约。');
+  assert.equal(claim.conflict.opposes[0].source.text, '客户表示暂不推进签约。');
+});
+
+test('a newer supporting record without an explicit revision does not settle an older refutation', () => {
+  const sources = [
+    { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示暂不推进签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示希望在下月签约。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'conflict',
+    items: [
+      { evidenceId: 'S1', stance: 'refutes', quote: '暂不推进签约', note: '早前的拒绝' },
+      { evidenceId: 'S2', stance: 'supports', quote: '希望在下月签约', note: '后来的意向，没有指明修订哪条' },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'conflict');
+});
+
+test('a newer record that explicitly changes the same commitment supersedes by revision, not by date alone', () => {
+  const sources = [
+    { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望下月签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示签约时间改为下季度，原计划作废。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'refuted',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '希望下月签约', note: '早前的时间承诺' },
+      { evidenceId: 'S2', stance: 'refutes', quote: '签约时间改为下季度，原计划作废', note: '明确修订了同一承诺', revises: ['S1'] },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'refuted');
+  assert.equal(claim.withdrawn, false);
+  assert.equal(claim.decisive.source.date, '2026-07-02');
+});
+
+test('a revision pointing at a record outside the claim cannot confirm supersession', () => {
+  const sources = [
+    { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示撤回某项早期表态。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'conflict',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '早前的意向' },
+      { evidenceId: 'S2', stance: 'withdraws', quote: '撤回某项早期表态', note: '撤回指向不明', revises: ['S9'] },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'conflict');
+});
+
+test('a revision that leaves an opposing record unrevised keeps the conflict', () => {
+  const sources = [
+    { id: 'S1', source: '6 月上旬邮件', date: '2026-06-10', kind: 'customer', text: '客户表示希望签约。' },
+    { id: 'S2', source: '6 月下旬邮件', date: '2026-06-18', kind: 'customer', text: '客户再次表示希望签约。' },
+    { id: 'S3', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示撤回 6 月上旬的签约意向。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'conflict',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '希望签约', note: '6 月上旬的意向' },
+      { evidenceId: 'S2', stance: 'supports', quote: '再次表示希望签约', note: '6 月下旬的意向' },
+      { evidenceId: 'S3', stance: 'withdraws', quote: '撤回 6 月上旬的签约意向', note: '只撤回了 6 月上旬那条', revises: ['S1'] },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'conflict');
+});
+
+test('an explicit revision cannot confirm supersession while a record is undated', () => {
+  const sources = [
+    { id: 'S1', source: '电话', date: null, kind: 'customer', text: '客户表示希望签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示撤回此前的签约意向。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'conflict',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '希望签约', note: '无日期的意向' },
+      { evidenceId: 'S2', stance: 'withdraws', quote: '撤回此前的签约意向', note: '明确撤回', revises: ['S1'] },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'conflict');
+});
+
+test('a tied latest date cannot be ordered, so an explicit revision does not settle the claim', () => {
+  const sources = [
+    { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望签约。' },
+    { id: 'S2', source: '7 月电话', date: '2026-07-06', kind: 'customer', text: '客户表示撤回此前的签约意向。' },
+    { id: 'S3', source: '7 月邮件', date: '2026-07-06', kind: 'customer', text: '客户表示暂不推进签约。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'conflict',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '希望签约', note: '早前的意向' },
+      { evidenceId: 'S2', stance: 'withdraws', quote: '撤回此前的签约意向', note: '同日记录一', revises: ['S1'] },
+      { evidenceId: 'S3', stance: 'refutes', quote: '暂不推进签约', note: '同日记录二' },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'conflict');
+});
+
+test('a newer explicit revision that supports the claim restores support', () => {
+  const sources = [
+    { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示暂不推进签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示恢复签约计划，此前的暂缓不再执行。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'supported',
+    items: [
+      { evidenceId: 'S1', stance: 'refutes', quote: '暂不推进签约', note: '早前的拒绝' },
+      { evidenceId: 'S2', stance: 'supports', quote: '恢复签约计划，此前的暂缓不再执行', note: '明确修订了早前的拒绝', revises: ['S1'] },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'supported');
+  assert.equal(claim.withdrawn, false);
+  assert.equal(claim.decisive.source.date, '2026-07-02');
+});
+
+test('a string revises value is normalized and still confirms supersession', () => {
+  const sources = [
+    { id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' },
+    { id: 'S2', source: '7 月邮件', date: '2026-07-02', kind: 'customer', text: '客户表示撤回此前的签约意向。' },
+  ];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'refuted',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '早前的意向' },
+      { evidenceId: 'S2', stance: 'withdraws', quote: '撤回此前的签约意向', note: '明确撤回', revises: 'S1' },
+    ],
+  }], sources);
+  assert.equal(claim.status, 'refuted');
+  assert.equal(claim.withdrawn, true);
 });
 
 test('insufficient evidence is a concrete gap plus an evidence-supported rewrite', () => {
@@ -177,6 +325,9 @@ test('adding a newer withdrawal source re-verifies and flips the current state t
           stance: source.text.includes('暂不推进') ? 'withdraws' : 'supports',
           quote: source.text.includes('暂不推进') ? '暂不推进签约' : '希望在本季度签约',
           note: source.text.includes('暂不推进') ? '客户撤回了签约表态' : '客户曾表达签约意向',
+          revises: source.text.includes('暂不推进')
+            ? user.sources.filter(other => other.text.includes('希望在本季度签约')).map(other => other.id)
+            : [],
         })),
         missing: '', rewrite: '',
       }, {
@@ -199,6 +350,50 @@ test('adding a newer withdrawal source re-verifies and flips the current state t
   assert.equal(item.claims.claims[0].status, 'refuted');
   assert.equal(item.claims.claims[0].withdrawn, true);
   assert.equal(item.claims.claims[0].decisive.source.date, '2026-07-02');
+});
+
+test('a newer refuting source keeps the stored conflict with both originals until a confirmed explicit withdrawal flips the state', async () => {
+  const { call, current } = fixture(
+    { status: 'unknown', quote: EVIDENCE, reason: '未确认' },
+    user => JSON.stringify({
+      claims: [{
+        id: '签约状态', dimension: '签约状态', text: '签约状态',
+        items: user.sources.filter(source => source.text.includes('签约')).map(source => {
+          if (source.text.includes('撤回')) return {
+            evidenceId: source.id, stance: 'withdraws', quote: '撤回此前的签约意向',
+            note: '明确撤回早前的签约意向',
+            revises: user.sources.filter(other => other.text.includes('希望签约')).map(other => other.id),
+          };
+          if (source.text.includes('不推进')) return {
+            evidenceId: source.id, stance: 'refutes', quote: '暂不推进签约', note: '改口不推进，但没有指明修订哪条',
+          };
+          return {
+            evidenceId: source.id, stance: 'supports', quote: '希望签约', note: '客户曾表达签约意向',
+          };
+        }),
+        missing: '', rewrite: '',
+      }, {
+        id: '购买意向', dimension: '购买意向', text: '购买意向',
+        items: [], missing: '缺少预算与购买计划确认', rewrite: '客户询问了报价和交付周期',
+      }],
+    }),
+  );
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户会签约吗？', language: 'zh-CN' });
+  await call('opportunity-source', { id, name: '6 月客户邮件', date: '2026-06-20', kind: 'customer',
+    text: '客户表示希望签约。', language: 'zh-CN' });
+  await call('opportunity-source', { id, name: '7 月客户邮件', date: '2026-07-02', kind: 'customer',
+    text: '客户表示暂不推进签约。', language: 'zh-CN' });
+  let claim = current().claims.claims[0];
+  assert.equal(claim.status, 'conflict');
+  assert.equal(claim.conflict.supports[0].source.text, '客户表示希望签约。');
+  assert.equal(claim.conflict.opposes[0].source.text, '客户表示暂不推进签约。');
+  await call('opportunity-source', { id, name: '8 月客户邮件', date: '2026-08-01', kind: 'customer',
+    text: '客户明确表示撤回此前的签约意向。', language: 'zh-CN' });
+  claim = current().claims.claims[0];
+  assert.equal(claim.status, 'refuted');
+  assert.equal(claim.withdrawn, true);
+  assert.equal(claim.decisive.source.date, '2026-08-01');
 });
 
 test('a non-verbatim quote from the model leaves the stored review incomplete', async () => {
