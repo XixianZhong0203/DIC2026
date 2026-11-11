@@ -161,7 +161,8 @@ test('a human review expires when a source is added; the send is blocked until r
   assert.deepEqual(current().reviewStale, ['source_changed']);
   // 旧人工复核失效：直接请求发送也被拦。
   assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
-  const blocked = state().audit.filter(event => event.action === 'blocked').at(-1);
+  // 审计按时间倒序：[0] 是最近一次拦截。
+  const blocked = state().audit.filter(event => event.action === 'blocked')[0];
   assert.equal(JSON.parse(blocked.detail).reason, 'claims_not_verified');
   // 针对当前草稿与当前来源重新记录复核后，批准并模拟发送。
   call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: 'Re-checked after the withdrawal email.' });
@@ -189,7 +190,7 @@ test('a human review expires when the draft changes; re-review of the new versio
   assert.notEqual(newDraft, oldDraft);
   assert.deepEqual(current().reviewStale, ['draft_changed']);
   assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
-  const blocked = state().audit.filter(event => event.action === 'blocked').at(-1);
+  const blocked = state().audit.filter(event => event.action === 'blocked')[0];
   assert.equal(JSON.parse(blocked.detail).reason, 'claims_not_verified');
   call('opportunity-review', { id, analysis_id: analysisId, draft_id: newDraft, resolution: 'Reviewed the revised draft.' });
   assert.equal(current().reviewStale, null);
@@ -236,6 +237,75 @@ test('a review goes stale on both draft and source when both change', async () =
   assert.deepEqual(current().reviewStale, ['draft_changed', 'source_changed']);
 });
 
+test('customer follow-up: a withdrawal email expires the human review; re-reviewing the rewritten draft unlocks the send', async () => {
+  // 验收流程：人工复核当前草稿 → 客户补来撤回邮件（正文、收件人不变）
+  // → 旧人工复核失效，直接请求发送被拦 → 按新来源改写（核查范围为空时核查放行不了）
+  // → 针对当前草稿重新复核 → 批准并成功模拟发送。
+  let withdrawn = false;
+  const { call, current, state } = fixture(user => {
+    if (!user.mode) return JSON.stringify({ status: 'supported', quote: EVIDENCE, reason: 'Explicit acceptance.' });
+    if (user.draft == null) {
+      return JSON.stringify({ claims: user.dimensions.map(dimension => ({
+        id: dimension, dimension, text: dimension, status: 'supported',
+        items: [{ evidenceId: 'E1', stance: 'supports', quote: EVIDENCE, note: 'proposed' }],
+        missing: '', rewrite: '',
+      })) });
+    }
+    if (user.draft.body.includes('保证周五交付')) {
+      if (withdrawn) {
+        return JSON.stringify({ claims: [{
+          id: '对外承诺', dimension: '对外承诺', text: '我们保证周五交付',
+          items: [{ evidenceId: 'S1', stance: 'withdraws', quote: '撤回此前关于周五交付的承诺',
+            note: '客户撤回了交付承诺', revises: ['E1'] }],
+          missing: '', rewrite: '',
+        }] });
+      }
+      return JSON.stringify({ claims: [{
+        id: '对外承诺', dimension: '对外承诺', text: '我们保证周五交付',
+        items: [{ evidenceId: 'E1', stance: 'supports', quote: EVIDENCE, note: '客户仅提议周五' }],
+        missing: '', rewrite: '',
+      }] });
+    }
+    return JSON.stringify({ claims: [] });
+  });
+  const { id } = current();
+  await call('opportunity-assess', { id, request: 'Can we promise Friday?' });
+  const analysisId = JSON.parse(current().analysis).analysisId;
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '我们保证周五交付。' });
+  const draft_id = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', draft_id, language: 'en' });
+  assert.ok(current().claims.claims.every(claim => claim.status === 'supported'));
+  // 人工复核当前草稿。
+  call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: '人工复核：当前草稿已核对。' });
+  assert.equal(current().reviewStale, null);
+  // 客户补来撤回邮件：正文与收件人不变，来源集合变化。
+  withdrawn = true;
+  await call('opportunity-source', { id, name: '客户撤回邮件', date: '2026-07-10', kind: 'customer',
+    text: '客户表示撤回此前关于周五交付的承诺。', language: 'en' });
+  assert.deepEqual(current().reviewStale, ['source_changed'], 'the old human review is expired');
+  // 自动核查已按新来源重跑：保证交付的声明被撤回 → 直接请求发送也被拦。
+  assert.equal(current().claimsStale, false);
+  assert.equal(current().claims.claims[0].status, 'refuted');
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason,
+    'claims_unresolved');
+  // 按新来源改写：新草稿没有可核查声明（实际核查范围为空），核查不能放行。
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '已收到您的撤回，请确认后续安排。' });
+  const newDraft = current().draft_id;
+  assert.deepEqual(current().reviewStale, ['draft_changed', 'source_changed']);
+  await call('opportunity-claims', { id, target: 'draft', draft_id: newDraft, language: 'en' });
+  assert.equal(current().claims.claims.length, 0);
+  assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason,
+    'claims_no_claims');
+  // 针对当前草稿记录新的人工复核 → 批准并成功模拟发送。
+  call('opportunity-review', { id, analysis_id: analysisId, draft_id: newDraft, resolution: '复核：草稿已按撤回改写，仅用于确认后续安排。' });
+  assert.equal(current().reviewStale, null);
+  call('opportunity-send', { id, draft_id: newDraft });
+  assert.equal(current().sent, 1);
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_review');
+});
+
 test('a legacy review without a source version prompts re-review and cannot unlock the send', async () => {
   const { call, current, state, db } = fixture(user => user.mode
     ? supportedClaim('We will deliver on Friday.')
@@ -250,7 +320,7 @@ test('a legacy review without a source version prompts re-review and cannot unlo
     .run('旧复核记录（未记录来源版本）', draft_id, id);
   assert.deepEqual(current().reviewStale, ['review_unbound']);
   assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
-  const blocked = state().audit.filter(event => event.action === 'blocked').at(-1);
+  const blocked = state().audit.filter(event => event.action === 'blocked')[0];
   assert.equal(JSON.parse(blocked.detail).reason, 'claims_not_verified');
   call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: 'Re-reviewed with the source version recorded.' });
   assert.equal(current().reviewStale, null);

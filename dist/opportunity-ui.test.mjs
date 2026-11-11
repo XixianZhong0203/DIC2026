@@ -160,6 +160,35 @@ test('a review stale in both dimensions shows both reasons', () => {
     'the UI distinguishes draft changes from source changes');
 });
 
+test('an empty draft verification shows the actual (empty) scope as a warning', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '好的，已收到。',
+    analysis: analysis('supported', 'a1'),
+    claims: { target: 'draft', at: '2026-07-10T00:00:00Z', claims: [], error: null,
+      draftId: 'd1', recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y' },
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('本次核查范围'), 'the actual scope is displayed');
+  assert.ok(text.includes('未提取到声明'), 'the empty scope is named');
+  assert.ok(text.includes('不能视为核查通过'), 'an empty scope is not treated as passed');
+});
+
+test('a non-empty verification lists the actual scope of checked claims', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '我们保证周五交付。',
+    analysis: analysis('supported', 'a1'),
+    claims: { target: 'draft', at: '2026-07-10T00:00:00Z', error: null, draftId: 'd1',
+      recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
+      claims: [{ id: '对外承诺', dimension: '对外承诺', text: '我们保证周五交付', status: 'supported',
+        items: [], missing: '', rewrite: '', conflict: null, withdrawn: false, failedChecks: [] }] },
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('本次核查范围'));
+  assert.ok(text.includes('对外承诺：我们保证周五交付'), 'the checked claim text is listed as scope');
+});
+
 test('the current status shows an expired review instead of awaiting approval', () => {
   const { renderOne, fullText } = harness();
   const card = renderOne(item({

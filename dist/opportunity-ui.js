@@ -126,10 +126,15 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     }
     if (item.claimsStale) block.append(element('p', t('核查已过期：来源或草稿已变更，请重新核查。'), 'attention'));
     if (review.error) block.append(element('p', t('模型请求失败') + ' · ' + review.error, 'attention'));
+    // 实际核查范围：列出本次真正核查过的声明；为空时明确提示范围是空的，避免被当成"核查通过"。
+    const scope = (review.claims ?? []).map(claim =>
+      (claim.dimension ? t(claim.dimension) + '：' : '') + (claim.text || t('模型未返回声明原文')));
+    if (!review.error) block.append(element('small', t('本次核查范围') + ' · ' +
+      (scope.length ? scope.join('；') : t('未提取到声明'))));
     if (review.claims?.length) {
       for (const claim of review.claims) block.append(claimSection(claim, item));
     } else {
-      block.append(element('p', t('模型未返回可核查的声明。')));
+      block.append(element('p', t('本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。'), 'attention'));
     }
     block.append(action(t('重新核查'), () => request('opportunity-claims', {
       id: item.id, target: review.target,
@@ -168,6 +173,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       return wrap;
     }
     const claims = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+    if (!(review.claims ?? []).length) {
+      wrap.append(element('p', t('本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。'), 'attention'));
+      return wrap;
+    }
     if (!claims.length) return null;
     wrap.append(element('p', t('有问题的声明') + ' · ' + claims.length, 'attention'));
     for (const claim of claims) wrap.append(claimSection(claim, item));
@@ -301,7 +310,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       return row;
     }));
     const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
-      claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过' };
+      claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成',
+      claims_unresolved: '声明核查未通过', claims_no_claims: '未提取到声明' };
     get('opportunity-audit').replaceChildren(...(state.audit ?? []).map(event => {
       const detail = JSON.parse(event.detail);
       const reason = event.action === 'blocked' && detail.reason ? ' · ' + t(blockedReasons[detail.reason] ?? detail.reason) : '';

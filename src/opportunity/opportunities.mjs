@@ -336,6 +336,12 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
             audit(id, 'blocked', { action: 'send', reason: 'claims_incomplete', error: review.error });
             fail(409, '声明核查未完成。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
           }
+          // 覆盖边界：针对草稿的核查若没有提取到任何声明，实际核查范围为空，
+          // 不能视为核查通过（正文里可能仍有未覆盖的关键说法）：重新核查或人工复核。
+          if (!(review.claims ?? []).length) {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_no_claims' });
+            fail(409, '草稿声明核查未提取到任何声明，实际核查范围为空。请重新核查，或针对当前草稿记录人工复核结论。');
+          }
           const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
           if (unresolved.length) {
             audit(id, 'blocked', { action: 'send', reason: 'claims_unresolved',
