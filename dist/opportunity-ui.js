@@ -17,14 +17,17 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     simulated_send: '模拟发送成功', blocked: '操作被拦截', policy: '授权已更新', analysis_started: '开始分析', analysis_failed: '模型分析失败',
     evidence_checked: '核对原文', human_reviewed: '人工核实', approved: '已批准版本',
     source_added: '来源已保存', claims_checked: '声明核查完成', claims_failed: '声明核查失败',
+    evidence_kind_changed: '初始来源身份已改',
   };
 
   const sourceKindLabels = { evidence: '证据原文', customer: '客户记录', founder: '创始人提供' };
+  // 初始来源的身份（用户录入，决定其引文能如何支持声明；改判后核查指纹变化，旧核查自动过期）。
+  const evidenceKindLabels = { customer: '客户原文／外部记录', founder: '创始人陈述', unconfirmed: '来源未确认' };
   // 人工复核过期的原因（由服务端 reviewStale 给出）：明确是草稿变了还是来源变了。
   const reviewStaleLabels = { draft_changed: '草稿变了', source_changed: '来源变了', review_unbound: '复核缺少来源版本' };
   const reviewStaleText = item => (item.reviewStale ?? []).map(code => t(reviewStaleLabels[code] ?? code)).join('、');
   const claimStatusLabels = { supported: '支持', refuted: '反驳', unknown: '证据不足', conflict: '来源冲突', incomplete: '未完成核查',
-    founder_only: '由创始人提供，待独立核实' };
+    founder_only: '由创始人提供，待独立核实', unconfirmed: '来源未确认，待核实' };
   const stanceLabels = { supports: '支持', refutes: '反驳', withdraws: '撤回', neutral: '仅相关' };
   const checkReasonLabels = {
     unknown_source: '引用了不存在的来源', quote_not_found: '引文未在来源原文中逐字找到',
@@ -33,7 +36,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   };
   const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
     claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过', claims_no_claims: '未提取到声明',
-    claims_founder_only: '声明仅由创始人提供' };
+    claims_founder_only: '声明仅由创始人提供', claims_unconfirmed: '声明来源未确认' };
   // 该机会最近一条活动记录：发送被拦截后在草稿区当场显示拦截原因（活动记录同步刷新）。
   function latestBlocked(audit, itemId) {
     const rows = (audit ?? []).filter(row => row.opportunity === itemId);
@@ -48,6 +51,33 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const wrapper = element('details', '');
     wrapper.append(element('summary', title), element('p', content));
     return wrapper;
+  }
+
+  // 初始来源：身份（客户原文／外部记录、创始人陈述、来源未确认）由用户录入，
+  // 决定这段原文的引文能如何支持声明；改判身份会改变核查指纹，已有核查自动过期重跑。
+  function originBlock(item) {
+    const kind = item.evidence_kind ?? 'unconfirmed';
+    const block = element('details', '');
+    block.open = true;
+    block.append(element('summary', t('出处') + ' · ' + t(evidenceKindLabels[kind] ?? 'unconfirmed') + ' · ' + item.source));
+    block.append(element('p', item.evidence));
+    const form = element('form', '');
+    const select = element('select', '');
+    for (const [value, label] of Object.entries(evidenceKindLabels)) {
+      const option = element('option', t(label));
+      option.value = value;
+      option.selected = value === kind;
+      select.append(option);
+    }
+    const confirm = action(t('确认来源身份'), () => {
+      if (select.value !== kind) {
+        return request('opportunity-evidence-kind', { id: item.id, evidence_kind: select.value, language: language() });
+      }
+    });
+    form.onsubmit = event => { event.preventDefault(); confirm.click(); };
+    form.append(select, confirm);
+    block.append(form);
+    return block;
   }
 
   function sourceBlock(item) {
@@ -94,10 +124,18 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   function claimSection(claim, item) {
     const article = element('article', '', 'entry');
     article.append(element('strong', (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文'))));
+    // 支持的声明按支持引文的来源身份标注：只有客户来源引文支持才算「客户来源支持」。
+    const customerSupport = claim.status === 'supported' &&
+      (claim.conflict ? (claim.conflict.supports ?? []) : (claim.items ?? []))
+        .some(entry => entry.valid && entry.stance === 'supports' && entry.source?.kind === 'customer');
     article.append(element('small', t(claimStatusLabels[claim.status] ?? claim.status) +
+      (customerSupport ? ' · ' + t('客户来源支持') : '') +
       (claim.withdrawn ? ' · ' + t('该承诺已被撤回') : '')));
     if (claim.status === 'founder_only') {
       article.append(element('small', t('可补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或针对当前草稿与来源记录人工复核结论，再批准发送。')));
+    }
+    if (claim.status === 'unconfirmed') {
+      article.append(element('small', t('请先确认这段来源的身份（客户原文／外部记录、创始人陈述、来源未确认），再补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或针对当前草稿与来源记录人工复核结论，再批准发送。')));
     }
     const cited = (entry, original) => {
       const summary = t(stanceLabels[entry.stance] ?? entry.stance) +
@@ -205,7 +243,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const card = element('article', '', 'entry');
     card.setAttribute('data-opportunity-id', item.id);
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
-    card.append(details(t('出处') + ' · ' + item.source, item.evidence));
+    card.append(originBlock(item));
     card.append(sourceBlock(item));
     const result = item.analysis && JSON.parse(item.analysis);
     if (result) {
