@@ -78,17 +78,24 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     article.append(element('strong', (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文'))));
     article.append(element('small', t(claimStatusLabels[claim.status] ?? claim.status) +
       (claim.withdrawn ? ' · ' + t('该承诺已被撤回') : '')));
-    const cited = entry => details(t(stanceLabels[entry.stance] ?? entry.stance) +
-      ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : ''),
-      entry.quote + (entry.note ? '（' + entry.note + '）' : ''));
+    const cited = (entry, original) => {
+      const summary = t(stanceLabels[entry.stance] ?? entry.stance) +
+        ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : '');
+      if (!original) return details(summary, entry.quote + (entry.note ? '（' + entry.note + '）' : ''));
+      const block = element('details', '');
+      block.append(element('summary', summary),
+        element('p', entry.quote + (entry.note ? '（' + entry.note + '）' : '')));
+      if (entry.source.text) block.append(element('p', t('来源原文') + ' · ' + entry.source.text));
+      return block;
+    };
     if (claim.conflict) {
-      for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry));
+      for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry, true));
     } else {
       for (const entry of claim.items ?? []) if (entry.valid) article.append(cited(entry));
     }
     if (claim.missing) article.append(element('p', t('缺少信息') + ' · ' + claim.missing, 'attention'));
     if (claim.rewrite) {
-      article.append(element('p', t('可支持的改写') + ' · ' + claim.rewrite));
+      article.append(element('p', t('建议改写') + ' · ' + claim.rewrite));
       if (item.draft_id && claim.text && (item.body ?? '').includes(claim.text)) {
         article.append(action(t('采用改写并重新核查'), async () => {
           await request('opportunity-draft', { id: item.id, recipient: item.recipient,
@@ -129,6 +136,38 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return block;
   }
 
+  // 当前状态：从创始人批准视角看已保存草稿的发送门槛状态。
+  // 需要处理 / 核查过期 / 待批准；尚无草稿或尚无针对草稿的核查记录时给出前置状态。
+  // 人工复核结论绑定草稿版本：针对当前草稿的复核直接放行，旧草稿的复核不再放行。
+  function approvalStatus(item) {
+    if (!item.draft_id) return { label: '尚未保存草稿', tone: 'muted' };
+    if (item.review && item.review_draft === item.draft_id) return { label: '待批准', tone: 'muted' };
+    const review = item.claims;
+    if (!review || review.target !== 'draft') return { label: '尚未核查', tone: 'attention' };
+    if (item.claimsStale) return { label: '核查过期', tone: 'attention' };
+    const claims = review.claims ?? [];
+    if (review.error || !claims.length || claims.some(claim => claim.status !== 'supported')) {
+      return { label: '需要处理', tone: 'attention' };
+    }
+    return { label: '待批准', tone: 'muted' };
+  }
+
+  // 有问题的声明：显示在草稿与批准按钮旁，给出原句、依据（引文或缺口）、建议改写和采用动作。
+  function attentionClaims(item) {
+    const review = item.claims;
+    if (!review || review.target !== 'draft') return null;
+    const wrap = element('div', '');
+    if (review.error) {
+      wrap.append(element('p', t('模型请求失败') + ' · ' + review.error, 'attention'));
+      return wrap;
+    }
+    const claims = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+    if (!claims.length) return null;
+    wrap.append(element('p', t('有问题的声明') + ' · ' + claims.length, 'attention'));
+    for (const claim of claims) wrap.append(claimSection(claim, item));
+    return wrap;
+  }
+
   function opportunityCard(item) {
     const card = element('article', '', 'entry');
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
@@ -146,7 +185,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(details(t('模型原始输出'), result.raw));
       if (item.review) card.append(details(t('人工核实'), item.review));
     }
-    if (!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) {
+    // 人工复核针对当前草稿版本才放行发送；草稿换新版本后需重新记录。
+    const reviewOutOfDate = item.draft_id && item.review && item.review_draft !== item.draft_id;
+    if ((!item.review || reviewOutOfDate) && (result ? result.status !== 'supported' : item.kind === 'lead')) {
       const reviewForm = element('form', '');
       const resolution = element('textarea', '');
       resolution.required = true;
@@ -155,7 +196,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       resolution.setAttribute('aria-label', resolution.placeholder);
       const saveReview = action(t('保存核实结果'), () => {
         if (reviewForm.reportValidity()) return request('opportunity-review', {
-          id: item.id, analysis_id: result?.analysisId ?? null, resolution: resolution.value,
+          id: item.id, analysis_id: result?.analysisId ?? null, draft_id: item.draft_id ?? null,
+          resolution: resolution.value,
         });
       });
       reviewForm.append(resolution, saveReview);
@@ -200,34 +242,34 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         : result?.status === 'supported' ? t('模型判断有依据')
         : result ? t('模型判断待核实')
         : t('无证据：未分析、未复核');
-      const approvalLabel = item.sent ? t('已批准 · 模拟发送成功')
-        : item.draft_id ? t('草稿已保存，待批准')
-        : t('尚未保存草稿');
       card.append(element('p', t('证据状态') + ' · ' + evidenceLabel,
         !item.review && result?.status !== 'supported' ? 'attention' : 'muted'));
-      const claims = item.claims?.claims ?? [];
-      const claimsStatus = item.claimsStale == null ? t('尚未核查')
-        : item.claimsStale ? t('核查已过期')
-        : item.claims?.error ? t('未完成核查')
-        : claims.length && claims.every(claim => claim.status === 'supported') ? t('核查通过')
-        : t('存在待处理声明');
-      card.append(element('p', t('核查状态') + ' · ' + claimsStatus, item.claimsStale ? 'attention' : 'muted'));
-      card.append(element('p', t('批准状态') + ' · ' + approvalLabel, 'muted'));
-      if (item.review) card.append(element('p', t('核实记录') + ' · ' + item.review, 'muted'));
+      if (!item.sent) {
+        const status = approvalStatus(item);
+        card.append(element('p', t('当前状态') + ' · ' + t(status.label), status.tone));
+      }
+      if (item.review) card.append(element('p', t('核实记录') +
+        (reviewOutOfDate ? ' · ' + t('草稿已变更，此记录未针对当前草稿') : '') + ' · ' + item.review, 'muted'));
       if (item.draft_id) {
         editor.open = true;
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
-        editor.append(action(t('核查关键声明'), () => request('opportunity-claims', {
-          id: item.id, target: 'draft', draft_id: item.draft_id, language: language(),
-        }), false));
         if (item.sent) {
           editor.append(element('p', t('模拟发送成功')));
-        } else if (!item.review && !result) {
-          editor.append(element('p', t('还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。'), 'attention'));
-        } else if (!item.review && result.status !== 'supported') {
-          editor.append(element('p', t('请先记录如何处理不确定性，再批准发送。'), 'attention'));
-        } else editor.append(action(t('批准已保存版本并模拟发送'), () =>
-          request('opportunity-send', { id: item.id, draft_id: item.draft_id }), false));
+        } else {
+          const attention = attentionClaims(item);
+          if (attention) editor.append(attention);
+          editor.append(action(t(item.claims?.target === 'draft' ? '重新核查' : '核查关键声明'), () => request('opportunity-claims', {
+            id: item.id, target: 'draft', draft_id: item.draft_id, language: language(),
+          }), false));
+          if (!item.review && !result) {
+            editor.append(element('p', t('还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。'), 'attention'));
+          } else if (!item.review && result.status !== 'supported') {
+            editor.append(element('p', t('请先记录如何处理不确定性，再批准发送。'), 'attention'));
+          } else {
+            editor.append(action(t('批准已保存版本并模拟发送'), () =>
+              request('opportunity-send', { id: item.id, draft_id: item.draft_id }), false));
+          }
+        }
       }
       card.append(editor);
     }
@@ -246,7 +288,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
       return row;
     }));
-    const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期' };
+    const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
+      claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过' };
     get('opportunity-audit').replaceChildren(...(state.audit ?? []).map(event => {
       const detail = JSON.parse(event.detail);
       const reason = event.action === 'blocked' && detail.reason ? ' · ' + t(blockedReasons[detail.reason] ?? detail.reason) : '';
