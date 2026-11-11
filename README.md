@@ -1,6 +1,21 @@
 # Daymark · DIC2026
 
-Daymark is a local AI workspace for one-person companies. It helps a founder keep project decisions across conversations, assess customer leads, and review evidence before approving outreach.
+In a one-person company, the founder makes the decision and is often the only person reviewing what the AI says or does. Daymark is a local AI workspace that brings the evidence, open questions, and approval controls into that review before the assistant speaks for the company.
+
+## Safety and alignment for a one-person company
+
+| Question | What Daymark does |
+| --- | --- |
+| **How can the founder audit a decision or action?** | The evidence panel shows the records behind a reply. Task activity records before-and-after values, and a decision receipt links the chosen action to its local result. Simulated outreach records approvals, blocks, and outcomes. |
+| **What happens when instructions conflict or evidence is missing?** | Decision cards show the current arrangement and the proposed change, then recheck the relevant state at confirmation. When the evidence is insufficient, Daymark can report what is known, name what is missing, and suggest a clarifying question or search for more saved evidence. |
+| **How can the founder catch unsupported claims before relying on them?** | Lead analysis and outreach drafts can be checked against saved sources. The draft shows which claims were checked, any evidence gaps, and suggested rewrites. The send endpoint checks the current draft and requires current verification or human review before simulating an approved send. |
+
+## Verification and model limits
+
+- **Product checks.** All 111 automated checks passed on this release. The earlier outreach walkthrough used a deterministic mock model to exercise blocking, rewriting, rechecking, and approval through the app. These checks establish workflow behavior.
+- **Earlier real-model baseline.** In a small synthetic evaluation of the earlier workflow, `qwen2.5:3b` over-abstained on 6 of 16 parseable turns where the evidence supported a conclusion. It gave unsupported agreement on 5 of 5 parseable pressure turns in the workspace benchmark. These counts describe the earlier baseline. Detection and false-positive rates for the current draft verifier still need to be measured on labeled drafts.
+- **Founder-provided sources.** Daymark records their provenance. An explicit factual statement supplied by the founder can support wording attributed to that source. The underlying fact remains founder-attested and may need independent evidence.
+- **Human review.** Daymark records the review conclusion, draft version, and source set. Whether the reviewer opened the cited source is currently unrecorded.
 
 ## What you can do
 
@@ -9,14 +24,6 @@ Daymark is a local AI workspace for one-person companies. It helps a founder kee
 - **Customer leads and improvement ideas.** Open a public search link, record sources manually, assess an opportunity, and prepare a follow-up task or an outreach draft. Open recent leads and upcoming tasks directly from the sidebar.
 - **Decisions, tasks, and calendar.** Compare a proposed change with the current arrangement, preview a calendar slot, or choose between a one-time exception and a saved preference. Daymark rechecks the relevant calendar or memory when you confirm. Create, edit, complete, reopen, and delete tasks, link them to sources, and export calendar events as ICS.
 - **Approvals and activity.** Review task changes and decision receipts. For simulated outreach, inspect the approved draft, any blocking reason, and the simulated result. Simulated publishing checks the current draft and version-specific verification.
-
-## Safety and alignment for a one-person company
-
-| Question | What Daymark does |
-| --- | --- |
-| **How can the founder audit a decision or action?** | The evidence panel shows the records behind a reply. Task activity records before-and-after values, and a decision receipt links the chosen action to its local result. Simulated outreach records approvals, blocks, and outcomes. |
-| **What happens when instructions conflict or evidence is missing?** | Project memory keeps confirmed decisions and proposals available across conversations. Decision cards present the current arrangement, proposed change, or missing information. Confirmation rechecks the relevant state and can refresh the options if it has changed. |
-| **How can the founder catch unsupported claims before relying on them?** | Lead analysis and outreach drafts can be checked against saved sources. The draft shows which claims were checked, any evidence gaps, and suggested rewrites. The send endpoint checks the current draft and requires current verification or human review before simulating an approved send. |
 
 ## Verify claims before simulated outreach
 
@@ -32,7 +39,7 @@ A human review is bound to the current draft version **and** the current set of 
 
 Requires Node.js 24 or later. Run `npm start` and open [Daymark](http://127.0.0.1:4173). The interface supports English and Chinese.
 
-To use chat, configure Ollama or another OpenAI-compatible Chat Completions provider in a local `.env`. For example:
+Chat and automated claim verification use the configured model. The following `qwen2.5:3b` configuration is a local setup example. The repository template also supports configuring a hosted OpenAI-compatible Chat Completions provider.
 
 ```dotenv
 OPENAI_BASE_URL=http://127.0.0.1:11434/v1
