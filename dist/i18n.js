@@ -522,7 +522,22 @@ const english = {
   "本次例外写在会话里。长期变更请修订原记录，保留出处和适用范围。": "Keep one-time exceptions in the session. Revise the original record for lasting changes, with a source and scope.",
   "以下是可能受影响的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review potentially affected rules and preferences. Replace, keep both, or use the change in this session.",
   "仅用于本次会话": "Use once in this session",
-  "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once."
+  "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once.",
+  // 证据不足时怎么说、怎么继续（evidence-answer 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "当前回答": "Current answer",
+  "证据充分 · 结论有边界": "Sufficient · bounded conclusion",
+  "证据不足 · 先说清缺口": "Insufficient · names the gap",
+  "来源冲突 · 先比较记录": "Conflicting sources · compare records first",
+  "核查失败 · 可重试": "Verification failed · retryable",
+  "仍缺": "Still missing",
+  "缺少": "Missing",
+  "结论边界": "Conclusion bounds",
+  "下一步": "Next step",
+  "依据来源": "Supporting sources",
+  "查看来源": "View sources",
+  "补资料": "Add a source",
+  "采用澄清问题": "Use the clarification question"
 };
 
 export function translate(language, phrase) {

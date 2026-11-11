@@ -48,7 +48,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return wrapper;
   }
 
-  function sourceBlock(item) {
+  // refs 让卡片上的其他区块（当前回答的下一步动作）拿到来源区与草稿正文的节点。
+  function sourceBlock(item, refs) {
     const block = element('details', '');
     const sources = item.sources ?? [];
     block.append(element('summary', t('来源') + ' · ' + (1 + sources.length)));
@@ -84,6 +85,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     form.onsubmit = event => { event.preventDefault(); save.click(); };
     form.append(name, date, kind, text, save);
     block.append(form);
+    if (refs) { refs.sourceDetails = block; refs.sourceText = text; }
     return block;
   }
 
@@ -155,6 +157,62 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return block;
   }
 
+  // 当前回答：证据不足时怎么说、怎么继续。措辞与边界由服务端 evidenceAnswer 确定性决定，
+  // 这里只负责展示，并把「下一步」接到卡片上已有的入口——查看来源 / 补资料 / 采用澄清问题
+  // （对应决策卡的 view / source / draft 三个选项），失败时给出重试。
+  const answerSituationLabels = {
+    sufficient: '证据充分 · 结论有边界',
+    insufficient: '证据不足 · 先说清缺口',
+    conflict: '来源冲突 · 先比较记录',
+    failed: '核查失败 · 可重试',
+  };
+  function answerBlock(item, refs, result) {
+    const answer = item.answer;
+    if (!answer) return null;
+    const block = element('section', '', 'evidence-answer');
+    block.setAttribute('data-situation', answer.situation);
+    block.append(element('strong', t('当前回答') + ' · ' + t(answerSituationLabels[answer.situation] ?? answer.situation)));
+    if (answer.situation === 'sufficient') {
+      if (answer.confirmed) block.append(element('p', t('已确认') + ' · ' + answer.confirmed));
+      if (answer.missing) block.append(element('p', t('仍缺') + ' · ' + answer.missing, 'attention'));
+      if (answer.bounds) block.append(element('p', t('结论边界') + ' · ' + answer.bounds, 'attention'));
+      if (answer.supporting?.length) {
+        block.append(element('small', t('依据来源') + ' · ' + answer.supporting.map(source => source.label).join('、')));
+      }
+    } else if (answer.situation === 'insufficient') {
+      if (answer.confirmed) block.append(element('p', t('已确认') + ' · ' + answer.confirmed));
+      if (answer.missing) block.append(element('p', t('缺少') + ' · ' + answer.missing, 'attention'));
+    } else if (answer.situation === 'conflict') {
+      if (answer.missing) block.append(element('p', t('缺少') + ' · ' + answer.missing, 'attention'));
+      for (const entry of answer.compare ?? []) {
+        block.append(details(t(stanceLabels[entry.stance] ?? entry.stance) + ' · ' + entry.label +
+          (entry.quote ? ' · ' + entry.quote : ''), entry.text));
+      }
+    }
+    if (answer.next) block.append(element('p', t('下一步') + ' · ' + answer.next));
+    if (answer.incomplete?.length) {
+      block.append(element('small', t('未完成核查') + ' · ' + answer.incomplete.join('、'), 'attention'));
+    }
+    const buttons = [];
+    if (answer.situation === 'failed') {
+      buttons.push(action(t('重新核查'), () => request('opportunity-claims', {
+        id: item.id, target: 'analysis', language: language(),
+      })));
+    }
+    buttons.push(action(t('查看来源'), () => { if (refs.sourceDetails) refs.sourceDetails.open = true; }));
+    buttons.push(action(t('补资料'), () => {
+      if (refs.sourceDetails) refs.sourceDetails.open = true;
+      refs.sourceText?.focus?.();
+    }));
+    if (result?.clarification) {
+      buttons.push(action(t('采用澄清问题'), () => {
+        if (refs.draftBody) { refs.draftBody.value = result.clarification; refs.draftBody.focus?.(); }
+      }));
+    }
+    block.append(...buttons);
+    return block;
+  }
+
   // 当前状态：从创始人批准视角看已保存草稿的发送门槛状态。
   // 需要处理 / 核查过期 / 待批准；尚无草稿或尚无针对草稿的核查记录时给出前置状态。
   // 人工复核结论绑定当前草稿与当前来源版本：复核过期（草稿变了或来源变了）时不再显示待批准。
@@ -199,10 +257,13 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     card.setAttribute('data-opportunity-id', item.id);
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
     card.append(details(t('出处') + ' · ' + item.source, item.evidence));
-    card.append(sourceBlock(item));
+    const refs = { sourceDetails: null, sourceText: null, draftBody: null };
+    card.append(sourceBlock(item, refs));
     const result = item.analysis && JSON.parse(item.analysis);
     if (result) {
       card.append(element('p', t(result.status === 'supported' ? '模型判断有依据，请核对' : '证据不足或仍待确认'), 'attention'));
+      const answer = answerBlock(item, refs, result);
+      if (answer) card.append(answer);
       if (result.quote) card.append(details(t('核对原文片段'), result.quote));
       if (result.reason) card.append(details(t('判断依据'), result.reason));
       if (result.conflict) card.append(element('p', result.conflict, 'attention'));
@@ -259,6 +320,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       body.placeholder = t('邮件正文');
       body.setAttribute('aria-label', body.placeholder);
       body.value = item.body ?? '';
+      refs.draftBody = body;
       const suggestion = item.analysis && JSON.parse(item.analysis).suggestedReply;
       if (suggestion) editor.append(action(t('将模型建议填入草稿'), () => { body.value = suggestion; }));
       const save = action(t('保存邮件草稿'), () => {

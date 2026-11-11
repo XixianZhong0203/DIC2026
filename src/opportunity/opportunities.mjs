@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaims, verifyClaims, evidenceHash, sha256 } from './claims.mjs';
+import { evidenceAnswer } from '../evidence/answer.mjs';
 
 const modes = ['auto', 'draft', 'approval', 'human'];
 const scenarios = [
@@ -45,6 +46,12 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   }
   if (!opportunityColumns.some(column => column.name === 'review_evidence')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review_evidence TEXT');
+  }
+  if (!opportunityColumns.some(column => column.name === 'analysis_claims')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN analysis_claims TEXT');
+  }
+  if (!opportunityColumns.some(column => column.name === 'answer')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN answer TEXT');
   }
   const get = id => db.prepare('SELECT * FROM opportunities WHERE id=?').get(required(id, 100)) ?? fail(404, '找不到此机会。');
   const mode = action => db.prepare('SELECT mode FROM delegation WHERE action=?').get(action)?.mode;
@@ -109,6 +116,39 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     else if (item.review_evidence !== evidenceHash(item, sourceRows)) reasons.push('source_changed');
     return reasons.length ? reasons : null;
   };
+  // 「当前回答」的原料：一次分析结果 + 最近一次针对分析声明的核查（专用副本 analysis_claims，
+  // 草稿目标的核查不会覆盖线索结论）+ 全部来源原文。措辞与边界由 evidenceAnswer 确定性决定。
+  const buildAnswerBundle = (item, sourceRows) => {
+    const analysis = item.analysis ? safeParse(item.analysis) : null;
+    const stored = item.analysis_claims ? safeParse(item.analysis_claims) : null;
+    const review = stored?.target === 'analysis' &&
+      (analysis == null || stored.analysisId === analysis.analysisId) ? stored : null;
+    return {
+      status: analysis?.status ?? null,
+      error: review?.error ?? null,
+      quote: analysis?.quote ?? '',
+      reason: analysis?.reason ?? '',
+      unknown: analysis?.unknown ?? '',
+      conflict: analysis?.conflict ?? '',
+      clarification: analysis?.clarification ?? '',
+      suggestedReply: analysis?.suggestedReply ?? '',
+      claims: review?.claims ?? [],
+      sources: [
+        { id: 'E1', name: item.source, kind: 'evidence', text: item.evidence },
+        ...sourceRows.map(row => ({ id: 'S' + row.id, name: row.name, date: row.date, kind: row.kind, text: row.text })),
+      ],
+    };
+  };
+  // 每次相关事件（声明核查完成）后重算并持久化结构化回答：
+  // 已确认什么 / 缺少哪条信息 / 下一步怎么做 / 指向哪些来源。
+  function recomputeAnswer(id) {
+    const item = get(id);
+    if (!item.analysis) return null;
+    const answer = evidenceAnswer(buildAnswerBundle(item, sourcesFor(id)));
+    db.prepare('UPDATE opportunities SET answer=? WHERE id=?').run(JSON.stringify(answer), id);
+    return answer;
+  }
+
   // 模型请求或结构解析失败时不中断：存一份"未完成核查"的核查结果，界面显示原因并可重试。
   async function runClaimsReview(id, target, language) {
     const item = get(id);
@@ -155,6 +195,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         claims: claims.map(claim => ({ id: claim.id, status: claim.status })),
       });
     });
+    // 针对分析的核查结果另存专用副本（analysis_claims），供「当前回答」读取。
+    if (target === 'analysis') {
+      db.prepare('UPDATE opportunities SET analysis_claims=? WHERE id=?').run(JSON.stringify(review), id);
+    }
+    recomputeAnswer(id);
     return review;
   }
 
@@ -170,8 +215,10 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         .map(item => {
           const sources = byOpportunity.get(item.id) ?? [];
           const claims = item.claims_review ? safeParse(item.claims_review) : null;
+          // 当前回答：结构化回答（已确认/缺少/下一步/指向来源）的解析结果；未分析时为 null。
+          const answer = item.answer ? safeParse(item.answer) : null;
           return { ...item, sources, claims, claimsStale: claimsStale(item, claims, sources),
-            reviewStale: reviewStale(item, sources) };
+            reviewStale: reviewStale(item, sources), answer };
         });
       return {
         opportunities,
@@ -247,8 +294,16 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           audit(id, 'source_added', { name: title, date: when, kind });
         });
         // 来源集合已变化：已有的核查结果自动重跑，否则保持过期状态等用户重新核查。
-        if (storedTarget === 'analysis' || storedTarget === 'draft') {
-          await runClaimsReview(id, storedTarget, language);
+        // 已有分析但最近一次核查针对草稿（或从未核查）时，也重跑分析目标核查，
+        // 让「当前回答」与最新来源保持一致（新增来源可能改变结论并指向新来源）。
+        // 草稿目标的重跑放最后：claims_review 保持草稿目标（发送门禁与卡片沿用原语义），
+        // 分析目标的结果写入专用副本 analysis_claims，不会被草稿核查覆盖。
+        const rerunTargets = [];
+        if (storedTarget === 'analysis' || storedTarget === 'draft') rerunTargets.push(storedTarget);
+        if (item.analysis && storedTarget !== 'analysis') rerunTargets.push('analysis');
+        rerunTargets.sort((a, b) => (a === 'draft' ? 1 : 0) - (b === 'draft' ? 1 : 0));
+        for (const target of rerunTargets) {
+          await runClaimsReview(id, target, language);
         }
       },
       '/api/opportunity-claims': async ({ id, target, draft_id, language }) => {
