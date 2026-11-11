@@ -1,46 +1,85 @@
-# Daymark · DIC2026
+# Daymark · DIC 2026
 
-In a one-person company, the founder makes the decision and is often the only person reviewing what the AI says or does. Daymark is a local AI workspace that brings the evidence, open questions, and approval controls into that review before the assistant speaks for the company.
+Daymark is a local AI workspace for a one-person company (OPC). The founder makes business decisions and is often the only person reviewing what the assistant says or does. Daymark brings source evidence, open questions, and approval controls into that review.
 
-## Safety and alignment for a one-person company
+## 1. How can the founder audit the assistant's reasoning and actions?
 
-| Question | What Daymark does |
+- **Inspect the basis of a reply.** The evidence panel shows the workspace used, retrieved records, verbatim excerpts, model inferences, open questions, and whether a second search ran. This makes the stated basis of a reply inspectable. Model explanations remain summaries.
+- **Follow a decision through to its outcome.** A decision card records the option selected and whether it was applied, paused, or failed. A calendar receipt shows the old and new time. The task activity log stores before-and-after values and links a change to its source and decision card when available.
+- **Review simulated outreach.** The activity log records source changes, claim checks, drafts, human review conclusions, approvals, blocks, and simulated sends. Opening a source original in the review area is recorded against the current draft and source set. That record shows which source was opened. The written review records the founder's conclusion.
+- **Review a simulated release.** The release view records current-version verification and simulated publication events, including blocks for an outdated draft or missing verification.
+
+Implementation: [reply and action routes](server.mjs), [verbatim quote validation](src/memory/memory-impact.mjs), [task audit and receipts](src/tasks/task-audit.mjs), [outreach workflow](src/opportunity/opportunities.mjs), and [release policy](src/policy/policy.mjs).
+
+### Retrieval score
+
+For ordinary retrieval, the score is the number of distinct normalized terms shared by the query and a record's source name, text, and scope.
+
+```
+score(query, record) = |terms(query) ∩ terms(source + body + scope)|
+```
+
+Daymark selects up to 12 positively scored records. If the model identifies missing evidence and reports no conflict, it can search once more using up to two stated gaps. That search can add up to four unused fact or source records with a score of at least two. A verbatim citation check requires a source ID from the supplied records and an exact substring in that record. [Retrieval implementation](src/chat/local-chat.mjs)
+
+## 2. What happens when instructions conflict or the assistant is uncertain?
+
+- **Start with the right workspace.** A chat retrieves its project's active memories and global records. A workspace change can start a fresh conversation with the current input. The app distinguishes continuing, starting a new task, switching, and comparing workspaces. Cross-workspace merges and moves of populated chats are blocked. The founder can explicitly import selected records with their original workspace and source noted. [Intent classification](src/chat/chat-intent.mjs) · [Workspace routes](server.mjs)
+- **Keep decisions and proposals distinct.** Extract memory candidates from chat, inspect their source and scope, and confirm what to save. When a new instruction overlaps an existing preference, the decision card can offer a one-time exception, a scoped addition, or a replacement. An external request to reschedule remains a proposal. The existing arrangement stays visible until the founder decides. [Memory management](src/memory/memory-impact.mjs)
+- **Recheck at confirmation.** A decision card can display the current arrangement, a proposed change, source records, and calendar options. Confirmation checks the relevant calendar or memory again. A changed situation pauses the write and can refresh the choices. The confirmation handler serializes requests for the same card and can recover a missing receipt from a committed task audit or memory record. A local calendar change records the founder's action and leaves customer acceptance as a separate fact. [Decision cards and rechecks](src/decision/decision.mjs) · [Confirmation and receipt recovery](src/decision/confirm.mjs)
+- **Say what remains unknown.** In chat, Daymark can name an evidence gap, search saved records, or propose a clarifying question. The lead's **Current answer** distinguishes insufficient evidence, conflicting sources, failed verification, and a supported conclusion with limits. For example, “The customer expressed intent to sign. Whether the contract was signed remains unconfirmed.” The card can open sources, focus the source entry form, or fill a clarification draft. [Lead answer](src/evidence/answer.mjs)
+
+### Memory conflict ranking
+
+When the founder proposes a memory change, Daymark ranks existing records for review with personalized PageRank. The seed is the term-overlap score plus two points for a matching scope, normalized across up to 80 candidates. Edges use the number of shared body terms, plus one for a matching scope. Let `s` be the normalized seed and `P` the row-normalized edge matrix. A record with no outgoing edge redistributes its mass according to `s`.
+
+```
+r₀ = s
+rₜ₊₁ = 0.15s + 0.85Pᵀrₜ
+```
+
+After 20 iterations the default view returns up to eight candidates. The score ranks records for review. The model can classify candidate conflicts and the founder decides what to save. [Ranking and scope code](src/memory/memory-impact.mjs) · [Semantic Commit](https://arxiv.org/abs/2504.09283)
+
+## 3. How can the founder catch unsupported agreement before relying on an answer?
+
+1. **Check the claim against its source.** Lead analysis verifies purchase intent and signing status. Saved outreach drafts can be checked for customer intent, signing status, company performance, and external commitments. The configured model identifies the relationship between a claim and a source. Daymark checks that quoted text appears in the specified source, and that an extracted draft claim occurs in the draft. A source marked as merely relevant carries no supporting or opposing weight. [Claim verification](src/opportunity/claims.mjs) · [FEVER](https://aclanthology.org/N18-1074/)
+2. **Show provenance and competing evidence.** The founder labels the initial record as customer or external, founder-provided, or unconfirmed. Legacy initial records default to unconfirmed. Founder-only or unconfirmed support is flagged and cannot satisfy the automatic send check. The label records the stated origin. Conflicting sources remain visible unless the dated record explicitly revises or withdraws the relevant earlier opposing records. An expression of intent can support intent while signing remains unconfirmed.
+3. **Show the actual verification scope before approval.** The saved draft lists checked claims, problematic sentences, sources, missing information, and suggested rewrites. A rewrite saves a new draft version and rechecks it. An empty set of extracted claims requires further handling. The founder can add evidence, revise and recheck, or record a human review for the current version.
+4. **Enforce the decision at the action endpoint.** The simulated send checks delegation mode, the current draft, lead assessment or review, and the current draft's verification or human review. The application records the block reason or the approved version and simulated result. Simulated publishing separately checks explicit acceptance, the action, scope and draft revision, and current-version verification. [Send gate](src/opportunity/opportunities.mjs) · [Release gate](src/alignment/alignment.mjs)
+
+### Version checks
+
+Automatic draft verification binds the draft ID, recipient, body hash, and evidence hash. Human review binds the draft ID and the evidence hash. Source-viewing records use the same version boundary. SHA-256 fingerprints capture changes to the draft body or the evidence set, including the recorded identity of the initial source.
+
+```
+current human review = recorded conclusion
+                       AND review.draft_id = current draft ID
+                       AND review.evidence_hash = current evidence hash
+```
+
+The send endpoint can also accept a current automatic verification with a nonempty set of supported claims. In either case, the founder explicitly approves the saved draft. Daymark simulates the effect locally.
+
+### What the checks cover
+
+- **Product verification.** The integrated release passed **167/167 unit tests** and **67/67 checks** in the synthetic customer-delivery flow. The latter uses a deterministic mock model to exercise project isolation, decision receipts, unsupported claims, review and simulated send. [End-to-end walkthrough](scripts/customer-delivery-acceptance.mjs)
+- **Historical model baseline.** In a small synthetic run of an earlier workflow, `qwen2.5:3b` over-abstained in **6/16** parseable turns where evidence supported a conclusion and gave unsupported agreement in **5/5** parseable pressure turns in the workspace benchmark. Detection and false-positive rates for the current draft verifier remain unmeasured. [Benchmark implementation](src/alignment/alignment.mjs) · [Evaluation runner](evaluation/round1.mjs)
+- **Current limits.** Source labels reflect user-recorded provenance. Model interpretation and claim extraction can miss or misread material. Claim-by-claim checks currently cover lead analysis and outreach drafts. The lead answer can omit founder-only or unconfirmed statements from its summary, and reclassifying a source can leave the lead answer stale when the most recent verification targeted the draft. The draft send checks use their own verification state.
+
+## Product features
+
+| Area | Available functions |
 | --- | --- |
-| **How can the founder audit a decision or action?** | The evidence panel shows the records behind a reply. Task activity records before-and-after values, and a decision receipt links the chosen action to its local result. Simulated outreach records approvals, blocks, and outcomes. |
-| **What happens when instructions conflict or evidence is missing?** | Decision cards show the current arrangement and the proposed change, then recheck the relevant state at confirmation. When the evidence is insufficient, Daymark can report what is known, name what is missing, and suggest a clarifying question or search for more saved evidence. In the lead flow, every analyzed lead carries a current answer that states what is confirmed, the exact information that is missing, and an actionable next step. It keeps the four bounded cases separate — insufficient evidence, conflicting sources (the records to compare are shown, no conclusion is claimed), failed verification (marked retryable), and sufficient evidence (a bounded conclusion with its limits) — and re-derives when a source is added, so a reply with explicit signing intent updates the conclusion and points at the new source. |
-| **How can the founder catch unsupported claims before relying on them?** | Lead analysis and outreach drafts can be checked against saved sources. The draft shows which claims were checked, any evidence gaps, and suggested rewrites. The send endpoint checks the current draft and requires current verification or human review before simulating an approved send. |
-
-## Verification and model limits
-
-- **Product checks.** `npm test` passes 167/167 on this integration (142 across the workspace, review-view, lead-answer and decision-confirm windows, plus 25 from the founder-evidence window). The acceptance suites all pass against deterministic mock models: decision-confirm 49/49 (`scripts/decision-confirm-acceptance.mjs`), decision-recheck 18/18, workspace-isolation 25/25, evidence-answer 23/23, receipt 21/21, memory 13/13 (3 model-dependent chat steps report SKIPPED without a configured model), plus the review-view walkthrough (3 acceptance points). A full customer-delivery confirmation flow (`scripts/customer-delivery-acceptance.mjs`, 67 checks) walks one synthetic customer through all four integration dimensions: workspace isolation (A/B workspaces, cross-workspace merge + move refusal, explicit import keeping the original workspace provenance), decision confirm + receipt (a reschedule card with original/new/selectable slots, the customer's consent kept separate as an unconfirmed proposal, and a receipt that names the actual change without claiming the customer confirmed), the draft threshold (a draft claiming 客户已确认改期 is named as unsupported by the claim verification and the send is blocked with `claims_unresolved`), and human review + receipt (adding the explicit confirmation re-runs verification, one opened source is audited, approve + simulated send carry the current draft, then a withdrawal expires the review and turns the answer into a source conflict). `--shots` additionally captures five headless-Chrome screenshots into gitignored `docs/evidence/`. These checks establish the workflow behavior of the simulated send; they do not measure any real model's capability.
-- **Memory-acceptance note.** Its send-check expectation was written before human reviews became bound to the current draft version and source set; the unbound review it recorded correctly no longer unlocks the send (409, `claims_not_verified`). The script now records the review with the current `draft_id` (as the product's review form does); with the bound review the same flow sends (200, `sent=1`).
-- **Real-model capability, described separately.** In a small synthetic evaluation of the earlier workflow, `qwen2.5:3b` over-abstained on 6 of 16 parseable turns where the evidence supported a conclusion. It gave unsupported agreement on 5 of 5 parseable pressure turns in the workspace benchmark. These counts describe the earlier real-model baseline only. Detection and false-positive rates for the current draft verifier still need to be measured on labeled drafts.
-- **Founder-provided sources.** Daymark records their provenance. An explicit factual statement supplied by the founder can support wording attributed to that source. The underlying fact remains founder-attested and may need independent evidence. The lead's initial source carries a user-recorded identity — customer record, founder statement, or unconfirmed — that verification reads: a claim whose supporting quotes all come from founder statements is labelled 由创始人提供，待独立核实 (founder_only), a claim resting on an unconfirmed source is labelled 来源未确认，待核实, and the send is blocked (`claims_founder_only` / `claims_unconfirmed`) until the claim is independently evidenced, rewritten to an evidence-grounded statement, or covered by a human review bound to the current draft and sources. Changing the recorded identity changes the verification fingerprint, so stored verification expires and re-runs (audit: `evidence_kind_changed`); leads saved before the identity existed default to unconfirmed. A quote that only expresses willingness (e.g. 「愿意签约」 against a 「已签署」 claim) counts as 仅相关 (neutral), not support.
-- **Human review.** Daymark records the review conclusion, draft version, source set, and which source originals the founder opened in the review area. The viewing state is kept server-side and bound to the current draft and source version: it resets when the draft or the sources change (the earlier record stays in the audit history), and it is an audit trail only — it neither replaces the founder's written conclusion nor unlocks the simulated send.
-
-## What you can do
-
-- **Workspaces and chat.** Organize conversations by project, search and resume prior chats, and start a new conversation in the current workspace. When an input suggests a new task or a different workspace, Daymark can ask where to continue before sending it. Chats use their workspace's saved records and global memory. Merging or moving a conversation across workspaces is refused so an old chat's quotes, customer promises, and decision cards cannot become another workspace's context: continuing there means a new conversation that carries your current input, and comparing workspaces means importing specific records explicitly, each copy keeping its original workspace and source.
-- **Evidence and long-term memory.** Review retrieved records, verbatim excerpts, model inferences, open questions, and the workspace used for a reply. Extract memory candidates from a conversation and confirm what to save. Review related records before changing a saved rule or preference.
-- **Customer leads and improvement ideas.** Open a public search link, record sources manually, assess an opportunity, and prepare a follow-up task or an outreach draft. After an analysis, each lead keeps a current answer (what is confirmed, the exact gap, the next step) that re-derives as sources change. Open recent leads and upcoming tasks directly from the sidebar.
-- **Decisions, tasks, and calendar.** Compare a proposed change with the current arrangement, preview a calendar slot, or choose between a one-time exception and a saved preference. A card selection only (已选待确认) writes nothing; confirming rechecks the live calendar/memory first — a drifted state pauses the card in place (暂缓) with what is actually effective, a hard error leaves it 失败, and a successful confirm applies the change exactly once (已应用): confirms for the same card are serialized, so a duplicate or late confirm reports the actual result (409 applied / recovered receipt) instead of writing again, and the receipt always describes the write that actually happened. Create, edit, complete, reopen, and delete tasks, link them to sources, and export calendar events as ICS.
-- **Approvals and activity.** Review task changes and decision receipts. For simulated outreach, inspect the approved draft, any blocking reason, and the simulated result. Simulated publishing checks the current draft and version-specific verification.
-
-## Verify claims before simulated outreach
-
-1. Save a lead and add source records. Record the initial source's identity (customer record, founder statement, or unconfirmed), label customer records and founder-provided information, and add dates when known.
-2. Analyze the lead. Daymark checks purchase intent and signing status against the supplied sources.
-3. Save an outreach draft and select **Verify key claims**. The draft shows its current status, the actual verification scope (which claims were checked), and highlights claims that are unsupported, contradicted, conflicting, or incomplete. If no claim is extracted, the empty scope is shown explicitly instead of counting as passed. Open the cited source to review the evidence. Opening a source original in the review area is recorded; the review area and the audit show which sources have been opened and which not.
-4. Adopt a suggested rewrite or edit the draft, then verify the new version. You can also record a human review conclusion for the current draft.
-5. Approve the saved draft when ready. Daymark checks its current version and requires up-to-date verification or a current human review before simulating the send.
-
-A human review is bound to the current draft version **and** the current set of sources: when the body, recipient, or any source changes, the review is shown as expired with the reason (the draft changed or the sources changed) and no longer unlocks the send; records created before the source binding have no source version and prompt re-review. An expired review can be replaced by a fresh verification of the current evidence or a new review of the current draft. Automated verification uses the configured model to interpret supplied records. Daymark checks that quotations appear verbatim in those records. When competing sources cannot be resolved by an explicit revision or withdrawal, both remain visible. Adding a source can trigger automated verification again. Sending and publishing run as local simulations. The model may miss a claim or misread a source, so the draft displays the scope of its checks. Claim-by-claim verification currently covers lead analysis and outreach drafts.
+| **Workspaces and chat** | Create, rename, group, search, resume, merge within a workspace, and delete conversations. Autosave chat history, show message times, and suggest new chats or workspace switches. |
+| **Records and memory** | Capture source text, facts, preferences, rules, and proposals. Extract and confirm memory candidates, review overlapping records, inspect changes, and import selected records with provenance. |
+| **Leads and improvement ideas** | Open public search links, record prospects or ideas manually, add dated sources, assess opportunities, check lead claims, prepare outreach, and create follow-up tasks. Recent leads and upcoming tasks open their matching cards. |
+| **Decisions and planning** | Review scheduling and preference conflicts, choose an option, preview calendar changes, confirm or clarify, and inspect receipts. Create, edit, complete, reopen, and delete tasks with source links, dates, locations, and notes. View the calendar and export events as ICS. |
+| **Delegation and simulations** | Configure analysis, drafting, and approval policies. Verify outreach drafts, record source viewing and human review, simulate approved sends, and simulate version-checked releases. |
+| **Developer tools** | Run unit checks, synthetic workspace and opportunity comparisons, and product acceptance scripts. Keep generated traces and screenshots local. |
 
 ## Run locally
 
-Requires Node.js 24 or later. Run `npm start` and open [Daymark](http://127.0.0.1:4173). The interface supports English and Chinese.
+Use Node.js 24 or later. Start the server with `npm start` and open [Daymark](http://127.0.0.1:4173). The interface supports English and Chinese. Run `npm test` for unit checks.
 
-Chat and automated claim verification use the configured model. The following `qwen2.5:3b` configuration is a local setup example. The repository template also supports configuring a hosted OpenAI-compatible Chat Completions provider.
+Chat, memory extraction, and automated claim interpretation use the configured model. Retrieval, scope, quote matching, version checks, confirmation, and audit writes run in application code. Example local Ollama configuration in `.env`:
 
 ```dotenv
 OPENAI_BASE_URL=http://127.0.0.1:11434/v1
@@ -48,8 +87,4 @@ MODEL_ID=qwen2.5:3b
 OPENAI_API_KEY=
 ```
 
-Start the configured model before using chat and restart Daymark after configuration changes. Daymark stores workspace data in `data/`. With a hosted provider, relevant records and recent conversation may be included in model requests.
-
-Run `npm test` for automated code checks.
-
-`scripts/evidence-answer-acceptance.mjs` is the end-to-end test of the lead current answer: it starts a fresh server with a deterministic mock model and drives the four cases — the "only wants to see cases" lead (gap + next step), a reply with explicit signing intent (bounded conclusion pointing at the new source), a contradictory record (conflict, records shown for comparison), and a forced model failure (retryable, then recovered by re-verification).
+Start the configured model before using chat. Restart Daymark after changing configuration. The workspace database lives in `data/`. When using a hosted OpenAI-compatible provider, relevant records and recent conversation can be included in model requests.
