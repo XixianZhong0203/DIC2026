@@ -78,11 +78,18 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     article.append(element('strong', (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文'))));
     article.append(element('small', t(claimStatusLabels[claim.status] ?? claim.status) +
       (claim.withdrawn ? ' · ' + t('该承诺已被撤回') : '')));
-    const cited = entry => details(t(stanceLabels[entry.stance] ?? entry.stance) +
-      ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : ''),
-      entry.quote + (entry.note ? '（' + entry.note + '）' : ''));
+    const cited = (entry, original) => {
+      const summary = t(stanceLabels[entry.stance] ?? entry.stance) +
+        ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : '');
+      if (!original) return details(summary, entry.quote + (entry.note ? '（' + entry.note + '）' : ''));
+      const block = element('details', '');
+      block.append(element('summary', summary),
+        element('p', entry.quote + (entry.note ? '（' + entry.note + '）' : '')));
+      if (entry.source.text) block.append(element('p', t('来源原文') + ' · ' + entry.source.text));
+      return block;
+    };
     if (claim.conflict) {
-      for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry));
+      for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry, true));
     } else {
       for (const entry of claim.items ?? []) if (entry.valid) article.append(cited(entry));
     }
@@ -146,7 +153,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(details(t('模型原始输出'), result.raw));
       if (item.review) card.append(details(t('人工核实'), item.review));
     }
-    if (!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) {
+    // 人工复核结论绑定到当前草稿版本：旧草稿上的复核不能解锁新草稿的发送门禁，
+    // 草稿换新版本后（或尚无草稿但已存在复核时）表单重新出现，供针对当前草稿记录结论。
+    const reviewCoversDraft = Boolean(item.review) && item.review_draft === item.draft_id;
+    if ((!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) ||
+      (item.draft_id && !reviewCoversDraft)) {
       const reviewForm = element('form', '');
       const resolution = element('textarea', '');
       resolution.required = true;
@@ -155,7 +166,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       resolution.setAttribute('aria-label', resolution.placeholder);
       const saveReview = action(t('保存核实结果'), () => {
         if (reviewForm.reportValidity()) return request('opportunity-review', {
-          id: item.id, analysis_id: result?.analysisId ?? null, resolution: resolution.value,
+          id: item.id, analysis_id: result?.analysisId ?? null,
+          draft_id: item.draft_id ?? null, resolution: resolution.value,
         });
       });
       reviewForm.append(resolution, saveReview);
