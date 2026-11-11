@@ -145,8 +145,11 @@ console.log('\n3) Send-like operations keep checking the current authorization')
   if (!lead.ok || !item) record('create an opportunity for the send check', 'FAIL', lead.error ?? 'no opportunity');
   else {
     const draft = await api('/api/opportunity-draft', { id: item.id, recipient: 'client@example.com', body: '您好，关于新数据源的接入。' });
-    const reviewed = await api('/api/opportunity-review', { id: item.id, analysis_id: null, resolution: '人工核对：收件人与内容无误。' });
     const draftId = (draft.data.opportunities ?? [])[0]?.draft_id;
+    // 复核与真实界面一致：绑定当前草稿版本（review form carries the current
+    // draft id）。未绑定草稿版本的复核不能放行发送（send gate 按现行规则校验），
+    // 该期望在 review-draft 绑定规则并入 main 后更新（264aef5 早于 993f91e）。
+    const reviewed = await api('/api/opportunity-review', { id: item.id, analysis_id: null, draft_id: draftId, resolution: '人工核对：收件人与内容无误。' });
     if (!draft.ok || !reviewed.ok || !draftId) {
       record('send allowed while delegation is per-approval (draft + human review present)', 'FAIL',
         draft.error ?? reviewed.error ?? 'no draft id');
