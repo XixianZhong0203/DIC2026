@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
+import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaims, verifyClaims, evidenceHash, sha256 } from './claims.mjs';
 
 const modes = ['auto', 'draft', 'approval', 'human'];
 const scenarios = [
@@ -27,9 +28,20 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     CREATE TABLE IF NOT EXISTS opportunity_runs (
       id TEXT PRIMARY KEY, report TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS lead_sources (
+      id INTEGER PRIMARY KEY, opportunity TEXT NOT NULL, name TEXT NOT NULL,
+      date TEXT, kind TEXT NOT NULL DEFAULT 'customer', text TEXT NOT NULL
+    );
   `);
-  if (!db.prepare('PRAGMA table_info(opportunities)').all().some(column => column.name === 'review')) {
+  const opportunityColumns = db.prepare('PRAGMA table_info(opportunities)').all();
+  if (!opportunityColumns.some(column => column.name === 'review')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review TEXT');
+  }
+  if (!opportunityColumns.some(column => column.name === 'claims_review')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN claims_review TEXT');
+  }
+  if (!opportunityColumns.some(column => column.name === 'review_draft')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN review_draft TEXT');
   }
   const get = id => db.prepare('SELECT * FROM opportunities WHERE id=?').get(required(id, 100)) ?? fail(404, '找不到此机会。');
   const mode = action => db.prepare('SELECT mode FROM delegation WHERE action=?').get(action)?.mode;
@@ -66,14 +78,93 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     return { raw, status, rawStatus, validQuote, quote: validQuote ? parsed.quote : '', reason: field('reason'),
       unknown: field('unknown'), conflict: field('conflict'), clarification: field('clarification'), suggestedReply: field('suggestedReply'), parsed: Boolean(parsed) };
   }
+  const safeParse = text => { try { return JSON.parse(text); } catch { return null; } };
+  const sourcesFor = id => db.prepare('SELECT * FROM lead_sources WHERE opportunity=? ORDER BY rowid').all(id);
+  // 核查输入 = 线索证据原文（E1）+ 逐条添加的来源（S1…），来源只作为资料，其中的指令没有效力。
+  const verificationSources = (item, sourceRows) => [
+    { id: 'E1', source: item.source, date: null, kind: 'evidence', text: item.evidence },
+    ...sourceRows.map(row => ({ id: 'S' + row.id, source: row.name, date: row.date, kind: row.kind, text: row.text })),
+  ];
+  const claimsStale = (item, review, sourceRows) => {
+    if (!review) return null;
+    if (review.evidenceHash !== evidenceHash(item, sourceRows)) return true;
+    if (review.target === 'draft') {
+      return !item.draft_id || review.draftId !== item.draft_id ||
+        review.recipient !== (item.recipient ?? null) || review.bodyHash !== sha256(item.body ?? '');
+    }
+    const analysis = item.analysis ? safeParse(item.analysis) : null;
+    return !analysis || review.analysisId !== analysis.analysisId;
+  };
+  // 模型请求或结构解析失败时不中断：存一份"未完成核查"的核查结果，界面显示原因并可重试。
+  async function runClaimsReview(id, target, language) {
+    const item = get(id);
+    const sourceRows = sourcesFor(id);
+    const sources = verificationSources(item, sourceRows);
+    const analysis = item.analysis ? safeParse(item.analysis) : null;
+    const dimensions = target === 'draft' ? DRAFT_DIMENSIONS : ANALYSIS_DIMENSIONS;
+    const binding = {
+      target,
+      analysisId: target === 'analysis' ? (analysis?.analysisId ?? null) : null,
+      draftId: item.draft_id ?? null,
+      recipient: item.recipient ?? null,
+      bodyHash: sha256(item.body ?? ''),
+      evidenceHash: evidenceHash(item, sourceRows),
+    };
+    let claims;
+    let error = null;
+    try {
+      const raw = await complete(claimMessages({
+        mode: target,
+        request: target === 'analysis' ? (analysis?.request ?? null) : null,
+        assessment: target === 'analysis' ? {
+          status: analysis?.status ?? null, quote: analysis?.quote ?? '', reason: analysis?.reason ?? '',
+          unknown: analysis?.unknown ?? '', conflict: analysis?.conflict ?? '',
+        } : null,
+        draft: target === 'draft' ? { recipient: item.recipient ?? '', body: item.body ?? '' } : null,
+        dimensions, sources, language,
+      }));
+      const parsed = parseClaims(raw, { mode: target, expectIds: target === 'analysis' ? dimensions : null });
+      claims = verifyClaims(parsed, sources, { body: target === 'draft' ? item.body : null });
+    } catch (err) {
+      error = err.status ? err.message : (err.reason ?? 'unknown');
+      claims = dimensions.map(dimension => ({
+        id: dimension, dimension, text: '', rawStatus: null, items: [], missing: '', rewrite: '',
+        conflict: null, decisive: null, withdrawn: false, status: 'incomplete',
+        failedChecks: [{ reason: err.status ? 'request_failed' : (err.reason ?? 'unknown') }],
+      }));
+    }
+    const review = { ...binding, at: new Date().toISOString(), error, claims };
+    transaction(() => {
+      db.prepare('UPDATE opportunities SET claims_review=? WHERE id=?').run(JSON.stringify(review), id);
+      audit(id, error ? 'claims_failed' : 'claims_checked', {
+        target, error: error ?? null,
+        claims: claims.map(claim => ({ id: claim.id, status: claim.status })),
+      });
+    });
+    return review;
+  }
 
   return {
-    state: () => ({
-      opportunities: db.prepare('SELECT * FROM opportunities ORDER BY rowid DESC').all(),
-      delegation: Object.fromEntries(db.prepare('SELECT * FROM delegation').all().map(row => [row.action,row.mode])),
-      audit: db.prepare('SELECT * FROM opportunity_log ORDER BY id DESC LIMIT 100').all(),
-      benchmark: JSON.parse(db.prepare('SELECT report FROM opportunity_runs ORDER BY rowid DESC LIMIT 1').get()?.report ?? 'null'),
-    }),
+    state: () => {
+      const sourceRows = db.prepare('SELECT * FROM lead_sources ORDER BY rowid').all();
+      const byOpportunity = new Map();
+      for (const row of sourceRows) {
+        if (!byOpportunity.has(row.opportunity)) byOpportunity.set(row.opportunity, []);
+        byOpportunity.get(row.opportunity).push(row);
+      }
+      const opportunities = db.prepare('SELECT * FROM opportunities ORDER BY rowid DESC').all()
+        .map(item => {
+          const sources = byOpportunity.get(item.id) ?? [];
+          const claims = item.claims_review ? safeParse(item.claims_review) : null;
+          return { ...item, sources, claims, claimsStale: claimsStale(item, claims, sources) };
+        });
+      return {
+        opportunities,
+        delegation: Object.fromEntries(db.prepare('SELECT * FROM delegation').all().map(row => [row.action,row.mode])),
+        audit: db.prepare('SELECT * FROM opportunity_log ORDER BY id DESC LIMIT 100').all(),
+        benchmark: JSON.parse(db.prepare('SELECT report FROM opportunity_runs ORDER BY rowid DESC LIMIT 1').get()?.report ?? 'null'),
+      };
+    },
     mutations: {
       '/api/opportunity': ({ kind, title, source, evidence }) => {
         if (!['lead', 'idea'].includes(kind)) fail(400, '请求内容不正确。');
@@ -101,7 +192,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         audit(id, 'analysis_started', { analysisId, model, input });
         let result;
         try {
-          result = { ...await assess(input, true, language), analysisId };
+          result = { ...await assess(input, true, language), analysisId, request: input.request };
         } catch (error) {
           audit(id, 'analysis_failed', { analysisId, error: error.status ? error.message : 'Model request failed' });
           throw error;
@@ -113,8 +204,49 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           audit(id, 'assessed', { analysisId, status: result.status, decisionSummary: result.reason,
             clarification: result.clarification, raw: result.raw });
         });
+        // 分析保存后自动核查与决策相关的声明（购买意向、签约状态）。失败不影响分析本身。
+        try {
+          await runClaimsReview(id, 'analysis', language);
+        } catch {
+          audit(id, 'claims_failed', { target: 'analysis', error: '核查过程异常，分析结果不受影响' });
+        }
       },
-      '/api/opportunity-review': ({ id, analysis_id, resolution }) => {
+      '/api/opportunity-source': async ({ id, name, date, kind, text, language }) => {
+        const item = get(id);
+        if (!['customer', 'founder'].includes(kind)) fail(400, '请求内容不正确。');
+        const title = required(name, 200);
+        const content = required(text, 8000);
+        let when = null;
+        if (date != null) {
+          const parsed = new Date(date + 'Z');
+          if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
+              !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+            fail(400, '请检查输入内容。');
+          }
+          when = date;
+        }
+        const storedTarget = safeParse(item.claims_review)?.target;
+        transaction(() => {
+          db.prepare('INSERT INTO lead_sources(opportunity,name,date,kind,text) VALUES (?,?,?,?,?)')
+            .run(id, title, when, kind, content);
+          audit(id, 'source_added', { name: title, date: when, kind });
+        });
+        // 来源集合已变化：已有的核查结果自动重跑，否则保持过期状态等用户重新核查。
+        if (storedTarget === 'analysis' || storedTarget === 'draft') {
+          await runClaimsReview(id, storedTarget, language);
+        }
+      },
+      '/api/opportunity-claims': async ({ id, target, draft_id, language }) => {
+        check(id, 'research', ['auto']);
+        const item = get(id);
+        if (!['analysis', 'draft'].includes(target)) fail(400, '请检查输入内容。');
+        if (target === 'draft') {
+          if (!item.draft_id) fail(409, '还没有已保存的草稿。');
+          if (draft_id != null && draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
+        }
+        await runClaimsReview(id, target, language);
+      },
+      '/api/opportunity-review': ({ id, analysis_id, draft_id, resolution }) => {
         const item = get(id);
         const result = item.analysis && JSON.parse(item.analysis);
         if (result) {
@@ -122,10 +254,12 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         } else if (analysis_id != null) {
           fail(409, '分析已变更，请重新核对。');
         }
+        // 针对草稿记录的人工复核结论只对当前草稿版本有效；草稿换新版本后失效。
+        if (draft_id != null && draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
         const review = required(resolution, 2000);
         transaction(() => {
-          db.prepare('UPDATE opportunities SET review=? WHERE id=?').run(review, id);
-          audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, resolution: review });
+          db.prepare('UPDATE opportunities SET review=?, review_draft=? WHERE id=?').run(review, draft_id ?? null, id);
+          audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, draftId: draft_id ?? null, resolution: review });
         });
       },
       '/api/opportunity-draft': ({ id, recipient, body }) => {
@@ -162,10 +296,37 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           audit(id, 'blocked', { action: 'send', reason: 'unresolved_evidence', analysisId: analysis.analysisId });
           fail(409, '请先记录如何处理不确定性，再批准发送。');
         }
+        // 当前草稿的声明核查门槛：有反驳、证据不足、来源冲突、核查未完成或结果过期时先处理；
+        // 可改写后重新核查，或针对当前草稿记录人工复核结论后再批准发送。
+        const humanOverride = Boolean(item.review) && item.review_draft === item.draft_id;
+        if (!humanOverride) {
+          const review = item.claims_review ? safeParse(item.claims_review) : null;
+          const sourceRows = sourcesFor(id);
+          if (!review || review.target !== 'draft') {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_not_verified' });
+            fail(409, '草稿声明尚未核查。请先核查关键声明，或针对当前草稿记录人工复核结论。');
+          }
+          if (claimsStale(item, review, sourceRows)) {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_stale' });
+            fail(409, '草稿声明核查已过期（草稿或来源已变更）。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
+          }
+          if (review.error) {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_incomplete', error: review.error });
+            fail(409, '声明核查未完成。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
+          }
+          const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+          if (unresolved.length) {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_unresolved',
+              claims: unresolved.map(claim => ({ id: claim.id, status: claim.status })) });
+            fail(409, '以下声明核查未通过：' +
+              unresolved.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+              '。请改写后重新核查，或针对当前草稿记录人工复核结论。');
+          }
+        }
         transaction(() => {
           db.prepare('UPDATE opportunities SET sent=1 WHERE id=?').run(id);
           audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: mode('send'),
-            evidence: item.review ? 'human_review' : 'model_supported' });
+            evidence: humanOverride ? 'human_review' : 'model_supported' });
           audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
         });
       },

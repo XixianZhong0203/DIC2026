@@ -16,6 +16,16 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     human: '本人处理', captured: '保存线索', assessed: '分析完成', drafted: '草稿已保存',
     simulated_send: '模拟发送成功', blocked: '操作被拦截', policy: '授权已更新', analysis_started: '开始分析', analysis_failed: '模型分析失败',
     evidence_checked: '核对原文', human_reviewed: '人工核实', approved: '已批准版本',
+    source_added: '来源已保存', claims_checked: '声明核查完成', claims_failed: '声明核查失败',
+  };
+
+  const sourceKindLabels = { evidence: '证据原文', customer: '客户记录', founder: '创始人提供' };
+  const claimStatusLabels = { supported: '支持', refuted: '反驳', unknown: '证据不足', conflict: '来源冲突', incomplete: '未完成核查' };
+  const stanceLabels = { supports: '支持', refutes: '反驳', withdraws: '撤回' };
+  const checkReasonLabels = {
+    unknown_source: '引用了不存在的来源', quote_not_found: '引文未在来源原文中逐字找到',
+    field_conflict: '模型输出字段不一致', claim_not_in_draft: '声明未在草稿正文中逐字出现',
+    request_failed: '模型请求失败',
   };
 
   function details(title, content) {
@@ -24,10 +34,145 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return wrapper;
   }
 
+  function sourceBlock(item) {
+    const block = element('details', '');
+    const sources = item.sources ?? [];
+    block.append(element('summary', t('来源') + ' · ' + (1 + sources.length)));
+    block.append(details(t(sourceKindLabels.evidence) + ' · ' + item.source, item.evidence));
+    for (const row of sources) {
+      block.append(details(t(sourceKindLabels[row.kind] ?? row.kind) + (row.date ? ' · ' + row.date : '') + ' · ' + row.name, row.text));
+    }
+    const form = element('form', '');
+    const name = element('input', '');
+    name.required = true;
+    name.maxLength = 200;
+    name.placeholder = t('来源名称');
+    name.setAttribute('aria-label', name.placeholder);
+    const date = element('input', '');
+    date.type = 'date';
+    date.setAttribute('aria-label', t('来源日期'));
+    const kind = element('select', '');
+    const customer = element('option', t(sourceKindLabels.customer));
+    customer.value = 'customer';
+    const founder = element('option', t(sourceKindLabels.founder));
+    founder.value = 'founder';
+    kind.append(customer, founder);
+    const text = element('textarea', '');
+    text.required = true;
+    text.maxLength = 8000;
+    text.placeholder = t('来源原文');
+    text.setAttribute('aria-label', text.placeholder);
+    const save = action(t('保存来源'), () => {
+      if (form.reportValidity()) return request('opportunity-source', {
+        id: item.id, name: name.value, date: date.value || null, kind: kind.value, text: text.value, language: language(),
+      });
+    });
+    form.onsubmit = event => { event.preventDefault(); save.click(); };
+    form.append(name, date, kind, text, save);
+    block.append(form);
+    return block;
+  }
+
+  function claimSection(claim, item) {
+    const article = element('article', '', 'entry');
+    article.append(element('strong', (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文'))));
+    article.append(element('small', t(claimStatusLabels[claim.status] ?? claim.status) +
+      (claim.withdrawn ? ' · ' + t('该承诺已被撤回') : '')));
+    const cited = (entry, original) => {
+      const summary = t(stanceLabels[entry.stance] ?? entry.stance) +
+        ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : '');
+      if (!original) return details(summary, entry.quote + (entry.note ? '（' + entry.note + '）' : ''));
+      const block = element('details', '');
+      block.append(element('summary', summary),
+        element('p', entry.quote + (entry.note ? '（' + entry.note + '）' : '')));
+      if (entry.source.text) block.append(element('p', t('来源原文') + ' · ' + entry.source.text));
+      return block;
+    };
+    if (claim.conflict) {
+      for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry, true));
+    } else {
+      for (const entry of claim.items ?? []) if (entry.valid) article.append(cited(entry));
+    }
+    if (claim.missing) article.append(element('p', t('缺少信息') + ' · ' + claim.missing, 'attention'));
+    if (claim.rewrite) {
+      article.append(element('p', t('建议改写') + ' · ' + claim.rewrite));
+      if (item.draft_id && claim.text && (item.body ?? '').includes(claim.text)) {
+        article.append(action(t('采用改写并重新核查'), async () => {
+          await request('opportunity-draft', { id: item.id, recipient: item.recipient,
+            body: (item.body ?? '').replaceAll(claim.text, claim.rewrite) });
+          await request('opportunity-claims', { id: item.id, target: 'draft', language: language() });
+        }));
+      }
+    }
+    for (const reason of new Set((claim.failedChecks ?? []).map(check => check.reason))) {
+      article.append(element('small', t(checkReasonLabels[reason] ?? reason)));
+    }
+    return article;
+  }
+
+  function claimsBlock(item) {
+    const review = item.claims;
+    const block = element('details', '');
+    const label = t('声明核查') + (review ? ' · ' +
+      t(review.target === 'draft' ? '草稿声明' : '分析声明') + ' · ' + new Date(review.at).toLocaleString(language()) : '');
+    block.append(element('summary', label));
+    if (!review) {
+      block.append(element('p', t('还没有核查记录。') +
+        t(item.kind === 'lead' ? '分析后自动核查，或在保存草稿后点「核查关键声明」。' : '分析后自动核查。')));
+      return block;
+    }
+    if (item.claimsStale) block.append(element('p', t('核查已过期：来源或草稿已变更，请重新核查。'), 'attention'));
+    if (review.error) block.append(element('p', t('模型请求失败') + ' · ' + review.error, 'attention'));
+    if (review.claims?.length) {
+      for (const claim of review.claims) block.append(claimSection(claim, item));
+    } else {
+      block.append(element('p', t('模型未返回可核查的声明。')));
+    }
+    block.append(action(t('重新核查'), () => request('opportunity-claims', {
+      id: item.id, target: review.target,
+      draft_id: review.target === 'draft' ? (item.draft_id ?? undefined) : undefined,
+      language: language(),
+    })));
+    return block;
+  }
+
+  // 当前状态：从创始人批准视角看已保存草稿的发送门槛状态。
+  // 需要处理 / 核查过期 / 待批准；尚无草稿或尚无针对草稿的核查记录时给出前置状态。
+  // 人工复核结论绑定草稿版本：针对当前草稿的复核直接放行，旧草稿的复核不再放行。
+  function approvalStatus(item) {
+    if (!item.draft_id) return { label: '尚未保存草稿', tone: 'muted' };
+    if (item.review && item.review_draft === item.draft_id) return { label: '待批准', tone: 'muted' };
+    const review = item.claims;
+    if (!review || review.target !== 'draft') return { label: '尚未核查', tone: 'attention' };
+    if (item.claimsStale) return { label: '核查过期', tone: 'attention' };
+    const claims = review.claims ?? [];
+    if (review.error || !claims.length || claims.some(claim => claim.status !== 'supported')) {
+      return { label: '需要处理', tone: 'attention' };
+    }
+    return { label: '待批准', tone: 'muted' };
+  }
+
+  // 有问题的声明：显示在草稿与批准按钮旁，给出原句、依据（引文或缺口）、建议改写和采用动作。
+  function attentionClaims(item) {
+    const review = item.claims;
+    if (!review || review.target !== 'draft') return null;
+    const wrap = element('div', '');
+    if (review.error) {
+      wrap.append(element('p', t('模型请求失败') + ' · ' + review.error, 'attention'));
+      return wrap;
+    }
+    const claims = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+    if (!claims.length) return null;
+    wrap.append(element('p', t('有问题的声明') + ' · ' + claims.length, 'attention'));
+    for (const claim of claims) wrap.append(claimSection(claim, item));
+    return wrap;
+  }
+
   function opportunityCard(item) {
     const card = element('article', '', 'entry');
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
     card.append(details(t('出处') + ' · ' + item.source, item.evidence));
+    card.append(sourceBlock(item));
     const result = item.analysis && JSON.parse(item.analysis);
     if (result) {
       card.append(element('p', t(result.status === 'supported' ? '模型判断有依据，请核对' : '证据不足或仍待确认'), 'attention'));
@@ -40,7 +185,12 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(details(t('模型原始输出'), result.raw));
       if (item.review) card.append(details(t('人工核实'), item.review));
     }
-    if (!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) {
+    // 人工复核结论绑定到当前草稿版本：旧草稿上的复核不能解锁新草稿的发送门禁，
+    // 草稿换新版本后（或尚无草稿但已存在复核时）表单重新出现，供针对当前草稿记录结论。
+    const reviewOutOfDate = item.draft_id && item.review && item.review_draft !== item.draft_id;
+    const reviewCoversDraft = Boolean(item.review) && item.review_draft === item.draft_id;
+    if ((!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) ||
+      (item.draft_id && !reviewCoversDraft)) {
       const reviewForm = element('form', '');
       const resolution = element('textarea', '');
       resolution.required = true;
@@ -49,12 +199,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       resolution.setAttribute('aria-label', resolution.placeholder);
       const saveReview = action(t('保存核实结果'), () => {
         if (reviewForm.reportValidity()) return request('opportunity-review', {
-          id: item.id, analysis_id: result?.analysisId ?? null, resolution: resolution.value,
+          id: item.id, analysis_id: result?.analysisId ?? null, draft_id: item.draft_id ?? null,
+          resolution: resolution.value,
         });
       });
       reviewForm.append(resolution, saveReview);
       card.append(reviewForm);
     }
+    card.append(claimsBlock(item));
     const analysisForm = element('form', '');
     const question = element('input', '');
     question.required = true;
@@ -93,24 +245,34 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         : result?.status === 'supported' ? t('模型判断有依据')
         : result ? t('模型判断待核实')
         : t('无证据：未分析、未复核');
-      const approvalLabel = item.sent ? t('已批准 · 模拟发送成功')
-        : item.draft_id ? t('草稿已保存，待批准')
-        : t('尚未保存草稿');
       card.append(element('p', t('证据状态') + ' · ' + evidenceLabel,
         !item.review && result?.status !== 'supported' ? 'attention' : 'muted'));
-      card.append(element('p', t('批准状态') + ' · ' + approvalLabel, 'muted'));
-      if (item.review) card.append(element('p', t('核实记录') + ' · ' + item.review, 'muted'));
+      if (!item.sent) {
+        const status = approvalStatus(item);
+        card.append(element('p', t('当前状态') + ' · ' + t(status.label), status.tone));
+      }
+      if (item.review) card.append(element('p', t('核实记录') +
+        (reviewOutOfDate ? ' · ' + t('草稿已变更，此记录未针对当前草稿') : '') + ' · ' + item.review, 'muted'));
       if (item.draft_id) {
         editor.open = true;
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
         if (item.sent) {
           editor.append(element('p', t('模拟发送成功')));
-        } else if (!item.review && !result) {
-          editor.append(element('p', t('还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。'), 'attention'));
-        } else if (!item.review && result.status !== 'supported') {
-          editor.append(element('p', t('请先记录如何处理不确定性，再批准发送。'), 'attention'));
-        } else editor.append(action(t('批准已保存版本并模拟发送'), () =>
-          request('opportunity-send', { id: item.id, draft_id: item.draft_id }), false));
+        } else {
+          const attention = attentionClaims(item);
+          if (attention) editor.append(attention);
+          editor.append(action(t(item.claims?.target === 'draft' ? '重新核查' : '核查关键声明'), () => request('opportunity-claims', {
+            id: item.id, target: 'draft', draft_id: item.draft_id, language: language(),
+          }), false));
+          if (!item.review && !result) {
+            editor.append(element('p', t('还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。'), 'attention'));
+          } else if (!item.review && result.status !== 'supported') {
+            editor.append(element('p', t('请先记录如何处理不确定性，再批准发送。'), 'attention'));
+          } else {
+            editor.append(action(t('批准已保存版本并模拟发送'), () =>
+              request('opportunity-send', { id: item.id, draft_id: item.draft_id }), false));
+          }
+        }
       }
       card.append(editor);
     }
@@ -129,7 +291,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
       return row;
     }));
-    const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期' };
+    const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
+      claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过' };
     get('opportunity-audit').replaceChildren(...(state.audit ?? []).map(event => {
       const detail = JSON.parse(event.detail);
       const reason = event.action === 'blocked' && detail.reason ? ' · ' + t(blockedReasons[detail.reason] ?? detail.reason) : '';
