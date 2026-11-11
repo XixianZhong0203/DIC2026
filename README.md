@@ -1,55 +1,29 @@
 # Daymark · DIC2026
 
-Daymark is a local AI workspace for a one-person company. It helps the owner organize project context, assess customer leads and improvement ideas, and prepare work for review. It keeps source evidence, model judgments, and owner approval visible at the points where the owner needs to make a decision.
+Daymark is a local AI workspace for one-person companies. It helps a founder keep project decisions across conversations, assess customer leads, and review evidence before approving outreach.
 
 ## What you can do
 
-- **Chat and projects.** Create, organize, and resume conversations. Open the evidence panel to see retrieved records, verified excerpts when available, inferences, and open questions.
-- **Records and memory.** Save source material, facts, preferences, rules, and proposals. Chat history is saved automatically; long-term memory is added through explicit saves. Memories are project-scoped: a chat only retrieves records of its own project and records saved as global, so a change in one project never touches another. Review overlapping records before changing a saved rule. Extract memory candidates from a conversation — content, type, scope, confirmation status, and source message — and confirm them before they are saved. Requests from the other side (like a client proposing a new delivery date) are kept as unconfirmed proposals; the previously confirmed rule stays valid until you accept, and accepting revises the old rule with a change record.
-- **Customer leads and improvement ideas.** Open a public search link, record sources manually, ask the model to assess an opportunity, and prepare a follow-up or an outreach draft.
-- **Claim verification.** Add dated sources to a lead, then verify its key claims against that evidence: verdicts with verbatim source quotes, concrete gaps and supported rewrites for unsupported claims, and automatic re-verification when the evidence or the draft changes. The saved draft shows a single current-status line — not verified yet, verification out of date, needs attention, or awaiting approval — and claims that still block sending are shown next to the approve button with their original sentence, basis, and suggested rewrite.
-- **Tasks and calendar.** Create and update local tasks, link them to source records, and export calendar events as ICS files.
-- **Decision cards.** When a reply hits a conflict (a reschedule, a long-term preference clash) or an evidence gap, an interactive card appears next to the reply: what is currently confirmed, why you must decide, and what each option will do. A selection returns to the conversation so follow-ups can refer to it; confirming runs the option through its normal flow — calendar/task updates with conflict checks, the memory impact review for long-term preference changes, or a drafted clarification question — and shows the result. A one-time exception applies only to the next reply.
-- **Approval and activity.** Review saved drafts, require evidence review for simulated outreach, and inspect approval, blocking, and simulation events. Simulated publishing checks the draft and the current version's verification record.
+- **Review the evidence behind a reply.** Open the evidence panel to see retrieved records, exact excerpts when available, model inferences, and open questions. For simulated outreach, review the approval, block reason, or simulated result in the activity log.
+- **Carry project decisions across conversations.** Extract memory candidates from a chat and confirm what to save. Project chats retrieve records for their project and records marked global.
+- **Resolve conflicts in chat.** Decision cards can show the current arrangement and a new proposal, surface the local calendar, or offer a one-time exception and a long-term preference change. Confirm a change before applying it.
+- **Track leads and improvement ideas.** Record sources manually, assess an opportunity, prepare an outreach draft, and create follow-up tasks. Tasks can link to sources and appear in a local calendar with ICS export.
 
-## Safety boundaries
+## Verify claims before simulated outreach
 
-An exact excerpt establishes that the quoted text appears in a saved record. Assessing whether it supports the conclusion still requires review. An owner approval applies to the saved draft being approved. Daymark simulates sending and publishing locally.
+1. Save a lead and add source records. Label customer records and founder-provided information, and add dates when known.
+2. Analyze the lead. Daymark checks purchase intent and signing status against the supplied sources.
+3. Save an outreach draft and select **Verify key claims**. The draft shows its current status and highlights claims that are unsupported, contradicted, conflicting, or incomplete. Open the cited source to review the evidence.
+4. Adopt a suggested rewrite or edit the draft, then verify the new version. You can also record a human review conclusion for the current draft.
+5. Approve the saved draft when ready. Daymark checks its current version and requires up-to-date verification or a human review for that draft before simulating the send.
 
-## Claim verification
-
-A lead can hold named sources with an optional date and a provenance — customer record or founder-provided. Verification treats all source text as data only: instructions embedded in a source have no authority, and every source that matters must be cited with a quote that occurs verbatim in it. Founder-provided facts keep their provenance and may only support what they state.
-
-- **After an analysis.** When an assessment is saved, the two decision-relevant claims — purchase intent and signing status — are verified automatically, and the result is shown in the analysis card: verdict, verbatim quotes with dates, and for unsupported claims a concrete missing-information gap plus a rewrite the evidence can support.
-- **After a saved draft.** The button beside the saved draft, “Verify key claims”, checks the draft body (customer intent, signing status, company performance, external commitments). Each claim sentence is marked with its verdict, the supporting evidence or the gap, and an evidence-supported rewrite. “Adopt rewrite and re-verify” first saves the rewrite as a new draft version and then re-verifies.
-- **Current status.** The saved-draft area shows one status line from the approval point of view: draft not saved yet, not verified yet, verification out of date, needs attention, or awaiting approval. It needs attention while the current draft still has a refuted, insufficient-evidence, conflicting, or incomplete claim, and goes back to awaiting approval once re-verification is clean — or once a human review recorded for that draft version stands in for it.
-- **Problem claims beside the approve button.** Claims that block sending are listed in the draft editor next to the “Verify” and “Approve” buttons: the problematic sentence, its basis (stance, source, date, verbatim quote), the missing information, and a supported rewrite with an adopt action — so the fix and the approval decision happen in one place.
-- **Verdicts.** Supported, refuted, insufficient evidence, conflicting sources, or verification incomplete. A newer record decides the current state only when it can be confirmed to explicitly withdraw or change an earlier record of the same commitment: the newer record names the earlier source it revises, every record involved is dated, and the latest date is unique. When a record is merely newer by date, a record is undated, the latest dates are tied, or the revision cannot be tied to an earlier record, the claim stays a source conflict, shown with both original texts and their dates.
-- **Guards.** A cited source that does not exist, a quote that is not verbatim in the source, missing fields, or a failed model request leave the claim verification incomplete with the failed check displayed, and the result can be retried. A verification is bound to the evidence and, for drafts, to the draft version, recipient, and body; any change makes the result stale until it is re-verified.
-- **Send gate.** The send endpoint itself checks the current draft's claim verification, so a direct request to the API is gated the same way. Sending is blocked while the draft has no verification at all, or the result is stale, incomplete, refuted, insufficient evidence, or a source conflict. Two paths unblock it: fix the wording (adopting a rewrite saves a new draft version) and re-verify, or record a human review conclusion bound to the current draft version and then approve explicitly. A human review only applies to the draft version it was recorded for — saving a newer draft revokes both the stored verification and the review.
-
-## Browser acceptance (claim verification)
-
-Both paths work: with a model configured, and without one (the failure path is stored, not fatal).
-
-1. **Save a lead.** Customer leads → new lead → enter a title, source, and evidence → save.
-2. **Add sources.** In the lead card, open the “Sources” block (below the evidence) and save a customer record: name, a date, and the original text (for example, a note that the customer intends to sign this quarter, dated). A founder-provided fact can be saved the same way with its own identity.
-3. **Analyze.** Click “Analyze with model”. With a model configured, the analysis card appears and the “Claim verification · analysis claims” card shows a verdict for purchase intent and signing status, each with its verbatim quote and date. Without a model, the analysis fails normally; step 4 still lets you exercise the verification UI.
-4. **Save a draft and verify it.** Enter a recipient and body, save the draft, then click “Verify key claims” beside the saved version. With a model configured, each claim in the body is marked with verdict, evidence or gap, and a supported rewrite. Without a model, the card shows “Model request failed”, every claim as “verification incomplete” with the failed check, and a “Verify again” button to retry.
-5. **Adopt a rewrite.** For a claim with a rewrite that occurs in the draft body, click “Adopt rewrite and re-verify”: the rewrite is saved as a new draft version and verification runs against it.
-6. **Check staleness.** Edit the draft body and save a new version. The verification card reports “Verification is out of date: sources or the draft changed” and the “Current status” line shows verification out of date; “Verify again” re-binds to the new version.
-7. **Check a withdrawal.** Add a newer dated source that explicitly withdraws an earlier commitment (naming the earlier record it withdraws), and re-verify: the claim flips to refuted, the newer record is shown as decisive, and it is marked as withdrawn. A merely newer source that only contradicts the earlier one, or two undecidable same-date records, instead show as a source conflict with both original texts.
-8. **Single status line and send gate.** The saved-draft area shows one “Current status” line — awaiting approval, needs attention, verification out of date, not verified yet, or draft not saved yet — combining the draft's verification and approval state. Approving the send additionally requires the current draft's claim verification to be clean and up to date — or a human review recorded for that draft version. Saving a new draft version requires re-verifying or re-reviewing before the send will go through.
+Automated verification uses the configured model to interpret supplied records. Daymark checks that quotations appear verbatim in those records. When competing sources cannot be resolved by an explicit revision or withdrawal, both remain visible. Editing the draft invalidates its prior verification and human review. Adding a source can trigger automated verification again. Sending and publishing run as local simulations.
 
 ## Run locally
 
-Use Node.js 24 or later.
+Requires Node.js 24 or later. Run `npm start` and open [Daymark](http://127.0.0.1:4173). The interface supports English and Chinese.
 
-```sh
-npm start
-```
-
-Open [Daymark](http://127.0.0.1:4173). The interface is available in English and Chinese. For chat, start a local Ollama model or configure an OpenAI-compatible Chat Completions endpoint in `.env`. For example:
+To use chat, configure Ollama or another OpenAI-compatible Chat Completions provider in a local `.env`. For example:
 
 ```dotenv
 OPENAI_BASE_URL=http://127.0.0.1:11434/v1
@@ -57,11 +31,6 @@ MODEL_ID=qwen2.5:3b
 OPENAI_API_KEY=
 ```
 
-Restart Daymark after changing the configuration. Hosted providers receive relevant records and recent conversation when they are included in a model request. The workspace database is stored in `data/`.
+Start the configured model before using chat and restart Daymark after configuration changes. Daymark stores workspace data in `data/`. With a hosted provider, relevant records and recent conversation may be included in model requests.
 
-## Repository
-
-- `server.mjs` wires the local API, database, and frontend.
-- `dist/` contains the browser interface.
-- `src/` contains chat retrieval, memory, opportunities, calendar, release policy, action checks, and decision cards (`src/decision/`).
-- `evaluation/` and `scripts/` contain developer tooling. Run `npm test` for automated code checks, and `node scripts/memory-acceptance.mjs` for the end-to-end memory save and conflict acceptance (chat steps run when a model is reachable; otherwise they are skipped and the trace is written to `docs/evidence/`).
+Run `npm test` for automated code checks.
