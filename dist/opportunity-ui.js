@@ -23,15 +23,17 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   // 人工复核过期的原因（由服务端 reviewStale 给出）：明确是草稿变了还是来源变了。
   const reviewStaleLabels = { draft_changed: '草稿变了', source_changed: '来源变了', review_unbound: '复核缺少来源版本' };
   const reviewStaleText = item => (item.reviewStale ?? []).map(code => t(reviewStaleLabels[code] ?? code)).join('、');
-  const claimStatusLabels = { supported: '支持', refuted: '反驳', unknown: '证据不足', conflict: '来源冲突', incomplete: '未完成核查' };
-  const stanceLabels = { supports: '支持', refutes: '反驳', withdraws: '撤回' };
+  const claimStatusLabels = { supported: '支持', refuted: '反驳', unknown: '证据不足', conflict: '来源冲突', incomplete: '未完成核查',
+    founder_only: '由创始人提供，待独立核实' };
+  const stanceLabels = { supports: '支持', refutes: '反驳', withdraws: '撤回', neutral: '仅相关' };
   const checkReasonLabels = {
     unknown_source: '引用了不存在的来源', quote_not_found: '引文未在来源原文中逐字找到',
     field_conflict: '模型输出字段不一致', claim_not_in_draft: '声明未在草稿正文中逐字出现',
     request_failed: '模型请求失败',
   };
   const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
-    claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过', claims_no_claims: '未提取到声明' };
+    claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过', claims_no_claims: '未提取到声明',
+    claims_founder_only: '声明仅由创始人提供' };
   // 该机会最近一条活动记录：发送被拦截后在草稿区当场显示拦截原因（活动记录同步刷新）。
   function latestBlocked(audit, itemId) {
     const rows = (audit ?? []).filter(row => row.opportunity === itemId);
@@ -56,6 +58,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     for (const row of sources) {
       block.append(details(t(sourceKindLabels[row.kind] ?? row.kind) + (row.date ? ' · ' + row.date : '') + ' · ' + row.name, row.text));
     }
+    // 来源类型标签由用户录入；证据状态只按实际支持声明的引文判定，与来源数量无关。
+    block.append(element('small', t('来源类型（客户来源 / 创始人提供）由你录入；声明的证据状态只看实际支持该声明的引文，一条无关的客户引文不会改变它。')));
     const form = element('form', '');
     const name = element('input', '');
     name.required = true;
@@ -92,6 +96,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     article.append(element('strong', (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文'))));
     article.append(element('small', t(claimStatusLabels[claim.status] ?? claim.status) +
       (claim.withdrawn ? ' · ' + t('该承诺已被撤回') : '')));
+    if (claim.status === 'founder_only') {
+      article.append(element('small', t('可补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或针对当前草稿与来源记录人工复核结论，再批准发送。')));
+    }
     const cited = (entry, original) => {
       const summary = t(stanceLabels[entry.stance] ?? entry.stance) +
         ' · ' + entry.source.source + (entry.source.date ? ' · ' + entry.source.date : '');
