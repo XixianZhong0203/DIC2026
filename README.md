@@ -13,11 +13,11 @@ Daymark is a local AI workspace for one-person companies. It helps a founder kee
 
 1. Save a lead and add source records. Label customer records and founder-provided information, and add dates when known.
 2. Analyze the lead. Daymark checks purchase intent and signing status against the supplied sources.
-3. Save an outreach draft and select **Verify key claims**. The draft shows its current status and highlights claims that are unsupported, contradicted, conflicting, or incomplete. Open the cited source to review the evidence.
+3. Save an outreach draft and select **Verify key claims**. The draft shows its current status, the actual verification scope (which claims were checked), and highlights claims that are unsupported, contradicted, conflicting, or incomplete. If no claim is extracted, the empty scope is shown explicitly instead of counting as passed. Open the cited source to review the evidence.
 4. Adopt a suggested rewrite or edit the draft, then verify the new version. You can also record a human review conclusion for the current draft.
-5. Approve the saved draft when ready. Daymark checks its current version and requires up-to-date verification or a human review for that draft before simulating the send.
+5. Approve the saved draft when ready. Daymark checks its current version and requires up-to-date verification or a current human review before simulating the send.
 
-Automated verification uses the configured model to interpret supplied records. Daymark checks that quotations appear verbatim in those records. When competing sources cannot be resolved by an explicit revision or withdrawal, both remain visible. Editing the draft invalidates its prior verification and human review. Adding a source can trigger automated verification again. Sending and publishing run as local simulations.
+A human review is bound to the current draft version **and** the current set of sources: when the body, recipient, or any source changes, the review is shown as expired with the reason (the draft changed or the sources changed) and no longer unlocks the send; records created before the source binding have no source version and prompt re-review. An expired review can be replaced by a fresh verification of the current evidence or a new review of the current draft. Automated verification uses the configured model to interpret supplied records. Daymark checks that quotations appear verbatim in those records. When competing sources cannot be resolved by an explicit revision or withdrawal, both remain visible. Adding a source can trigger automated verification again. Sending and publishing run as local simulations.
 
 ## Run locally
 

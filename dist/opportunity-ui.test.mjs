@@ -37,8 +37,13 @@ function harness() {
     reviewTextarea().value = resolution;
     reviewButton().click();
   };
-  const renderOne = entry => render({ opportunities: [entry], delegation: {}, audit: [] });
-  return { renderOne, requests, reviewButton, reviewTextarea, submitReview };
+  const fullText = node => (node.text ?? '') + (node.children ?? []).map(fullText).join(' ');
+  // 返回本次渲染的机会卡片节点，便于断言卡片内的完整文本。
+  const renderOne = entry => {
+    render({ opportunities: [entry], delegation: {}, audit: [] });
+    return elements.get('opportunity-list').children.at(-1);
+  };
+  return { renderOne, requests, reviewButton, reviewTextarea, submitReview, fullText };
 }
 
 const analysis = (status, analysisId) => JSON.stringify({
@@ -49,6 +54,7 @@ const item = overrides => ({
   id: 'o1', kind: 'lead', title: '客户线索', source: '客户邮件', evidence: '客户表示希望周五交付。',
   analysis: null, review: null, review_draft: null, draft_id: null,
   recipient: null, body: null, sent: 0, sources: [], claims: null, claimsStale: null,
+  reviewStale: null,
   ...overrides,
 });
 
@@ -113,4 +119,84 @@ test('the review form still appears for an unanalyzed lead without a draft', () 
   submitReview('未做模型分析，人工判断先澄清。');
   const call = requests.find(entry => entry.name === 'opportunity-review');
   assert.deepEqual(call.payload, { id: 'o1', analysis_id: null, draft_id: null, resolution: '未做模型分析，人工判断先澄清。' });
+});
+
+test('a review whose sources changed is shown as expired and the form comes back', () => {
+  const { renderOne, reviewButton, submitReview, requests, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', review: '已核实。', review_draft: 'd1', reviewStale: ['source_changed'],
+    analysis: analysis('supported', 'a1'),
+  }));
+  assert.ok(reviewButton(), 'the review is stale on the source version, so the form reappears');
+  const text = fullText(card);
+  assert.ok(text.includes('复核已过期'), 'the review note row says the review expired');
+  assert.ok(text.includes('来源变了'), 'the reason says the sources changed');
+  assert.ok(!text.includes('草稿变了'), 'the draft did not change');
+  submitReview('已按新来源重新核实。');
+  assert.equal(requests.find(entry => entry.name === 'opportunity-review').payload.draft_id, 'd1');
+});
+
+test('a legacy review without a source version prompts re-review', () => {
+  const { renderOne, reviewButton, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', review: '旧复核记录。', review_draft: 'd1', reviewStale: ['review_unbound'],
+    analysis: analysis('supported', 'a1'),
+  }));
+  assert.ok(reviewButton(), 'a review without a source version cannot unlock the send');
+  const text = fullText(card);
+  assert.ok(text.includes('复核缺少来源版本'));
+  assert.ok(text.includes('复核已过期'));
+});
+
+test('a review stale in both dimensions shows both reasons', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd2', review: '旧草稿的复核结论。', review_draft: 'd1',
+    reviewStale: ['draft_changed', 'source_changed'],
+    analysis: analysis('supported', 'a1'),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('草稿变了') && text.includes('来源变了'),
+    'the UI distinguishes draft changes from source changes');
+});
+
+test('an empty draft verification shows the actual (empty) scope as a warning', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '好的，已收到。',
+    analysis: analysis('supported', 'a1'),
+    claims: { target: 'draft', at: '2026-07-10T00:00:00Z', claims: [], error: null,
+      draftId: 'd1', recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y' },
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('本次核查范围'), 'the actual scope is displayed');
+  assert.ok(text.includes('未提取到声明'), 'the empty scope is named');
+  assert.ok(text.includes('不能视为核查通过'), 'an empty scope is not treated as passed');
+});
+
+test('a non-empty verification lists the actual scope of checked claims', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '我们保证周五交付。',
+    analysis: analysis('supported', 'a1'),
+    claims: { target: 'draft', at: '2026-07-10T00:00:00Z', error: null, draftId: 'd1',
+      recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
+      claims: [{ id: '对外承诺', dimension: '对外承诺', text: '我们保证周五交付', status: 'supported',
+        items: [], missing: '', rewrite: '', conflict: null, withdrawn: false, failedChecks: [] }] },
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('本次核查范围'));
+  assert.ok(text.includes('对外承诺：我们保证周五交付'), 'the checked claim text is listed as scope');
+});
+
+test('the current status shows an expired review instead of awaiting approval', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '周五交付。',
+    review: '已核实。', review_draft: 'd1', reviewStale: ['source_changed'],
+    analysis: analysis('supported', 'a1'),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('复核已过期 · 来源变了'), 'approval status reflects the expired review');
+  assert.ok(!text.includes('待批准'), 'an expired review does not show as awaiting approval');
 });

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { opportunityWorkflow } from './opportunities.mjs';
-import { verifyClaims } from './claims.mjs';
+import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, verifyClaims } from './claims.mjs';
 
 const EVIDENCE = '客户询问了报价和交付周期。';
 
@@ -28,6 +28,17 @@ function fixture(assessReply, claimsReply) {
   const current = () => workflow.state().opportunities[0];
   return { call, current, state: workflow.state };
 }
+
+test('draft mode instructs extraction of decision-relevant statements; analysis mode does not', () => {
+  const sources = [{ id: 'E1', source: '客户线程', date: null, kind: 'evidence', text: EVIDENCE }];
+  const draft = claimMessages({ mode: 'draft', draft: { recipient: 'a@b.c', body: '合同已签署。' },
+    dimensions: DRAFT_DIMENSIONS, sources, language: 'zh-CN' });
+  const draftSystem = draft[0].content;
+  assert.ok(draftSystem.includes('合同已签署') && draftSystem.includes('已交付')
+    && draftSystem.includes('保证某时间完成'), 'the draft-mode prompt names the decision-relevant statement classes');
+  const analysis = claimMessages({ mode: 'analysis', dimensions: ANALYSIS_DIMENSIONS, sources, language: 'zh-CN' });
+  assert.ok(!analysis[0].content.includes('草稿模式下声明列表为空'), 'analysis mode keeps the fixed dimension list');
+});
 
 test('a verbatim supporting quote establishes support and nothing more', () => {
   const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];

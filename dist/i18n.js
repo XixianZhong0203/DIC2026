@@ -422,7 +422,18 @@ const english = {
   "来源已保存": "Source saved",
   "声明核查完成": "Claims checked",
   "声明核查失败": "Claims check failed",
-  "还没有已保存的草稿。": "No draft has been saved yet."
+  "还没有已保存的草稿。": "No draft has been saved yet.",
+  // 人工复核失效（review-expiry）新增键。与上方规则相同：只追加在末尾，不改动既有键。
+  "复核已过期": "Review expired",
+  "草稿变了": "The draft changed",
+  "来源变了": "The sources changed",
+  "复核缺少来源版本": "The review has no source version",
+  "人工核实已过期": "Human review expired",
+  "请重新核查，或针对当前草稿记录人工复核结论。": "Verify again, or record a human review for the current draft.",
+  // 声明提取覆盖边界（claim-coverage）新增键：同样只追加在末尾。
+  "本次核查范围": "Verification scope",
+  "未提取到声明": "No claims extracted",
+  "本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。": "No claims were extracted, so this verification covered nothing and cannot count as passed."
 };
 
 export function translate(language, phrase) {
