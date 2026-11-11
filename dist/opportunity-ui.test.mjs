@@ -68,9 +68,16 @@ function find(nodes, predicate) {
   return null;
 }
 
-const analysis = (status, analysisId) => JSON.stringify({
+const analysis = (status, analysisId, overrides = {}) => JSON.stringify({
   status, analysisId, quote: '客户表示希望周五交付。', reason: 'explicit', unknown: '',
   conflict: '', clarification: '', suggestedReply: '', raw: '',
+  ...overrides,
+});
+const answer = overrides => ({
+  situation: 'insufficient', confirmed: '客户表示想先看案例。',
+  missing: '缺少客户明确的签约回复。', bounds: '', next: '可以先发案例并询问采购计划。',
+  retryable: false, compare: [], supporting: [], incomplete: [],
+  ...overrides,
 });
 const item = overrides => ({
   id: 'o1', kind: 'lead', title: '客户线索', source: '客户邮件', evidence: '客户表示希望周五交付。',
@@ -366,4 +373,120 @@ test('the audit lists each opened-source action and a review with no opened sour
   };
   (auditPanel().children ?? []).forEach(walk);
   assert.equal(emptyNotes.length, 1, 'legacy review rows without a viewing state are not mislabeled');
+});
+
+// 「当前回答」：证据不足时怎么说、怎么继续。措辞由服务端 evidenceAnswer 决定，
+// UI 只展示并把下一步接到卡片已有入口（查看来源 / 补资料 / 采用澄清问题，对应决策卡 view/source/draft）。
+test('an insufficient answer names the confirmed part, the exact gap, and the next step', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    analysis: analysis('unknown', 'a1', { clarification: '客户是否有明确的签约意向？' }),
+    answer: answer(),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('当前回答 · 证据不足 · 先说清缺口'), 'the situation is labeled');
+  assert.ok(text.includes('已确认 · 客户表示想先看案例。'), 'what is confirmed is shown');
+  assert.ok(text.includes('缺少 · 缺少客户明确的签约回复。'), 'the exact gap is shown');
+  assert.ok(text.includes('下一步 · 可以先发案例并询问采购计划。'), 'an actionable next step is shown');
+  for (const label of ['查看来源', '补资料', '采用澄清问题']) assert.ok(text.includes(label), 'action ' + label);
+});
+
+test('an insufficient answer without a clarification question does not offer that action', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    analysis: analysis('unknown', 'a1'),
+    answer: answer(),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('查看来源') && text.includes('补资料'));
+  assert.ok(!text.includes('采用澄清问题'), 'no clarification question means no adopt action');
+});
+
+test('a sufficient answer shows a bounded conclusion and points at the supporting source', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    analysis: analysis('supported', 'a1'),
+    answer: answer({
+      situation: 'sufficient',
+      confirmed: '客户已明确表达签约意向。',
+      missing: '合同是否签署仍待确认。',
+      bounds: '合同是否签署仍待确认。',
+      next: '可安排合同细节确认。',
+      supporting: [{ id: 'S2', label: '客户回复' }],
+    }),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('当前回答 · 证据充分 · 结论有边界'), 'the situation is labeled');
+  assert.ok(text.includes('已确认 · 客户已明确表达签约意向。'), 'the confirmed part is shown');
+  assert.ok(text.includes('仍缺 · 合同是否签署仍待确认。'), 'what is still missing is shown');
+  assert.ok(text.includes('结论边界 · 合同是否签署仍待确认。'), 'the conclusion bound is shown');
+  assert.ok(text.includes('依据来源 · 客户回复'), 'the new supporting source is pointed to');
+});
+
+test('a conflict answer lists the records to compare and withholds a conclusion', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    analysis: analysis('conflict', 'a1'),
+    answer: answer({
+      situation: 'conflict',
+      confirmed: '',
+      missing: '来源相互矛盾，先比较下列记录再下结论。',
+      next: '请确认哪条记录为准。',
+      compare: [
+        { id: 'S1', label: '客户邮件', stance: 'supports', quote: '周五交付', text: '客户确认周五交付。' },
+        { id: 'S2', label: '客户回复', stance: 'refutes', quote: '改为周二', text: '客户希望改为周二。' },
+      ],
+    }),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('当前回答 · 来源冲突 · 先比较记录'), 'the situation is labeled');
+  assert.ok(text.includes('支持 · 客户邮件 · 周五交付'), 'the supporting record is listed');
+  assert.ok(text.includes('反驳 · 客户回复 · 改为周二'), 'the opposing record is listed');
+  assert.ok(!text.includes('结论有边界'), 'no sufficient conclusion is claimed');
+});
+
+test('a failed verification answer is retryable and its retry re-runs the analysis claims', () => {
+  const { renderOne, nodes, requests, fullText } = harness();
+  const card = renderOne(item({
+    analysis: analysis('unknown', 'a1'),
+    answer: answer({
+      situation: 'failed',
+      confirmed: '', missing: '', next: '模型核查失败，可重试（重新核查）。原文与来源记录不受本次失败影响。',
+      retryable: true, incomplete: ['购买意向'],
+    }),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('当前回答 · 核查失败 · 可重试'), 'the failed situation is labeled');
+  assert.ok(text.includes('未完成核查 · 购买意向'), 'the incomplete claims are surfaced');
+  const retry = nodes.find(node => node.tag === 'button' && node.text === '重新核查');
+  assert.ok(retry, 'a retry action is offered');
+  retry.click();
+  assert.ok(requests.some(entry => entry.name === 'opportunity-claims'
+    && entry.payload.target === 'analysis'), 'the retry re-runs the analysis-target verification');
+});
+
+test('the answer actions reuse the card entries: open sources, focus the source form, use the clarification question', () => {
+  const { renderOne, nodes, fullText } = harness();
+  renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '草稿正文。',
+    analysis: analysis('unknown', 'a1', { clarification: '客户是否有明确的签约意向？' }),
+    answer: answer(),
+  }));
+  const sourceDetails = nodes.find(node => node.tag === 'details' && fullText(node).startsWith('来源 · '));
+  assert.ok(sourceDetails, 'the source block exists');
+  nodes.find(node => node.tag === 'button' && node.text === '查看来源').click();
+  assert.equal(sourceDetails.open, true, 'view sources opens the source block');
+  nodes.find(node => node.tag === 'button' && node.text === '补资料').click();
+  assert.equal(sourceDetails.open, true, 'adding a source keeps the source block open');
+  const sourceText = nodes.find(node => node.tag === 'textarea' && node.placeholder === '来源原文');
+  assert.ok(sourceText, 'the source text input exists');
+  nodes.find(node => node.tag === 'button' && node.text === '采用澄清问题').click();
+  const body = nodes.find(node => node.tag === 'textarea' && node.placeholder === '邮件正文');
+  assert.equal(body.value, '客户是否有明确的签约意向？', 'the clarification question fills the draft body');
+});
+
+test('an unanalyzed lead renders no answer block', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({}));
+  assert.ok(!fullText(card).includes('当前回答'), 'no answer is claimed without an analysis');
 });

@@ -548,7 +548,22 @@ const english = {
   "尚未展开来源": "No sources opened yet",
   "展开来源原文": "Opened source original",
   "展开来源原文会记录下来，保存复核时随结论写入审计。": "Opened sources are recorded; saving the review writes them to the audit with your conclusion.",
-  "来源不属于当前线索，请刷新后重试。": "The source does not belong to the current lead. Refresh and try again."
+  "来源不属于当前线索，请刷新后重试。": "The source does not belong to the current lead. Refresh and try again.",
+  // 证据不足时怎么说、怎么继续（evidence-answer 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "当前回答": "Current answer",
+  "证据充分 · 结论有边界": "Sufficient · bounded conclusion",
+  "证据不足 · 先说清缺口": "Insufficient · names the gap",
+  "来源冲突 · 先比较记录": "Conflicting sources · compare records first",
+  "核查失败 · 可重试": "Verification failed · retryable",
+  "仍缺": "Still missing",
+  "缺少": "Missing",
+  "结论边界": "Conclusion bounds",
+  "下一步": "Next step",
+  "依据来源": "Supporting sources",
+  "查看来源": "View sources",
+  "补资料": "Add a source",
+  "采用澄清问题": "Use the clarification question"
 };
 
 export function translate(language, phrase) {

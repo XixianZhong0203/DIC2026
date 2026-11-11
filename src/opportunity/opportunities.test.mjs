@@ -434,3 +434,146 @@ test('a review audit records exactly the sources opened; stale views never carry
   // 审计保留全部查看动作（S1、E1；更换草稿后 S1；加入新来源后 S1）。
   assert.equal(state().audit.filter(event => event.action === 'review_source_viewed').length, 4);
 });
+
+// 「当前回答」：证据不足时怎么说、怎么继续。
+const unknownIntentClaims = JSON.stringify({ claims: [
+  { id: '购买意向', dimension: '购买意向', text: '客户想先看案例', status: 'unknown',
+    items: [], missing: '还缺客户明确的签约回复。', rewrite: '客户想先看案例，意向未确认。' },
+  { id: '签约状态', dimension: '签约状态', text: '客户已签约', status: 'unknown',
+    items: [], missing: '合同是否签署仍待确认。', rewrite: '尚未确认合同是否签署。' },
+] });
+const caseRequestAssess = JSON.stringify({ status: 'unknown', quote: 'Friday was proposed only.',
+  reason: '客户只看案例，还没有签约意向。', unknown: '缺少客户明确的签约回复。', conflict: '',
+  clarification: '客户是否有明确的签约意向？', suggestedReply: '可以先发案例并询问采购计划。' });
+
+test('an evidence answer is stored after analysis: names the confirmed part, the exact gap, and the next step', async () => {
+  const { call, current } = fixture(user => user.mode ? unknownIntentClaims : caseRequestAssess);
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户是否想签约？' });
+  const answer = current().answer;
+  assert.equal(answer.situation, 'insufficient');
+  assert.equal(answer.confirmed, 'Friday was proposed only.');
+  assert.match(answer.missing, /签约/);
+  assert.equal(answer.next, '可以先发案例并询问采购计划。');
+  assert.deepEqual(answer.supporting, []);
+  assert.equal(answer.retryable, false);
+});
+
+test('a reply with explicit intent updates the answer to a bounded conclusion that points at the new source', async () => {
+  let intent = false;
+  const { call, current } = fixture(user => user.mode
+    ? (intent ? JSON.stringify({ claims: [
+        { id: '购买意向', dimension: '购买意向', text: '客户有签约意向', status: 'supported',
+          items: [{ evidenceId: 'S1', stance: 'supports', quote: '我们希望尽快签约',
+            note: '客户明确表示签约意向' }],
+          missing: '', rewrite: '客户已明确表达签约意向。' },
+        { id: '签约状态', dimension: '签约状态', text: '客户已签约', status: 'unknown',
+          items: [], missing: '合同是否签署仍待确认。', rewrite: '合同是否签署仍待确认。' },
+      ] }) : unknownIntentClaims)
+    : caseRequestAssess);
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户是否想签约？' });
+  assert.equal(current().answer.situation, 'insufficient');
+  assert.equal(current().answer.supporting.length, 0);
+  // 客户补来明确表达签约意向的回复：来源集合变化触发分析目标核查重跑。
+  intent = true;
+  await call('opportunity-source', { id, name: '客户回复', date: '2026-07-10', kind: 'customer',
+    text: '客户明确表示：我们希望尽快签约。', language: 'zh' });
+  const answer = current().answer;
+  assert.equal(answer.situation, 'sufficient');
+  assert.match(answer.confirmed, /签约意向/);
+  assert.match(answer.bounds, /合同是否签署仍待确认/);
+  assert.deepEqual(answer.supporting.map(source => source.id), ['S1']);
+  assert.equal(answer.supporting[0].label, '客户回复');
+});
+
+test('conflicting sources produce a conflict answer that lists the records to compare', async () => {
+  const { call, current } = fixture(user => {
+    if (!user.mode) return caseRequestAssess;
+    const count = (user.sources ?? []).length; // E1 + 已添加来源
+    if (count === 1) return unknownIntentClaims;
+    if (count === 2) return JSON.stringify({ claims: [
+      { id: '购买意向', dimension: '购买意向', text: '客户周五签约', status: 'supported',
+        items: [{ evidenceId: 'S1', stance: 'supports', quote: '周五签约', note: '客户确认周五' }],
+        missing: '', rewrite: '客户确认周五签约。' },
+      { id: '签约状态', dimension: '签约状态', text: '客户已签约', status: 'unknown',
+        items: [], missing: '合同是否签署仍待确认。', rewrite: '尚未确认合同是否签署。' },
+    ] });
+    return JSON.stringify({ claims: [
+      { id: '购买意向', dimension: '购买意向', text: '客户周五签约', status: 'conflict',
+        items: [
+          { evidenceId: 'S1', stance: 'supports', quote: '周五签约', note: '客户确认周五' },
+          { evidenceId: 'S2', stance: 'refutes', quote: '改为下周一', note: '客户希望改期' },
+        ],
+        missing: '请确认以哪份记录为准。', rewrite: '签约日期存在冲突。' },
+      { id: '签约状态', dimension: '签约状态', text: '客户已签约', status: 'unknown',
+        items: [], missing: '合同是否签署仍待确认。', rewrite: '尚未确认合同是否签署。' },
+    ] });
+  });
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户是否想签约？' });
+  await call('opportunity-source', { id, name: '客户邮件', date: '2026-07-10', kind: 'customer',
+    text: '客户确认周五签约。', language: 'zh' });
+  assert.equal(current().answer.situation, 'sufficient');
+  await call('opportunity-source', { id, name: '客户回复', date: '2026-07-11', kind: 'customer',
+    text: '客户希望改为下周一。', language: 'zh' });
+  const answer = current().answer;
+  assert.equal(answer.situation, 'conflict');
+  assert.deepEqual(answer.compare.map(entry => entry.id), ['S1', 'S2']);
+  assert.match(answer.missing, /比较/);
+  assert.equal(answer.supporting.length, 0);
+});
+
+test('a failed verification stores a retryable failed answer; re-running recovers it', async () => {
+  let failed = true;
+  const { call, current } = fixture(user => {
+    if (!user.mode) return caseRequestAssess;
+    if (failed) {
+      const error = new Error('HTTP 500');
+      error.status = 502;
+      throw error;
+    }
+    return unknownIntentClaims;
+  });
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户是否想签约？' });
+  assert.equal(current().answer.situation, 'failed');
+  assert.equal(current().answer.retryable, true);
+  assert.match(current().answer.next, /重试/);
+  assert.deepEqual(current().answer.incomplete, ['购买意向', '签约状态']);
+  failed = false;
+  await call('opportunity-claims', { id, target: 'analysis', language: 'zh' });
+  assert.equal(current().answer.situation, 'insufficient');
+  assert.equal(current().answer.retryable, false);
+});
+
+test('the answer is stored even when the claims review targets the draft after a source is added', async () => {
+  // 最近一次核查针对草稿时，来源变化仍要重跑分析目标核查，回答指向新来源。
+  let intent = false;
+  const { call, current } = fixture(user => {
+    if (!user.mode) return caseRequestAssess;
+    if (user.draft != null) return unknownIntentClaims; // 草稿目标：声明与草稿无关，保持不足
+    return intent ? JSON.stringify({ claims: [
+      { id: '购买意向', dimension: '购买意向', text: '客户有签约意向', status: 'supported',
+        items: [{ evidenceId: 'S1', stance: 'supports', quote: '我们希望尽快签约',
+          note: '客户明确表示签约意向' }],
+        missing: '', rewrite: '客户已明确表达签约意向。' },
+      { id: '签约状态', dimension: '签约状态', text: '客户已签约', status: 'unknown',
+        items: [], missing: '合同是否签署仍待确认。', rewrite: '合同是否签署仍待确认。' },
+    ] }) : unknownIntentClaims;
+  });
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户是否想签约？' });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '您好，案例稍后发送。' });
+  await call('opportunity-claims', { id, target: 'draft', language: 'zh' });
+  assert.equal(current().claims.target, 'draft');
+  assert.equal(current().answer.situation, 'insufficient');
+  intent = true;
+  await call('opportunity-source', { id, name: '客户回复', date: '2026-07-10', kind: 'customer',
+    text: '客户明确表示：我们希望尽快签约。', language: 'zh' });
+  // claims_review 保持草稿目标（发送门禁语义不变）……
+  assert.equal(current().claims.target, 'draft');
+  // ……而「当前回答」已按新来源更新并指向 S1。
+  assert.equal(current().answer.situation, 'sufficient');
+  assert.deepEqual(current().answer.supporting.map(source => source.id), ['S1']);
+});
