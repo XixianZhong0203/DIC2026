@@ -24,7 +24,7 @@ function fixture(assessReply, claimsReply) {
   };
   const workflow = opportunityWorkflow(db, { complete, model: 'test double', fail, required });
   const call = (action, body) => workflow.mutations['/api/' + action](body);
-  call('opportunity', { kind: 'lead', title: '签约核查', source: '客户线程', evidence: EVIDENCE });
+  call('opportunity', { kind: 'lead', title: '签约核查', source: '客户线程', evidence: EVIDENCE, evidence_kind: 'customer' });
   const current = () => workflow.state().opportunities[0];
   return { call, current, state: workflow.state };
 }
@@ -429,7 +429,8 @@ test('two dated records on the same day that cannot be ordered are stored as a c
   const { call, current } = fixture({ status: 'unknown' }, user => JSON.stringify({
     claims: [{
       id: '签约状态', dimension: '签约状态', text: '签约状态',
-      items: user.sources.filter(source => source.kind === 'customer').map(source => ({
+      // 只引用谈签约的两条当天记录（E1 是客户线程原文，与签约无关）。
+      items: user.sources.filter(source => source.text.includes('签约')).map(source => ({
         evidenceId: source.id,
         stance: source.text.includes('不推进') ? 'refutes' : 'supports',
         quote: source.text.includes('不推进') ? '暂不推进签约' : '希望签约',
@@ -585,13 +586,63 @@ test('a customer quote that states the completed fact upgrades the claim to supp
   assert.equal(claim.decisive.source.kind, 'customer');
 });
 
-test('support from the lead evidence itself is not founder-only', () => {
+test('support recorded as a customer record keeps the claim supported', () => {
   const [claim] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'supported',
-    items: [{ evidenceId: 'E1', stance: 'supports', quote: '双方已签署合同', note: '线索原文' }],
+    items: [{ evidenceId: 'E1', stance: 'supports', quote: '双方已签署合同', note: '客户原文逐字陈述' }],
     missing: '', rewrite: '',
-  }], [{ id: 'E1', source: '客户线程', date: null, kind: 'evidence', text: '双方已签署合同。' }]);
+  }], [{ id: 'E1', source: '客户线程', date: null, kind: 'customer', text: '双方已签署合同。' }]);
   assert.equal(claim.status, 'supported');
+});
+
+test('an initial source with unconfirmed identity leaves the claim unconfirmed, quote still admissible', () => {
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'supported',
+    items: [{ evidenceId: 'E1', stance: 'supports', quote: '客户已签约', note: '来源身份未确认的陈述' }],
+    missing: '', rewrite: '',
+  }], [{ id: 'E1', source: '客户线程', date: null, kind: 'unconfirmed', text: '客户已签约。' }]);
+  assert.equal(claim.status, 'unconfirmed');
+  assert.equal(claim.decisive.source.kind, 'unconfirmed');
+  assert.deepEqual(claim.failedChecks, []);
+});
+
+test('a legacy generic evidence quote is read as unconfirmed, not as verified support', () => {
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'supported',
+    items: [{ evidenceId: 'E1', stance: 'supports', quote: '客户已签约', note: '旧版通用来源' }],
+    missing: '', rewrite: '',
+  }], [{ id: 'E1', source: '客户线程', date: null, kind: 'evidence', text: '客户已签约。' }]);
+  assert.equal(claim.status, 'unconfirmed');
+});
+
+test('an unconfirmed source mixed with a founder statement stays unconfirmed', () => {
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'supported',
+    items: [
+      { evidenceId: 'E1', stance: 'supports', quote: '客户已签约', note: '来源未确认' },
+      { evidenceId: 'S1', stance: 'supports', quote: '客户已签约', note: '创始人陈述' },
+    ],
+    missing: '', rewrite: '',
+  }], [
+    { id: 'E1', source: '客户线程', date: null, kind: 'unconfirmed', text: '客户已签约。' },
+    { id: 'S1', source: '创始人记录', date: null, kind: 'founder', text: '客户已签约。' },
+  ]);
+  assert.equal(claim.status, 'unconfirmed');
+});
+
+test('a neutral customer quote cannot supply the customer-side support', () => {
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'supported',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: '客户已签约', note: '创始人陈述' },
+      { evidenceId: 'S2', stance: 'neutral', quote: '我们愿意签约', note: '只表达意愿' },
+    ],
+    missing: '', rewrite: '',
+  }], [
+    { id: 'S1', source: '创始人记录', date: null, kind: 'founder', text: '客户已签约。' },
+    { id: 'S2', source: '客户邮件', date: '2026-07-02', kind: 'customer', text: '我们愿意签约，期待合作。' },
+  ]);
+  assert.equal(claim.status, 'founder_only');
 });
 
 test('a neutral stance is admissible and neither supports nor opposes the claim', () => {

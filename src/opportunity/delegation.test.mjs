@@ -33,7 +33,8 @@ test('the same send action is blocked while unauthorized and completes once the 
     ? supportedClaim('We can deliver on Friday.')
     : JSON.stringify({ status: 'supported', quote: EVIDENCE, reason: 'fixture: sufficient',
       unknown: '', conflict: '', clarification: '', suggestedReply: '' }));
-  call('opportunity', { kind: 'lead', title: 'Send gate', source: 'Round 1 synthetic case', evidence: EVIDENCE });
+  call('opportunity', { kind: 'lead', title: 'Send gate', source: 'Round 1 synthetic case', evidence: EVIDENCE,
+    evidence_kind: 'customer' });
   const item = () => state().opportunities[0];
   const id = item().id;
   await call('opportunity-assess', { id, request: 'Can we confirm the date?', language: 'en' });

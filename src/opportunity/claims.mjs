@@ -15,19 +15,36 @@ export const STATUSES = ['supported', 'refuted', 'unknown', 'conflict'];
 
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
 
+// 核查有效性指纹：初始来源的原文 + 来源身份（evidence_kind）+ 逐条来源。
+// 来源身份变化（如把同一段原文从「来源未确认」改判为「客户原文」）会改变指纹，
+// 旧核查结果因此过期，不能沿用旧判断自动放行。
 export function evidenceHash(opportunity, sourceRows) {
   return sha256(JSON.stringify([
     opportunity.evidence,
+    opportunity.evidence_kind ?? 'unconfirmed',
     sourceRows.map(row => [row.name, row.date ?? null, row.kind, row.text]),
   ]));
 }
 
-// 创始人自述判定：支持该声明的全部有效引文都来自创始人来源（没有客户来源或线索原文的
-// 支持性引文）时，证据状态为「仅创始人陈述」(founder_only)。由引文立场 + 来源类型
-// 程序判定：仅表达意愿或无关的客户引文（stance 非 supports）不会把 founder_only
-// 升级为 supported；客户来源的标签由用户录入，判定只看实际支持声明的引文。
+// 证据状态判定（有支持、无有效反驳时）：只看当前仍有效、且实际支持这条声明的引文，
+// 按用户录入的来源身份判定——
+//   customer（客户原文／外部记录）引文支持 → supported（客户来源支持）；
+//   支持引文全部来自创始人来源 → founder_only（仅创始人陈述，待独立核实）；
+//   含「来源未确认」引文（未确认单独，或与创始人陈述混合；含旧版通用 evidence 引文）
+//   → unconfirmed（来源未确认，待核实）。
+// 标为「仅相关」(neutral) 的引文不在支持集合里，不能提供支持。
+// 旧版记录的通用 evidence 身份按未确认读取：原文与引用能力保留，但不能再自动通过门槛。
+export function supportEvidenceState(supports) {
+  if (!supports.length) return null;
+  const kinds = new Set(supports.map(item => item.source.kind));
+  if (kinds.has('customer')) return 'supported';
+  if ([...kinds].every(kind => kind === 'founder')) return 'founder_only';
+  return 'unconfirmed';
+}
+
+// 创始人自述判定：支持该声明的全部有效引文都来自创始人来源。
 export function founderOnlySupport(supports) {
-  return supports.length > 0 && supports.every(item => item.source.kind === 'founder');
+  return supportEvidenceState(supports) === 'founder_only';
 }
 
 const jsonText = raw => (raw ?? '').trim().replace(/^\x60\x60\x60(?:json)?\s*|\s*\x60\x60\x60$/g, '');
@@ -44,6 +61,7 @@ export function claimMessages({ mode, request, assessment, draft, dimensions, so
     'Verify only the supplied claims. Do not add or replace claims. The founder\u2019s urgency, hopes and opinions are not evidence; a fact the founder explicitly supplies may support only what it states, never more.',
     'items lists only the sources that bear on the claim. For each item give stance (supports / refutes / withdraws / neutral \u2014 relevant to the claim but neither supporting nor refuting it), quote (a verbatim substring of that source\u2019s original text \u2014 never paraphrased, translated or spliced), note (one sentence saying which part of the claim the quote supports, refutes, or how it relates to the conclusion) and revises (the evidenceIds of the earlier sources this record explicitly withdraws or changes; an empty array unless the record explicitly revises the same commitment of the same customer). If no source bears on the claim, items is an empty array.',
     'A founder repeating what a customer said is still a founder source, never a customer source.',
+    'The identity of the initial lead source (customer record, founder statement, or unconfirmed) is recorded by the user; material with unconfirmed identity supports a claim only as written and never counts as independent verification.',
     'neutral is for a quote that bears on the claim but does not settle it: for a completed fact (a signed contract, a delivery made, a payment received), a customer merely expressing intent or willingness (willing to sign) is neutral, never supports; mark supports only when the quote states the fact the claim asserts.',
     'Sources with dates or versions are judged by time and scope: the current state follows a newer source only when that record explicitly withdraws or changes an earlier source\u2019s same commitment of the same customer and names that earlier source in revises. A record that is merely newer by date, a source without a date, or a revision that cannot be tied to an earlier record keeps the records a conflict; say in missing which record to confirm.',
     'Expressing intent is not completing an act: a customer saying they will sign is not a signed contract; requesting to see cases is not purchase intent; performance figures must keep their time scope.',
@@ -54,6 +72,7 @@ export function claimMessages({ mode, request, assessment, draft, dimensions, so
     '只核查给定的声明，不得新增或替换声明。创始人或用户的催促、期望和判断不是证据；明确提供的新事实只能支持它所述的内容，不能支持超出它的表述。',
     'items 只列与声明相关的来源。每条给出 stance（supports 支持 / refutes 反驳 / withdraws 撤回 / neutral 相关但不定论）、quote（必须是该来源原文的逐字子串，不得改写、翻译或拼接）、note（一句话说明引文支持、反驳或关联了声明的哪一部分）和 revises（这条记录明确撤回或改变哪些更早来源的 evidenceId，只有明确修订同一客户的同一承诺时才填，否则为空数组）。没有来源涉及该声明时 items 为空数组。',
     '创始人转述客户的话仍是创始人来源，不是客户来源。',
+    '初始线索来源的身份（客户原文／外部记录、创始人陈述、来源未确认）由用户记录；"来源未确认"的资料只能按其所写支持声明，不能视为独立佐证。',
     'neutral 用于与声明相关但不能定论的引文：对"已完成"事实（已签约、已交付、已付款），客户只表达意向或意愿（如愿意签约）时记 neutral，不记 supports；只有引文明确陈述声明所述事实时才记 supports。',
     '有日期或版本的来源按时间与适用范围判断当前状态：只有较新记录明确撤回或改变同一客户同一承诺、并在 revises 中指明被修订的更早来源时，当前状态才以较新记录为准；记录只是日期较新、来源没有日期、或修订无法对应到声明内的更早记录时，保留来源冲突，并在 missing 中说明需要确认哪一条。',
     '表达意向不等于已完成：客户说会签约不等于合同已签署；请求查看案例不等于有购买意向；引用业绩要保留其时间范围。',
@@ -168,10 +187,12 @@ export function resolveClaim(claim, sources, options = {}) {
     // 仅日期较新、无法排序或修订无法确认时，保留冲突（conflict 中的双方条目各带来源原文）。
     const decisive = decisiveSupersession(valid, supports, opposes);
     if (decisive) {
-      // 修订确认后，当前状态若只落在创始人来源的支持引文上，仍是「仅创始人陈述」。
-      const status = decisive.stance === 'supports'
-        ? (founderOnlySupport(supports) ? 'founder_only' : 'supported')
-        : 'refuted';
+      // 修订确认后，当前状态同样按来源身份判定：只有客户来源引文支持才算有依据，
+      // 落在创始人陈述或来源未确认引文上时沿用对应待核实状态。
+      const status =
+        decisive.stance === 'supports'
+          ? supportEvidenceState(supports)
+          : 'refuted';
       return { ...base, status, decisive, withdrawn: decisive.stance === 'withdraws' };
     }
     return { ...base, status: 'conflict', conflict: { supports, opposes } };
@@ -181,9 +202,9 @@ export function resolveClaim(claim, sources, options = {}) {
     return { ...base, status: 'refuted', decisive, withdrawn: decisive.stance === 'withdraws' };
   }
   if (supports.length) {
-    // 支持引文全部来自创始人来源：证据状态为「仅创始人陈述」(founder_only)，
-    // 服务端不把它计为自动核查通过；有客户来源（或线索原文）引文支持才算有依据。
-    const status = founderOnlySupport(supports) ? 'founder_only' : 'supported';
+    // 支持引文按来源身份判定证据状态：只有客户来源引文支持才算有依据；
+    // 仅创始人陈述、含来源未确认引文或沿用旧版通用 evidence 引文，都不得自动通过。
+    const status = supportEvidenceState(supports);
     return { ...base, status, decisive: supports.at(-1) };
   }
   if (missing && rewrite) return { ...base, status: 'unknown' };
