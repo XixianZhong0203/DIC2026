@@ -454,7 +454,28 @@ const english = {
   "缺口（待核实）": "Open question (needs evidence)",
   "你已选择：": "You selected: ",
   "（尚未确认，本地数据未变更）": " (not confirmed yet; nothing has changed locally)",
-  "情况已变化 · ": "Situation changed · "
+  "情况已变化 · ": "Situation changed · ",
+  // 工作区与对话切换（workspace-switching 分支）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键（含声明核查块）。
+  "工作区": "Workspace",
+  "切换工作区": "Switch workspace",
+  "在此工作区新建对话": "New conversation in this workspace",
+  "切换到这个工作区": "Switch to this workspace",
+  "检测到跨工作区切换": "Cross-workspace switch detected",
+  "检测到同工作区的新任务": "New task in the same workspace",
+  "跨工作区请求": "Cross-workspace request",
+  "当前工作区：": "Current workspace: ",
+  "目标工作区：": "Target workspace: ",
+  "确认后将在 {ws} 开新对话，读取 {ws} 的资料和全局记忆。": "A new chat will be opened in {ws}, reading {ws}'s records plus global memory.",
+  "确认后在当前工作区开新对话；原对话仍可访问，新对话仍读取该工作区的长期记忆。": "A new chat opens in this workspace; the current chat stays accessible, and the new one still reads its long-term memory.",
+  "这条输入同时涉及：": "This input involves: ",
+  "现在发送只会读取当前工作区的资料；如需其他工作区的资料，请先手动切换。": "Sending now only uses the current workspace's records; switch manually first if you need another workspace's materials.",
+  "切换到 {ws} 并开新对话": "Switch to {ws} and open a new chat",
+  "在 {ws} 开新对话": "Open a new chat in {ws}",
+  "继续当前对话": "Stay in the current conversation",
+  "在当前工作区继续": "Continue in the current workspace",
+  "取消": "Cancel",
+  "实际使用工作区": "Workspace actually used"
 };
 
 export function translate(language, phrase) {

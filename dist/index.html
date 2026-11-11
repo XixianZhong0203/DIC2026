@@ -184,6 +184,10 @@
     <div id="capture-list"></div>
   </section>
   <section class="card chat wide" data-panel="chat" hidden>
+    <div class="workspace-bar" id="workspace-bar" hidden>
+      <span class="workspace-bar-label" data-i18n>工作区</span>
+      <select id="workspace-select" aria-label="切换工作区"></select>
+    </div>
     <div class="chat-stage" id="chat-stage">
       <div class="chat-empty" id="chat-welcome">
         <h1 data-i18n>今天想做什么？</h1>
@@ -195,6 +199,7 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
       </button>
       <div id="composer">
+        <div id="switch-card" class="switch-card" hidden></div>
         <form id="chat" class="composer">
           <label class="sr-only" for="question"><span data-i18n>问 Daymark</span></label>
           <textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="给 Daymark 发消息"></textarea>

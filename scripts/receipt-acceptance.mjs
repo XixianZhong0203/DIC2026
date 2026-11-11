@@ -155,10 +155,11 @@ const staleMsg = db2.prepare('INSERT INTO messages(role, body, review, conversat
 const staleMessageId = Number(staleMsg.lastInsertRowid);
 const staleConfirm = await api('/api/decision', { message_id: staleMessageId, option_id: 'reschedule', confirm: true });
 const staleRow = staleConfirm.data.messages?.find(row => row.id === staleMessageId);
-record('a failed confirmation is recorded as failed, not applied',
-  staleConfirm.ok && staleRow?.review?.decision?.status === 'failed'
-  && /事件已变更/.test(staleRow?.review?.decision?.choice?.receipt ?? '') ? 'PASS' : 'FAIL',
-  staleRow?.review?.decision?.choice?.receipt ?? '');
+const staleResult = staleRow?.review?.decision;
+record('a stale confirmation refreshes the card without applying it',
+  staleConfirm.ok && staleResult?.status === 'open'
+  && staleResult.recheck?.stale === true && Boolean(staleResult.recheck.reason) ? 'PASS' : 'FAIL',
+  staleResult?.recheck?.reason ?? '');
 const staleAudit = taskAudit(staleConfirm.data).find(row => JSON.parse(row.detail).via?.decision === staleMessageId);
 record('a failed confirmation leaves no task audit row',
   !staleAudit && task(staleConfirm.data, taskId)?.starts === '2026-11-14T15:30' ? 'PASS' : 'FAIL',

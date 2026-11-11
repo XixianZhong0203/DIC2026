@@ -65,6 +65,26 @@ function setActiveChat(id) {
   render();
 }
 
+// Raw project field of the active chat (may be '' = ungrouped). Distinct from
+// currentProjectScope(), which resolves the fallback scope for memory.
+function activeChatProject() {
+  const chat = (current?.conversations ?? []).find(item => item.id === activeChat);
+  return (chat?.project ?? '').trim();
+}
+
+// Create a fresh conversation in a workspace (new chats inherit it) and open it.
+async function newChatIn(project) {
+  const data = await fetchResult('conversation', { project });
+  current = { ...data, tasks: data.tasks ?? [] };
+  if (data.conversation != null) {
+    activeChat = data.conversation;
+    localStorage.setItem('daymark-chat', activeChat);
+  }
+  render();
+  showView('chat');
+  get('question').focus();
+}
+
 function resetMemoryReview() {
   pendingMemory = null;
   get('memory-review').hidden = true;
@@ -254,12 +274,15 @@ function openSources(review) {
   if (review.cited?.length) body.append(element('h3', t('引用记录')));
   for (const record of review.cited ?? []) {
     const source = element('details', '', 'entry');
-    source.append(element('summary', '#' + record.id + ' · ' + t(record.source)), element('p', t(record.body)));
+    source.append(element('summary', '#' + record.id + ' · ' + (record.scope === GLOBAL_SCOPE ? t('全局') : (record.scope || t('未分组'))) + ' · ' + t(record.source)), element('p', t(record.body)));
     body.append(source);
   }
   if (review.trace) {
     const trace = element('details', '', 'entry');
     trace.append(element('summary', t('处理记录')));
+    // Which workspace this answer actually read, so the user can confirm the
+    // material range (ungrouped chats fall back to the default scope).
+    trace.append(element('p', t('实际使用工作区') + ' · ' + (review.trace.scope || t('未分组'))));
     if (review.trace.retrievalQuery) trace.append(element('p', t('检索词') + ' · ' + review.trace.retrievalQuery));
     if (review.trace.gapRetrieval) {
       const { query, ids, status } = review.trace.gapRetrieval;
@@ -269,7 +292,7 @@ function openSources(review) {
     trace.append(element('p', t('核对原文片段') + ' · ' + review.trace.matchedQuotes));
     if (review.trace.attemptedModel) trace.append(element('p', t('调用模型') + ' · ' + review.trace.attemptedModel));
     for (const record of review.trace.retrieved) {
-      trace.append(element('p', '#' + record.id + ' · ' + record.source + ' · ' + record.kind));
+      trace.append(element('p', '#' + record.id + ' · ' + (record.scope || t('未分组')) + ' · ' + record.source + ' · ' + record.kind));
     }
     body.append(trace);
   }
@@ -298,6 +321,7 @@ function render() {
   get('scroll-bottom').setAttribute('aria-label', t('回到底部'));
   layoutComposer(messages.length > 0);
   renderChatHistory();
+  renderWorkspaceBar();
   if (view === 'chat') {
     const chat = (current.conversations ?? []).find(item => item.id === activeChat);
     get('view-title').textContent = t(chat?.title ?? '对话');
@@ -750,16 +774,29 @@ formAction('task-form', async data => {
   });
   openTaskEditor();
 });
-formAction('chat', async data => {
-  const progress = get('chat-progress');
+// The input held by an open prompt card. Once the user picks an option the
+// text is delivered exactly once (a fresh conversation in the target
+// workspace, or the current conversation); cancel keeps it in the box.
+let heldSwitch = null;
+
+function setChatBusy(busy) {
+  chatBusy = busy;
+  get('chat-progress').hidden = !busy;
+  get('question').readOnly = busy;
+  get('chat-send').disabled = busy || !current?.live || !get('question').value.trim();
+}
+
+// The single send path. `target` is null for the current conversation, or
+// { project } for a fresh conversation that inherits that workspace.
+async function sendChat(text, target) {
   const question = get('question');
-  progress.hidden = false;
-  question.readOnly = true;
-  chatBusy = true;
-  get('chat-send').disabled = true;
+  setChatBusy(true);
   try {
-    const temporary = oneTurnNote && data.text.startsWith(t('仅本次使用：'));
-    await request('chat', { ...data, language, temporary, conversation_id: activeChat });
+    const body = { text, language,
+      temporary: oneTurnNote && text.startsWith(t('仅本次使用：')) };
+    if (target?.project != null) body.project = target.project;
+    else body.conversation_id = activeChat;
+    await request('chat', body);
     if (current.conversation != null) {
       activeChat = current.conversation;
       localStorage.setItem('daymark-chat', activeChat);
@@ -767,13 +804,85 @@ formAction('chat', async data => {
     question.value = '';
     oneTurnNote = false;
   } finally {
-    chatBusy = false;
-    progress.hidden = true;
-    question.readOnly = false;
+    setChatBusy(false);
     growQuestion();
-    get('chat-send').disabled = !current?.live || !question.value.trim();
+  }
+}
+
+// Before the formal answer (and memory retrieval) the input is checked for a
+// possible topic or workspace change. A 'continue' judgment sends directly;
+// anything else holds the input and shows the prompt card. If the check
+// fails, the original input goes through as a normal message and the manual
+// switch entry stays available.
+formAction('chat', async data => {
+  const text = data.text;
+  if (heldSwitch) {
+    // Enter while the card is open: send directly in the current conversation.
+    heldSwitch = null;
+    hideSwitchCard();
+    return sendChat(text, null);
+  }
+  setChatBusy(true);
+  try {
+    const intent = await fetchResult('chat-intent', { text, conversation_id: activeChat, language });
+    if (intent.action === 'continue') return sendChat(text, null);
+    heldSwitch = { action: intent.action, workspace: intent.workspace ?? '', involved: intent.involved ?? [], current: intent.current ?? '' };
+    showSwitchCard(text, heldSwitch);
+  } catch (error) {
+    showNotice(error.message);
+    return sendChat(text, null);
+  } finally {
+    setChatBusy(false);
   }
 });
+
+function hideSwitchCard() {
+  heldSwitch = null;
+  const card = get('switch-card');
+  card.replaceChildren();
+  card.hidden = true;
+}
+
+function showSwitchCard(text, intent) {
+  const card = get('switch-card');
+  card.replaceChildren();
+  const currentName = activeChatProject() || t('未分组');
+  const name = name => name || t('未分组');
+  const title = element('p', '', 'switch-card-title');
+  const detail = element('p', '', 'switch-card-detail');
+  const note = element('p', '', 'switch-card-note');
+  const actions = element('div', '', 'switch-card-actions');
+  if (intent.action === 'switch') {
+    title.textContent = t('检测到跨工作区切换');
+    detail.textContent = t('当前工作区：') + name(currentName) + ' → ' + t('目标工作区：') + name(intent.workspace);
+    note.textContent = t('确认后将在 {ws} 开新对话，读取 {ws} 的资料和全局记忆。').replaceAll('{ws}', name(intent.workspace));
+  } else if (intent.action === 'new') {
+    title.textContent = t('检测到同工作区的新任务');
+    detail.textContent = t('当前工作区：') + name(currentName);
+    note.textContent = t('确认后在当前工作区开新对话；原对话仍可访问，新对话仍读取该工作区的长期记忆。');
+  } else {
+    title.textContent = t('跨工作区请求');
+    detail.textContent = t('这条输入同时涉及：') + (intent.involved.length ? intent.involved.map(name).join('、') : currentName);
+    note.textContent = t('现在发送只会读取当前工作区的资料；如需其他工作区的资料，请先手动切换。');
+  }
+  const sendAs = target => async () => {
+    heldSwitch = null;
+    hideSwitchCard();
+    await sendChat(text, target);
+  };
+  if (intent.action === 'switch') {
+    actions.append(action(t('切换到 {ws} 并开新对话').replaceAll('{ws}', name(intent.workspace)), sendAs({ project: intent.workspace }), false));
+    actions.append(action(t('继续当前对话'), sendAs(null)));
+  } else if (intent.action === 'new') {
+    actions.append(action(t('在 {ws} 开新对话').replaceAll('{ws}', name(currentName)), sendAs({ project: activeChatProject() }), false));
+    actions.append(action(t('继续当前对话'), sendAs(null)));
+  } else {
+    actions.append(action(t('在当前工作区继续'), sendAs(null), false));
+  }
+  actions.append(action(t('取消'), () => { heldSwitch = null; hideSwitchCard(); get('question').focus(); }, false));
+  card.append(title, detail, note, actions);
+  card.hidden = false;
+}
 
 const PROMPT_CHIPS = ['有哪些待办？', '我们做到哪了？', '当前版本可以发布吗？'];
 
@@ -806,6 +915,9 @@ function growQuestion() {
 
 get('question').addEventListener('input', () => {
   growQuestion();
+  // Editing the held input invalidates the pending suggestion: close the
+  // card so a resubmission re-runs the detection on the new text.
+  if (heldSwitch) hideSwitchCard();
   get('chat-send').disabled = chatBusy || !current?.live || !get('question').value.trim();
 });
 get('question').addEventListener('keydown', event => {
@@ -826,19 +938,8 @@ get('scroll-bottom').onclick = () => {
   const node = get('conversation');
   node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
 };
-get('new-chat').onclick = () => withButton(get('new-chat'), startNewChat);
-get('rail-new').onclick = () => withButton(get('rail-new'), startNewChat);
-async function startNewChat() {
-  const data = await fetchResult('conversation', {});
-  current = { ...data, tasks: data.tasks ?? [] };
-  if (data.conversation != null) {
-    activeChat = data.conversation;
-    localStorage.setItem('daymark-chat', activeChat);
-  }
-  render();
-  navigateView('chat');
-  get('question').focus();
-}
+get('new-chat').onclick = () => withButton(get('new-chat'), () => newChatIn(activeChatProject()));
+get('rail-new').onclick = () => withButton(get('rail-new'), () => newChatIn(activeChatProject()));
 let chatFilter = '';
 function closeSearch() {
   const sidebar = get('sidebar');
@@ -864,6 +965,10 @@ get('chat-search').addEventListener('input', event => {
 get('chat-search').addEventListener('keydown', event => {
   if (event.key === 'Escape') closeSearch();
 });
+// The sidebar shows workspaces first, each keeping its independent chats;
+// ungrouped chats stay accessible as their own entry. Workspaces that only
+// hold memory so far are listed too, so they can be entered (and opened with
+// a new chat) before any conversation exists there.
 function renderChatHistory() {
   const list = get('chat-list');
   list.replaceChildren();
@@ -873,8 +978,73 @@ function renderChatHistory() {
     list.append(element('p', t(chatFilter ? '没有找到相关对话。' : '还没有对话。发消息或点「新对话」开始。'), 'muted'));
     return;
   }
-  for (const chat of chats) list.append(chatRow(chat));
+  const byWorkspace = new Map();
+  for (const chat of chats) {
+    const name = (chat.project ?? '').trim();
+    if (!byWorkspace.has(name)) byWorkspace.set(name, []);
+    byWorkspace.get(name).push(chat);
+  }
+  const named = [...byWorkspace.entries()].filter(([name]) => name);
+  named.sort((a, b) => b[1].reduce((m, c) => Math.max(m, c.id), 0) - a[1].reduce((m, c) => Math.max(m, c.id), 0));
+  const memoryOnly = (current?.workspaces ?? []).filter(name => !byWorkspace.has(name));
+  const groups = [
+    ...named,
+    ...memoryOnly.map(name => [name, []]),
+    ...(byWorkspace.has('') ? [['', byWorkspace.get('')]] : []),
+  ];
+  for (const [name, items] of groups) list.append(workspaceGroupRow(name, items));
 }
+
+function workspaceGroupRow(name, chats) {
+  const group = element('div', '', 'chat-workspace');
+  const head = element('div', '', 'chat-workspace-head');
+  const label = element('button', name || t('未分组'), 'chat-workspace-name');
+  label.type = 'button';
+  label.title = t('切换到这个工作区');
+  label.onclick = () => { showView('chat'); switchToWorkspace(name); };
+  const add = element('button', '+', 'chat-workspace-add');
+  add.type = 'button';
+  add.title = t('在此工作区新建对话');
+  add.setAttribute('aria-label', t('在此工作区新建对话'));
+  add.onclick = () => withButton(add, () => newChatIn(name));
+  head.append(label, add);
+  const body = element('div', '', 'chat-workspace-chats');
+  for (const chat of chats) body.append(chatRow(chat));
+  group.append(head, body);
+  return group;
+}
+
+// Manual workspace switch: open the most recent chat of that workspace, or
+// create the first conversation there when none exists yet.
+function switchToWorkspace(name) {
+  const chats = (current?.conversations ?? [])
+    .filter(chat => (chat.project ?? '').trim() === name)
+    .sort((a, b) => b.id - a.id);
+  if (chats.length) setActiveChat(chats[0].id);
+  else newChatIn(name);
+}
+
+// Chat header: which workspace the active chat belongs to, plus the manual
+// switcher. The input itself is never changed by switching.
+function renderWorkspaceBar() {
+  const bar = get('workspace-bar');
+  const select = get('workspace-select');
+  const names = [...(current?.workspaces ?? [])];
+  select.replaceChildren(
+    ...names.map(name => {
+      const option = element('option', name);
+      option.value = name;
+      return option;
+    }),
+  );
+  const ungrouped = element('option', t('未分组'));
+  ungrouped.value = '';
+  select.append(ungrouped);
+  const project = activeChatProject();
+  select.value = names.includes(project) ? project : '';
+  bar.hidden = !(view === 'chat' && (activeChat != null || names.length));
+}
+get('workspace-select').onchange = () => switchToWorkspace(get('workspace-select').value);
 
 function chatRow(chat) {
   const row = element('div', '', 'chat-row' + (chat.id === activeChat ? ' current' : ''));

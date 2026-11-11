@@ -483,3 +483,47 @@ main:has([data-panel="chat"]:not([hidden])) { padding: 0; }
 .decision.stale { border-color: #f0e2c0; background: #fdfaf2; }
 .decision-note { margin: 0; font-size: 13px; color: #5b6578; }
 .decision-stale { margin: 0; font-size: 13px; color: #b45309; white-space: pre-wrap; }
+/* Workspaces: the chat sidebar groups chats by workspace; each workspace
+   keeps its independent conversations, and ungrouped chats stay an entry. */
+.chat-workspace { margin: 0 0 6px; }
+.chat-workspace-head { display: flex; align-items: center; gap: 4px; padding: 2px 2px 3px; }
+.chat-workspace-name {
+  flex: 1 1 auto; min-width: 0; text-align: left; padding: 3px 6px;
+  border: 0; border-radius: 6px; background: transparent;
+  color: #5f5f5f; font-size: 11.5px; font-weight: 650; letter-spacing: .04em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chat-workspace-name:hover { background: #ececec; color: #1d1d1d; }
+.chat-workspace-add {
+  flex: none; width: 20px; height: 20px; padding: 0;
+  display: grid; place-items: center;
+  border: 0; border-radius: 6px; background: transparent;
+  color: #8b8b8b; font-size: 14px; line-height: 1;
+}
+.chat-workspace-add:hover { background: #e0e0e0; color: #1d1d1d; }
+.chat-workspace-chats { display: grid; gap: 2px; padding-left: 6px; border-left: 1px solid #e3e3e3; margin-left: 6px; }
+
+/* Chat header: current workspace of the active chat + manual switcher. */
+.workspace-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px max(24px, calc((100% - 760px) / 2));
+  border-bottom: 1px solid #f0f0f0;
+}
+.workspace-bar-label { color: #8b8b8b; font-size: 12px; }
+.workspace-select {
+  padding: 3px 8px; font-size: 13px; color: #1d1d1d;
+  border: 1px solid #e2e2e2; border-radius: 8px; background: #fff;
+}
+.workspace-select:focus { outline: none; border-color: #aaa; }
+
+/* Pre-send prompt card: holds the input until the user picks an option. */
+.switch-card {
+  margin: 0 0 10px; padding: 12px 14px;
+  border: 1px solid #d8d8d8; border-radius: 14px; background: #fafafa;
+}
+.switch-card p { margin: 0 0 4px; }
+.switch-card .switch-card-title { font-size: 14px; font-weight: 650; color: #1d1d1d; }
+.switch-card .switch-card-detail { font-size: 13px; color: #434343; }
+.switch-card .switch-card-note { font-size: 12.5px; color: #737373; margin-bottom: 10px; }
+.switch-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.switch-card-actions button { padding: 7px 12px; font-size: 13px; }
