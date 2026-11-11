@@ -342,10 +342,21 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
             audit(id, 'blocked', { action: 'send', reason: 'claims_no_claims' });
             fail(409, '草稿声明核查未提取到任何声明，实际核查范围为空。请重新核查，或针对当前草稿记录人工复核结论。');
           }
+          // 仅创始人陈述（founder_only）：支持该声明的引文全部来自创始人来源。
+          // 服务端不把它计为自动核查通过：补入独立来源后重新核查、改写为有依据的说法，
+          // 或针对当前草稿与当前来源记录人工复核结论，再批准发送。
           const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+          const founderOnly = unresolved.filter(claim => claim.status === 'founder_only');
           if (unresolved.length) {
-            audit(id, 'blocked', { action: 'send', reason: 'claims_unresolved',
+            audit(id, 'blocked', { action: 'send',
+              reason: founderOnly.length ? 'claims_founder_only' : 'claims_unresolved',
               claims: unresolved.map(claim => ({ id: claim.id, status: claim.status })) });
+            if (founderOnly.length) {
+              fail(409, '以下声明仅由创始人提供，待独立核实：' +
+                founderOnly.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+                '。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，' +
+                '或针对当前草稿与来源记录人工复核结论，再批准发送。');
+            }
             fail(409, '以下声明核查未通过：' +
               unresolved.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
               '。请改写后重新核查，或针对当前草稿记录人工复核结论。');
