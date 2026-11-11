@@ -33,6 +33,24 @@ export function normalizeVia(via) {
   };
 }
 
+// Audit rows written by one decision card's confirmation, newest first.
+// Used by the /api/decision confirm path to recover idempotently: when a
+// confirm's write committed but saving the receipt on the card failed (or a
+// concurrent confirm already applied it), the row's before/after snapshot is
+// the actual write result the receipt is rebuilt from.
+export function auditForDecision(db, decisionId) {
+  const rows = db.prepare('SELECT * FROM task_audit ORDER BY id DESC LIMIT 200').all();
+  const found = [];
+  for (const row of rows) {
+    let detail = {};
+    try { detail = JSON.parse(row.detail); } catch { continue; }
+    if (detail.via?.decision === decisionId) {
+      found.push({ id: row.id, task: row.task, action: row.action, time: row.time, ...detail });
+    }
+  }
+  return found;
+}
+
 // Receipt shown on the decision card after a confirmed task effect:
 // original time, new time, and the actual result.
 export function changeReceipt(action, before, after) {

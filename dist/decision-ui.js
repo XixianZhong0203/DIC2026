@@ -122,9 +122,11 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
     const head = element('div', '', 'decision-head');
     head.append(element('span', t(kindLabels[decision.kind] ?? '请确认'), 'decision-kind'));
     head.append(element('strong', decision.title));
+    // 状态四选一，必须能当场区分：已应用 / 失败 / 暂缓（确认时重查拦截）/ 已选待确认。
     const status = applied ? t('已确认')
       : decision.status === 'failed' ? t('确认失败')
-      : decision.choice ? t('已选择') : t('待你决定');
+      : stale ? t('暂缓')
+      : decision.choice ? t('已选，待确认') : t('待你决定');
     head.append(element('span', status, 'decision-status'));
     section.append(head);
     if (decision.current) section.append(element('p', t('当前已确认') + ' · ' + decision.current));

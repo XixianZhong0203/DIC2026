@@ -10,6 +10,10 @@ import { actionDecision, runAlignmentBenchmark } from './src/alignment/alignment
 import { calendarFile } from './src/calendar/calendar.mjs';
 import { GLOBAL_SCOPE, demoRecords, releaseStatus, release, repository } from './src/policy/policy.mjs';
 import { detectDecision, decisionContext, recheckDecision } from './src/decision/decision.mjs';
+// 决策卡确认执行 (confirm execution): per-card serialization, confirm-time
+// recheck dispatch, idempotent receipt recovery, and the card states
+// 已选待确认 / 已应用 / 暂缓 / 失败. See the module header for ownership.
+import { createDecisionRoute } from './src/decision/confirm.mjs';
 // 待办操作留痕（audit window）：task_audit 表、前后快照与决策卡回执文案。
 import { createTaskAudit, changeReceipt } from './src/tasks/task-audit.mjs';
 
@@ -172,7 +176,7 @@ async function modelReply(question, language, active, recent, decisions = null, 
 对方（如客户）提出变更（如要求改交付日期）时，那是未确认提议，不是冲突也不是已确认事实：填写 proposal（body 为提议的一句话摘要，message_id 为来源消息编号），并在答复中说明此前已确认的规则在你明确接受前仍然有效。
 缺少当前版本证据时说无法确认。区分准备和执行。你没有任何发布或修改记忆的权限。
 当前结构化发布状态：${JSON.stringify({ version: release, verified: events().some(event => event.type === 'verified' && event.version === release) })}。该状态优先于旧聊天或旧记忆中的测试结论。
-${decisions ? '用户在决策卡中已作出的选择（视为用户明确确认；"那个时段""刚确认的偏好"等后续指代应解析到这些选择）：\n' + decisions.lines.join('\n') +
+${decisions ? '用户在决策卡中的选择及其状态（状态决定效力："已应用"＝变更已在本地实际生效，"那个时段""刚确认的偏好"等后续指代只可解析到这些已应用的选择及其回执；"已选待确认"＝尚未写入，实际安排未变；"确认失败"与"暂缓未生效"＝本地数据未变更，回答必须以卡片中"当前实际生效"的安排和现有记录为准，不得当作已确认的变更）：\n' + decisions.lines.join('\n') +
  (decisions.temporary ? '\n仅本次例外（只适用于这轮答复）：' + decisions.temporary : '') : ''}
 引用编号只从以下记录中选择。记录：${JSON.stringify(active)}` },
       ...history,
@@ -392,88 +396,16 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
       throw error;
     }
   },
-  // Decision-card interaction: a selection is recorded as soon as it is made
-  // (returned to the conversation); confirm=true then runs the option's effect
-  // through the same handlers and confirmation rules as its direct route
-  // (/api/task is revision-gated, /api/memory checks the impact snapshot).
-  //
-  // 确认时重查 (confirm-time recheck): before any write, recheckDecision
-  // re-reads the live tasks/memory and compares them with what the card was
-  // generated against. When the situation changed, the write is PAUSED —
-  // nothing is mutated — and the card is updated in place (decision.recheck
-  // carries the specific reason, decision.options are refreshed), so the
-  // owner continues from the same card. Shared with the task-log window:
-  // this route only reads tasks and memory itself; all writes still go
-  // through /api/task and /api/memory, whose contracts are unchanged.
-  '/api/decision': async ({ message_id, option_id, confirm }) => {
-    if (!Number.isSafeInteger(message_id) || typeof option_id !== 'string') fail(400, '请求内容不正确。');
-    const row = db.prepare('SELECT * FROM messages WHERE id = ? AND role = ?').get(message_id, 'assistant');
-    if (!row) fail(404, '找不到对应的决策消息。');
-    const review = JSON.parse(row.review ?? 'null');
-    const decision = review?.decision;
-    if (!decision) fail(404, '这条消息没有决策卡。');
-    if (decision.status === 'applied') fail(409, '该决策已确认，请刷新查看结果。');
-    const option = (decision.options ?? []).find(item => item.id === option_id);
-    if (!option) fail(404, '找不到对应的决策选项。');
-    const effect = option.effect ?? {};
-    if (!['view', 'question', 'temporary', 'task', 'memory'].includes(effect.kind)) fail(400, '该选项没有对应的操作。');
-    const at = new Date().toISOString();
-    let receipt = '';
-    if (confirm === true) {
-      const recheck = recheckDecision({ decision, option, tasks: tasks(), memories: memories() });
-      if (recheck.stale) {
-        // 情况已变化：暂缓写入，就地更新卡片（具体原因 + 刷新后的可选项）。
-        decision.recheck = { at, stale: true, reason: recheck.reason };
-        if (recheck.options?.length) {
-          decision.options = recheck.options;
-          if (decision.choice && !decision.options.some(item => item.id === decision.choice.option_id)) {
-            decision.choice = null;
-          }
-        }
-        db.prepare('UPDATE messages SET review = ? WHERE id = ?').run(JSON.stringify(review), message_id);
-        return state();
-      }
-      try {
-        if (effect.kind === 'task') {
-          // 决策卡触发的改期：关联该次选择，回执给出原时间、新时间和实际结果。
-          const previous = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(effect.payload?.id ?? -1);
-          await mutations['/api/task']({ ...(effect.payload ?? {}), via: {
-            decision: message_id, option: option.id, option_label: option.label, at,
-          } });
-          const updated = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(effect.payload?.id ?? -1);
-          receipt = '本地日历已更新 · ' + changeReceipt('updated', previous, updated);
-        } else if (effect.kind === 'memory') {
-          const payload = effect.payload ?? {};
-          const impact = await mutations['/api/memory-impact']({
-            kind: payload.kind, scope: payload.scope, body: payload.body, replaces: payload.replaces, language: 'zh-CN',
-          });
-          mutations['/api/memory']({ ...payload, snapshot: impact.snapshot, review_base: payload.replaces ?? null, message_id });
-          const saved = db.prepare('SELECT id FROM memory WHERE message_id = ? ORDER BY id DESC LIMIT 1').get(message_id);
-          receipt = '本地长期偏好已更新' + (payload.replaces != null ? ' · 修订 #' + payload.replaces : '') + ' · 新记录 #' + (saved?.id ?? '');
-        } else if (effect.kind === 'temporary') {
-          receipt = '已记为本次例外，长期偏好不变';
-        } else if (effect.kind === 'question') {
-          receipt = '已填入输入框，发送后继续';
-        } else {
-          receipt = '已确认查看，本地数据未变更';
-        }
-        decision.recheck = null;
-      } catch (error) {
-        if (!error.status) throw error;
-        decision.status = 'failed';
-        decision.choice = { option_id, at, receipt: error.message };
-        db.prepare('UPDATE messages SET review = ? WHERE id = ?').run(JSON.stringify(review), message_id);
-        return state();
-      }
-      decision.status = 'applied';
-    }
-    decision.choice = {
-      option_id, at, receipt,
-      ...(confirm === true && effect.kind === 'temporary' ? { temporary: true, temporary_text: String(effect.payload?.text ?? '').slice(0, 800) } : {}),
-    };
-    db.prepare('UPDATE messages SET review = ? WHERE id = ?').run(JSON.stringify(review), message_id);
-    return state();
-  },
+  // 决策卡确认 (/api/decision) is built by createDecisionRoute below: a
+  // selection is recorded as soon as it is made (已选待确认, nothing written);
+  // confirm=true runs the option's effect through the same handlers and
+  // confirmation rules as its direct route (/api/task is revision-gated,
+  // /api/memory checks the impact snapshot). Confirms for one card are
+  // serialized (double click / two tabs / retries), a recheck failure pauses
+  // the card in place (暂缓), and a committed write whose receipt save failed
+  // is recovered from the existing records (task_audit / memory row) so the
+  // receipt always matches the actual result.
+  '/api/decision': null,
   '/api/task': ({ id, revision, title, starts, ends, memory_id, all_day = false, location = '', notes = '', via }) => {
     if (typeof all_day !== 'boolean') fail(400, '请求内容不正确。');
     if (all_day) {
@@ -672,6 +604,10 @@ compare — 跨工作区比较/对照，或同时涉及多个工作区的资料
     log('published', current.version, id);
   },
 };
+// 决策卡确认执行 (decision-card confirm execution): per-card serialization,
+// confirm-time recheck, idempotent receipt recovery from the existing
+// records (task_audit via / memory.message_id), and the card states.
+mutations['/api/decision'] = createDecisionRoute({ db, tasks, memories, mutations, state, fail });
 
 const assets = new Map([
   ['/', ['index.html', 'text/html']],

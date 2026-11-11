@@ -39,7 +39,13 @@
 // The produced payload is stored on the assistant message as review.decision:
 //   { kind, title, current, reason, proposal, records, options, anchor,
 //     recheck, status, choice }
-//   status: 'open' -> 'choosing' -> 'applied' | 'failed'
+//   status: 'open' (awaiting selection) -> 'choosing' (selected, awaiting
+//     confirm) -> 'applied' | 'failed'. A confirm that the confirm-time
+//     recheck pauses is NOT applied: the status returns to 'open' and
+//     recheck.stale=true marks it 暂缓 (paused) until the owner re-confirms a
+//     refreshed option. The four conversation states are therefore:
+//     已选待确认 ('choosing'), 已应用 ('applied'), 暂缓 (recheck.stale),
+//     失败 ('failed'); decisionContext reports each of them distinctly.
 //   anchor: the long-term memory record the card's memory options are anchored
 //     on (preference cards only); recheck re-validates it at confirm time.
 //   recheck: null | { at, stale, reason } — set by the server when a confirm
@@ -59,6 +65,10 @@ import { memoryCandidates, scopeMatches } from '../memory/memory-impact.mjs';
 
 export const DECISION_KINDS = ['reschedule', 'preference', 'clarify'];
 export const EFFECT_KINDS = ['view', 'question', 'temporary', 'task', 'memory'];
+// Source text of memory records written by a decision card's confirm. The
+// confirm path (confirm.mjs) matches it to recover the receipt of a write
+// that committed before the card's receipt save.
+export const DECISION_MEMORY_SOURCE = '对话决策 · 长期偏好冲突';
 
 const FULL_TIME = /(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2})/g;
 const ISO_DATE = /(\d{4}-\d{2}-\d{2})/g;
@@ -330,7 +340,7 @@ function preferenceAskOptions({ anchor, intents, scope, body }) {
           kind: 'memory',
           payload: {
             kind: anchor.kind, scope, body,
-            source: '对话决策 · 长期偏好冲突',
+            source: DECISION_MEMORY_SOURCE,
           },
         },
       },
@@ -342,7 +352,7 @@ function preferenceAskOptions({ anchor, intents, scope, body }) {
           kind: 'memory',
           payload: {
             kind: anchor.kind, scope, body,
-            source: '对话决策 · 长期偏好冲突', replaces: anchor.id,
+            source: DECISION_MEMORY_SOURCE, replaces: anchor.id,
           },
         },
       },
@@ -449,10 +459,13 @@ export function detectDecision({ question, review, tasks = [], memories = [], sc
 //     current active preferences/rules; drift requires re-confirmation with
 //     options re-anchored on the valid successor record.
 //
-// recheckDecision returns { stale, reason, options }:
+// recheckDecision returns { stale, reason, options, current }:
 //   stale=false → safe to apply the write;
-//   stale=true  → pause; `reason` says concretely what changed and
-//     `options` (when present) are the refreshed options for the card.
+//   stale=true  → pause; `reason` says concretely what changed,
+//     `options` (when present) are the refreshed options for the card, and
+//     `current` (when present) restates what is actually effective right now
+//     so the card and the conversation context keep the live arrangement as
+//     the source of truth.
 // ---------------------------------------------------------------------------
 
 export function recheckDecision({ decision, option, tasks = [], memories = [] }) {
@@ -472,6 +485,10 @@ function taskRecheck({ option, tasks }) {
   if (!target) {
     return { stale: true, reason: '卡片引用的事件 #' + payload.id + ' 已不存在（可能已被删除或修改），请先在日历中核对当前安排。' };
   }
+  // What is actually effective right now (the live event), regardless of what
+  // the card proposed; the paused card and the conversation context must keep
+  // stating this arrangement.
+  const current = '当前安排：' + target.title + ' · ' + fmtTime(target.starts) + ' → ' + fmtTime(target.ends);
   const problems = [];
   if (target.revision !== payload.revision) {
     problems.push('事件已被修改，当前为 ' + fmtTime(target.starts) + ' → ' + fmtTime(target.ends) +
@@ -512,13 +529,14 @@ function taskRecheck({ option, tasks }) {
     }
   }
   options.push(rescheduleCalendarOption({ tasks, date, excludeId: target.id }));
-  return { stale: true, reason: problems.join('；'), options };
+  return { stale: true, reason: problems.join('；'), options, current };
 }
 
 function memoryRecheck({ decision, option, memories }) {
   const payload = option.effect?.payload ?? {};
   const anchorId = payload.replaces ?? decision?.anchor ?? null;
   const problems = [];
+  let current = null;
   let successor = null;
   if (anchorId != null) {
     const record = (memories ?? []).find(item => item.id === anchorId) ?? null;
@@ -530,6 +548,11 @@ function memoryRecheck({ decision, option, memories }) {
       problems.push('卡片引用的长期偏好 #' + record.id + ' 已被修订' +
         (successor ? '（现行有效版本 #' + successor.id + '：' + successor.body + '）' : '') +
         '，为避免用旧卡覆盖后来确认的决定，请重新确认。');
+      // The arrangement actually in force is the valid successor, not the
+      // card's anchor: state it so the card and follow-ups keep the live rule.
+      current = successor
+        ? '当前生效的长期偏好：#' + successor.id + ' ' + successor.body
+        : '原偏好 #' + anchorId + ' 已失效，当前该范围内没有同一条的现行版本。';
     }
   }
   // Re-derive the impact set against the current active preferences/rules;
@@ -568,31 +591,57 @@ function memoryRecheck({ decision, option, memories }) {
           effect: { kind: 'view', payload: { sources: true } },
         },
       ];
-  return { stale: true, reason: problems.join('；'), options };
+  return { stale: true, reason: problems.join('；'), options, current };
 }
 
 // ---------------------------------------------------------------------------
 // Returning choices to the conversation: the fragment injected into the next
 // model reply so follow-ups can refer to what the user just picked.
+//
+// Every line states the card's STATE, so the model never treats an unapplied
+// selection as a confirmed change:
+//   已选待确认 (selected, not confirmed) — nothing was written yet;
+//   已应用 (applied) — the local write actually happened (receipt = the actual
+//     result, e.g. old/new time or the new record id);
+//   暂缓未生效 (paused) — the confirm was held back because the live state
+//     changed; the line restates what is actually effective (decision.current
+//     is refreshed in place by the confirm route when it pauses the card);
+//   确认失败 (failed) — the write errored; nothing changed.
+// Follow-ups must resolve to the live arrangement, not to a paused or failed
+// card's proposal.
 // ---------------------------------------------------------------------------
 
 export function decisionContext(messages) {
   const rows = (messages ?? [])
     .map(message => ({ message, decision: message.review?.decision }))
-    .filter(({ decision }) => decision?.choice?.option_id);
+    .filter(({ decision }) => decision?.choice?.option_id || decision?.recheck?.stale === true);
   if (!rows.length) return null;
   const lastUser = (messages ?? []).filter(message => message.role === 'user').at(-1)?.id ?? null;
   const lines = rows.slice(-5).map(({ message, decision }) => {
-    const choice = decision.choice;
-    const option = (decision.options ?? []).find(item => item.id === choice.option_id);
-    return '- ' + decision.title + ' · 用户选择了：' + (option?.label ?? choice.option_id) +
-      (choice.receipt ? ' · 结果：' + choice.receipt : '');
+    const choice = decision.choice ?? null;
+    const option = (decision.options ?? []).find(item => item.id === choice?.option_id);
+    const label = option?.label ?? choice?.option_id ?? '';
+    if (decision.status === 'applied') {
+      return '- ' + decision.title + ' · 已应用（本地数据已变更） · 用户选择了：' + label +
+        (choice?.receipt ? ' · 回执：' + choice.receipt : '');
+    }
+    if (decision.status === 'failed') {
+      return '- ' + decision.title + ' · 确认失败（本地数据未变更） · 用户选择了：' + label +
+        (choice?.receipt ? ' · 原因：' + choice.receipt : '');
+    }
+    if (decision.recheck?.stale === true) {
+      const picked = choice ? ' · 用户选择了：' + label : '';
+      return '- ' + decision.title + ' · 暂缓未生效（' + (decision.recheck.reason || '情况已变化') + '）' + picked +
+        ' · 本地数据未变更，当前实际生效：' + (decision.current || decision.reason || '');
+    }
+    return '- ' + decision.title + ' · 已选待确认（尚未写入，本地数据未变更） · 用户选择了：' + label;
   });
   let temporary = '';
   for (const { message, decision } of rows) {
     const choice = decision.choice;
     // A one-turn exception applies only while no later user message exists.
-    if (choice.temporary === true && choice.temporary_text && !(lastUser != null && message.id < lastUser)) {
+    if (choice?.temporary === true && choice.temporary_text && decision.status === 'applied' &&
+        !(lastUser != null && message.id < lastUser)) {
       temporary = choice.temporary_text;
     }
   }

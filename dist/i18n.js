@@ -310,6 +310,8 @@ const english = {
   "确认此选项": "Confirm this choice",
   "已确认": "Confirmed",
   "确认失败": "Confirmation failed",
+  "暂缓": "On hold",
+  "已选，待确认": "Selected, awaiting confirmation",
   "已选择": "Selected",
   "待你决定": "Waiting for your decision",
   "原事件": "Original event",

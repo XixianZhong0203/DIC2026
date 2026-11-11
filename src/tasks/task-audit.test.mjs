@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { createTaskAudit, changeReceipt, normalizeVia, taskSnapshot } from './task-audit.mjs';
+import { createTaskAudit, changeReceipt, normalizeVia, taskSnapshot, auditForDecision } from './task-audit.mjs';
 
 function fixture() {
   const db = new DatabaseSync(':memory:');
@@ -120,4 +120,28 @@ test('duplicate request: a status change that changes nothing is not recorded', 
     audit.record(db.prepare('SELECT * FROM tasks WHERE id = ?').get(row.id), 'done', before, null);
   }
   assert.equal(audit.list().length, 0, 'an already-done task stays quiet on a duplicate request');
+});
+
+test('auditForDecision returns only this card\'s writes, newest first, with their snapshots', () => {
+  const { db, audit, task } = fixture();
+  const row = task(1, '客户交付', '2026-11-13T15:00', '2026-11-13T16:30');
+  // A direct edit (no decision link) and another card's write must not be returned.
+  db.prepare('UPDATE tasks SET starts = ? WHERE id = ?').run('2026-11-13T16:00', row.id);
+  audit.record(db.prepare('SELECT * FROM tasks WHERE id = ?').get(row.id), 'updated', row, null);
+  db.prepare('UPDATE tasks SET starts = ? WHERE id = ?').run('2026-11-14T15:30', row.id);
+  audit.record(db.prepare('SELECT * FROM tasks WHERE id = ?').get(row.id), 'updated', row,
+    { decision: 99, option: 'reschedule', option_label: '别的卡', at: '2026-11-11T08:00:00.000Z' });
+  const beforeThird = db.prepare('SELECT * FROM tasks WHERE id = ?').get(row.id); // still 2026-11-14T15:30
+  db.prepare('UPDATE tasks SET starts = ? WHERE id = ?').run('2026-11-14T16:00', row.id);
+  audit.record(db.prepare('SELECT * FROM tasks WHERE id = ?').get(row.id), 'updated', beforeThird,
+    { decision: 12, option: 'reschedule', option_label: '改到 16:00', at: '2026-11-11T09:00:00.000Z' });
+
+  const rows = auditForDecision(db, 12);
+  assert.equal(rows.length, 1, 'only the rows linked to decision #12');
+  assert.equal(rows[0].action, 'updated');
+  assert.equal(rows[0].via.option, 'reschedule');
+  assert.equal(rows[0].before.starts, '2026-11-14T15:30');
+  assert.equal(rows[0].after.starts, '2026-11-14T16:00');
+  assert.deepEqual(auditForDecision(db, 7), []);
+  assert.equal(auditForDecision(db, 99).length, 1);
 });

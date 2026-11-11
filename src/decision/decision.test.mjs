@@ -244,8 +244,58 @@ test('decisionContext: confirmed choices become model context', () => {
   ];
   const context = decisionContext(messages);
   assert.equal(context.lines.length, 2);
-  assert.match(context.lines[0], /改期确认 · 用户选择了：改到 15:30 · 结果：事件已更新/);
+  assert.match(context.lines[0], /改期确认 · 已应用（本地数据已变更） · 用户选择了：改到 15:30 · 回执：事件已更新/);
   assert.equal(context.temporary, '今天用英文'); // the last choice sits after the last user message
+});
+
+test('decisionContext: distinguishes 已选待确认 / 已应用 / 暂缓 / 失败 and keeps the live arrangement', () => {
+  const messages = [
+    { id: 1, role: 'user', review: null, body: 'q1' },
+    // Applied: the receipt is the actual write result.
+    { id: 2, role: 'assistant', review: { decision: {
+      title: '改期确认', status: 'applied',
+      options: [{ id: 'reschedule', label: '改到 15:30' }],
+      choice: { option_id: 'reschedule', at: 't', receipt: '事件已更新 · 原 15:00 → 新 15:30' },
+    } } },
+    // Failed: the write errored, nothing changed.
+    { id: 4, role: 'assistant', review: { decision: {
+      title: '偏好冲突', status: 'failed',
+      options: [{ id: 'longterm', label: '更新长期偏好' }],
+      choice: { option_id: 'longterm', at: 't', receipt: '记忆核查已过期，请重新查看影响范围。' },
+    } } },
+    // Paused (暂缓): the confirm was held back; the line must restate what is
+    // actually effective (decision.current), not the card's proposal.
+    { id: 6, role: 'assistant', review: { decision: {
+      title: '确认改期 "客户会议"', status: 'open',
+      current: '当前安排：客户会议 · 2026-11-13 15:00 → 2026-11-13 16:30',
+      options: [{ id: 'reschedule', label: '改到 15:30' }],
+      choice: { option_id: 'reschedule', at: 't', receipt: '' },
+      recheck: { at: 't', stale: true, reason: '该时段在卡片生成后新增未完成任务' },
+    } } },
+    // Selected, pending confirm: nothing written yet.
+    { id: 8, role: 'assistant', review: { decision: {
+      title: '长期偏好冲突', status: 'choosing',
+      options: [{ id: 'longterm', label: '更新长期偏好' }],
+      choice: { option_id: 'longterm', at: 't', receipt: '' },
+    } } },
+  ];
+  const context = decisionContext(messages);
+  assert.equal(context.lines.length, 4);
+  assert.match(context.lines[0], /改期确认 · 已应用（本地数据已变更） · 用户选择了：改到 15:30 · 回执：事件已更新 · 原 15:00 → 新 15:30/);
+  assert.match(context.lines[1], /偏好冲突 · 确认失败（本地数据未变更） · 用户选择了：更新长期偏好 · 原因：记忆核查已过期/);
+  assert.match(context.lines[2], /确认改期 "客户会议" · 暂缓未生效（该时段在卡片生成后新增未完成任务） · 用户选择了：改到 15:30 · 本地数据未变更，当前实际生效：当前安排：客户会议 · 2026-11-13 15:00 → 2026-11-13 16:30/);
+  assert.match(context.lines[3], /长期偏好冲突 · 已选待确认（尚未写入，本地数据未变更） · 用户选择了：更新长期偏好/);
+  // A paused card without a surviving choice still reports the live arrangement.
+  const onlyPaused = decisionContext([
+    { id: 9, role: 'assistant', review: { decision: {
+      title: '确认改期 "客户会议"', status: 'open',
+      current: '当前安排：客户会议 · 2026-11-17 16:00 → 2026-11-17 17:30',
+      options: [], choice: null,
+      recheck: { at: 't', stale: true, reason: '事件已被修改' },
+    } } },
+  ]);
+  assert.equal(onlyPaused.lines.length, 1);
+  assert.match(onlyPaused.lines[0], /暂缓未生效（事件已被修改） · 本地数据未变更，当前实际生效：当前安排：客户会议 · 2026-11-17 16:00/);
 });
 
 test('decisionContext: a one-turn exception expires once the user sends another message', () => {
@@ -301,7 +351,9 @@ test('recheckDecision: a confirm passes when the calendar and target are unchang
     tasks, memories: [],
   });
   const option = decision.options.find(item => item.id === 'reschedule');
-  assert.equal(recheckDecision({ decision, option, tasks, memories: [] }).stale, false);
+  const recheck = recheckDecision({ decision, option, tasks, memories: [] });
+  assert.equal(recheck.stale, false);
+  assert.equal(recheck.current, undefined); // nothing changed, nothing to restate
 });
 
 test('recheckDecision: a new task in the slot pauses the write with a reason and refreshed options', () => {
@@ -319,6 +371,8 @@ test('recheckDecision: a new task in the slot pauses the write with a reason and
   assert.equal(recheck.stale, true);
   assert.match(recheck.reason, /新增未完成任务/);
   assert.match(recheck.reason, /周二评审/);
+  // The card keeps stating the arrangement that is actually in force.
+  assert.equal(recheck.current, '当前安排：客户会议 · 2026-11-13 15:00 → 2026-11-13 16:30');
   const refreshed = recheck.options;
   assert.equal(refreshed[0].id, 'keep');
   const change = refreshed.find(option => option.id === 'reschedule');
@@ -343,6 +397,8 @@ test('recheckDecision: a revised target event is re-derived from the live state'
   const recheck = recheckDecision({ decision, option, tasks: tasksNow, memories: [] });
   assert.equal(recheck.stale, true);
   assert.match(recheck.reason, /事件已被修改/);
+  // After a rule/event revision the live arrangement is restated, not the card's stale one.
+  assert.equal(recheck.current, '当前安排：客户会议 · 2026-11-13 14:00 → 2026-11-13 16:00');
   const change = recheck.options.find(option => option.id === 'reschedule');
   assert.equal(change.effect.payload.revision, 3);
   assert.equal(change.effect.payload.ends, '2026-11-14T17:30'); // keeps the new 120-minute span
@@ -392,6 +448,8 @@ test('recheckDecision: a superseded preference anchor requires re-confirmation a
   assert.equal(recheck.stale, true);
   assert.match(recheck.reason, /已被修订/);
   assert.match(recheck.reason, /#7/);
+  // The live rule (the successor) is what follow-ups must treat as in force.
+  assert.equal(recheck.current, '当前生效的长期偏好：#7 回复客户邮件用英文');
   const refreshed = recheck.options;
   assert.equal(refreshed.find(item => item.id === 'longterm').effect.payload.replaces, 7);
   assert.equal(refreshed.find(item => item.id === 'longterm').effect.payload.kind, 'preference');
