@@ -1,6 +1,9 @@
 export const repository = 'XixianZhong0203/DIC2026';
 export const release = 'v0.2';
 
+// A record saved with this scope applies to every project.
+export const GLOBAL_SCOPE = '*';
+
 export const demoRecords = [
   { kind: 'fact', scope: 'DIC2026', body: 'v0.1 已通过测试。', source: '测试记录 #17 · v0.1' },
   { kind: 'fact', scope: 'DIC2026', body: 'v0.2 是当前目标版本，尚无该版本通过的记录。', source: '版本记录 #18 · v0.2' },
