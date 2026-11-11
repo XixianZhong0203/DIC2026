@@ -522,7 +522,26 @@ const english = {
   "本次例外写在会话里。长期变更请修订原记录，保留出处和适用范围。": "Keep one-time exceptions in the session. Revise the original record for lasting changes, with a source and scope.",
   "以下是可能受影响的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review potentially affected rules and preferences. Replace, keep both, or use the change in this session.",
   "仅用于本次会话": "Use once in this session",
-  "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once."
+  "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once.",
+  // 跨工作区上下文隔离（workspace-isolation 分支）新增键。只追加在 english
+  // 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "跨工作区不能直接并入：旧对话的报价、承诺和决策卡不会跟着历史一起移动。请在目标工作区开新对话，或明确带入需要的记录。": "A cross-workspace merge is refused: the old chat's quotes, promises, and decision cards do not move with its history. Open a new conversation in the target workspace, or import the records you need.",
+  "带消息的会话不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡进入新工作区。请在目标工作区开新对话，或明确带入需要的记录。": "A session with messages cannot be moved across workspaces: its history would bring old quotes, promises, and decision cards into the new workspace. Open a new conversation there, or import the records you need.",
+  "找不到要带入的记录。": "The record to import could not be found.",
+  "这条记录已被修订，请带入修订后的版本。": "This record has been revised. Import the revised version instead.",
+  "记录已属于该工作区。": "The record already belongs to this workspace.",
+  "全局记录已对所有工作区可见，无需带入。": "Global records are visible in every workspace; no import needed.",
+  "两个会话不在同一工作区，不能直接并入：旧对话的报价、承诺和决策卡不会跟着历史一起移动。要引用那边的资料，可以明确选择要带入的记录。": "These sessions are in different workspaces and cannot be merged: the old chat's quotes, promises, and decision cards do not move with its history. To use its material, import the records you need explicitly.",
+  "当前会话有消息，不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡进入新工作区。要引用那边的资料，可以明确带入「{target}」的记录。": "This session has messages and cannot be moved across workspaces: its history would bring old quotes, promises, and decision cards into the new workspace. Import the records of “{target}” explicitly if you need them.",
+  "这个会话有消息，不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡一起过去。要引用这边的资料，可以明确带入「{target}」的记录。": "This session has messages and cannot be moved across workspaces: its history would bring old quotes, promises, and decision cards along. Import the records of “{target}” explicitly if you need them.",
+  "选择要带入的记录": "Choose records to import",
+  "从其他工作区带入记录": "Import records from another workspace",
+  "来源工作区": "Source workspace",
+  "带入所选记录": "Import selected records",
+  "这个工作区还没有可带入的记录。": "No records to import in this workspace.",
+  "请先选择要带入的记录。": "Select the records to import first.",
+  "已带入 {n} 条记录，保留了原工作区与出处。": "Imported {n} record(s), keeping the original workspace and source.",
+  "没有其他工作区可以带入记录。": "There is no other workspace to import records from."
 };
 
 export function translate(language, phrase) {
