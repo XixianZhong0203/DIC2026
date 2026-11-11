@@ -4,10 +4,19 @@ Daymark is a local AI workspace for one-person companies. It helps a founder kee
 
 ## What you can do
 
-- **Review the evidence behind a reply.** Open the evidence panel to see retrieved records, exact excerpts when available, model inferences, and open questions. For simulated outreach, review the approval, block reason, or simulated result in the activity log.
-- **Carry project decisions across conversations.** Extract memory candidates from a chat and confirm what to save. Project chats retrieve records for their project and records marked global.
-- **Resolve conflicts in chat.** Decision cards can show the current arrangement and a new proposal, surface the local calendar, or offer a one-time exception and a long-term preference change. Confirm a change before applying it.
-- **Track leads and improvement ideas.** Record sources manually, assess an opportunity, prepare an outreach draft, and create follow-up tasks. Tasks can link to sources and appear in a local calendar with ICS export.
+- **Workspaces and chat.** Organize conversations by project, search and resume prior chats, and start a new conversation in the current workspace. When an input suggests a new task or a different workspace, Daymark can ask where to continue before sending it. Chats use their workspace's saved records and global memory.
+- **Evidence and long-term memory.** Review retrieved records, verbatim excerpts, model inferences, open questions, and the workspace used for a reply. Extract memory candidates from a conversation and confirm what to save. Review related records before changing a saved rule or preference.
+- **Customer leads and improvement ideas.** Open a public search link, record sources manually, assess an opportunity, and prepare a follow-up task or an outreach draft. Open recent leads and upcoming tasks directly from the sidebar.
+- **Decisions, tasks, and calendar.** Compare a proposed change with the current arrangement, preview a calendar slot, or choose between a one-time exception and a saved preference. Daymark rechecks the relevant calendar or memory when you confirm. Create, edit, complete, reopen, and delete tasks, link them to sources, and export calendar events as ICS.
+- **Approvals and activity.** Review task changes and decision receipts. For simulated outreach, inspect the approved draft, any blocking reason, and the simulated result. Simulated publishing checks the current draft and version-specific verification.
+
+## Safety and alignment for a one-person company
+
+| Question | What Daymark does |
+| --- | --- |
+| **How can the founder audit a decision or action?** | The evidence panel shows the records behind a reply. Task activity records before-and-after values, and a decision receipt links the chosen action to its local result. Simulated outreach records approvals, blocks, and outcomes. |
+| **What happens when instructions conflict or evidence is missing?** | Project memory keeps confirmed decisions and proposals available across conversations. Decision cards present the current arrangement, proposed change, or missing information. Confirmation rechecks the relevant state and can refresh the options if it has changed. |
+| **How can the founder catch unsupported claims before relying on them?** | Lead analysis and outreach drafts can be checked against saved sources. The draft shows which claims were checked, any evidence gaps, and suggested rewrites. The send endpoint checks the current draft and requires current verification or human review before simulating an approved send. |
 
 ## Verify claims before simulated outreach
 
@@ -17,7 +26,7 @@ Daymark is a local AI workspace for one-person companies. It helps a founder kee
 4. Adopt a suggested rewrite or edit the draft, then verify the new version. You can also record a human review conclusion for the current draft.
 5. Approve the saved draft when ready. Daymark checks its current version and requires up-to-date verification or a current human review before simulating the send.
 
-A human review is bound to the current draft version **and** the current set of sources: when the body, recipient, or any source changes, the review is shown as expired with the reason (the draft changed or the sources changed) and no longer unlocks the send; records created before the source binding have no source version and prompt re-review. An expired review can be replaced by a fresh verification of the current evidence or a new review of the current draft. Automated verification uses the configured model to interpret supplied records. Daymark checks that quotations appear verbatim in those records. When competing sources cannot be resolved by an explicit revision or withdrawal, both remain visible. Adding a source can trigger automated verification again. Sending and publishing run as local simulations.
+A human review is bound to the current draft version **and** the current set of sources: when the body, recipient, or any source changes, the review is shown as expired with the reason (the draft changed or the sources changed) and no longer unlocks the send; records created before the source binding have no source version and prompt re-review. An expired review can be replaced by a fresh verification of the current evidence or a new review of the current draft. Automated verification uses the configured model to interpret supplied records. Daymark checks that quotations appear verbatim in those records. When competing sources cannot be resolved by an explicit revision or withdrawal, both remain visible. Adding a source can trigger automated verification again. Sending and publishing run as local simulations. The model may miss a claim or misread a source, so the draft displays the scope of its checks. Claim-by-claim verification currently covers lead analysis and outreach drafts.
 
 ## Run locally
 
