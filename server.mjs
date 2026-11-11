@@ -54,12 +54,16 @@ db.exec(`CREATE TABLE IF NOT EXISTS conversations (
 );`);
 const messageColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map(column => column.name));
 if (!messageColumns.has('conversation_id')) db.exec('ALTER TABLE messages ADD COLUMN conversation_id INTEGER');
+if (!messageColumns.has('time')) db.exec('ALTER TABLE messages ADD COLUMN time TEXT');
 const memoryColumns = new Set(db.prepare('PRAGMA table_info(memory)').all().map(column => column.name));
 if (!memoryColumns.has('message_id')) db.exec('ALTER TABLE memory ADD COLUMN message_id INTEGER');
 if (db.prepare('SELECT COUNT(*) AS n FROM messages WHERE conversation_id IS NULL').get().n) {
   const created = db.prepare('INSERT INTO conversations(title, created) VALUES (?, ?)').run('过往对话', new Date().toISOString());
   db.prepare('UPDATE messages SET conversation_id = ? WHERE conversation_id IS NULL').run(Number(created.lastInsertRowid));
 }
+// Older messages have no timestamp; approximate it with their conversation's
+// creation time so chat dividers can group them by day.
+db.prepare('UPDATE messages SET time = (SELECT created FROM conversations WHERE id = messages.conversation_id) WHERE time IS NULL').run();
 
 const key = (process.env.OPENAI_API_KEY ?? '').trim();
 const base = (process.env.OPENAI_BASE_URL ?? 'https://opencode.ai/inference/openai/v1').replace(/\/$/, '');
@@ -250,12 +254,13 @@ async function reply(question, language, temporary, conversationId) {
   // Only this conversation's scope (project + global) may anchor the card.
   review.decision = detectDecision({ question, review, tasks: tasks(),
     memories: recordsInScope(memories(), project), retrieved, scope: project });
-  const insert = db.prepare('INSERT INTO messages(role,body,review,conversation_id) VALUES (?,?,?,?)');
+  const insert = db.prepare('INSERT INTO messages(role,body,review,conversation_id,time) VALUES (?,?,?,?,?)');
   const firstMessage = !db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? LIMIT 1').get(conversation);
+  const sentAt = new Date().toISOString();
   db.exec('BEGIN');
   try {
-    insert.run('user', question, null, conversation);
-    insert.run('assistant', review.answer, JSON.stringify(review), conversation);
+    insert.run('user', question, null, conversation, sentAt);
+    insert.run('assistant', review.answer, JSON.stringify(review), conversation, sentAt);
     if (firstMessage) db.prepare('UPDATE conversations SET title = ? WHERE id = ?').run(question.slice(0, 30), conversation);
     db.exec('COMMIT');
   } catch (error) {

@@ -38,6 +38,20 @@ function chatMessages() {
   return (current.messages ?? []).filter(message => message.conversation_id === activeChat);
 }
 
+// ChatGPT-style day divider: “今天 15:43” / “昨天 15:43” / a full date.
+function dayLabel(time) {
+  const date = new Date(time);
+  if (Number.isNaN(date.getTime())) return '';
+  const now = new Date();
+  const clock = date.toLocaleTimeString(language, { hour: '2-digit', minute: '2-digit' });
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const label = date.toDateString() === now.toDateString() ? t('今天')
+    : date.toDateString() === yesterday.toDateString() ? t('昨天')
+    : date.toLocaleDateString(language, { month: 'long', day: 'numeric',
+      ...(date.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) });
+  return label + ' ' + clock;
+}
+
 // The project scope of the active chat: memories saved from the chat apply to
 // that project (a conversation without a project falls back to the default).
 function currentProjectScope() {
@@ -264,6 +278,7 @@ function render() {
   if (pendingMemory) renderMemoryReview();
   if (editing !== null) get('revision').textContent = t('正在修订 #') + editing;
   get('connection').textContent = t(live ? '模型已连接' : '模型未连接');
+  get('connection').classList.toggle('live', live);
   get('chat-send').disabled = chatBusy || !live || !get('question').value.trim();
   get('composer-model').textContent = live ? 'Daymark' + (current.model ? ' · ' + current.model : '') : '';
   get('scroll-bottom').setAttribute('aria-label', t('回到底部'));
@@ -280,7 +295,15 @@ function render() {
   if (!messages.length) {
     renderPromptChips();
   } else {
+    let day = '';
     for (const message of messages) {
+      if (message.time) {
+        const key = new Date(message.time).toDateString();
+        if (key !== day) {
+          day = key;
+          conversation.append(element('div', dayLabel(message.time), 'time-divider'));
+        }
+      }
       if (message.role === 'user') {
         const user = element('article', '', 'message user');
         user.append(element('p', message.body));
@@ -329,7 +352,7 @@ function render() {
       actions.append(iconButton('bookmark', '存入记忆', async () => {
         await request('memory', { kind: 'source', scope: currentProjectScope(),
           source: t('项目对话') + ' #' + message.id, body: message.body, message_id: message.id });
-        showView('capture');
+        navigateView('capture');
       }));
       main.append(actions);
       card.append(main);
@@ -393,6 +416,48 @@ let selectedDay = null;
 let taskEditing = null;
 const taskForm = get('task-form');
 
+// Back / forward history across the workspace views.
+const viewHistory = [view];
+let viewCursor = 0;
+function syncHistoryButtons() {
+  get('history-back').disabled = viewCursor <= 0;
+  get('history-forward').disabled = viewCursor >= viewHistory.length - 1;
+}
+function navigateView(name) {
+  if (name === view) { syncHistoryButtons(); return; }
+  viewHistory.length = viewCursor + 1;
+  viewHistory.push(name);
+  viewCursor = viewHistory.length - 1;
+  showView(name);
+}
+function stepView(delta) {
+  const next = viewCursor + delta;
+  if (next < 0 || next >= viewHistory.length) return;
+  viewCursor = next;
+  showView(viewHistory[viewCursor]);
+}
+get('history-back').onclick = () => stepView(-1);
+get('history-forward').onclick = () => stepView(1);
+
+// Thin icon rail: jump straight into each area and mark the active one.
+const railViews = { chat: 'chat', opportunities: 'leads', tasks: 'plan', calendar: 'plan',
+  capture: 'records', memory: 'records', delegation: 'records', evaluation: 'records' };
+const railButtons = [...document.querySelectorAll('.rail [data-rail]')];
+function syncRail() {
+  const active = railViews[view];
+  for (const button of railButtons) {
+    if (button.dataset.rail === active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+}
+const railActions = {
+  chat: () => navigateView('chat'),
+  leads: () => navigateView('opportunities'),
+  plan: () => { expandedGroups = new Set(['plan']); syncNavState(); navigateView('tasks'); },
+  records: () => { expandedGroups = new Set(['records']); syncNavState(); navigateView('capture'); },
+};
+for (const button of railButtons) button.onclick = () => railActions[button.dataset.rail]?.();
+
 function renderTaskEditor() {
   const editing = taskEditing !== null;
   get('task-edit-status').hidden = !editing;
@@ -426,7 +491,7 @@ function openTaskEditor(task = null) {
   }
   renderTaskEditor();
   showDateHints();
-  showView('tasks');
+  navigateView('tasks');
   taskForm.elements.title.focus();
 }
 
@@ -469,13 +534,15 @@ function showView(name) {
     if (button.dataset.view === name) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   }
+  syncRail();
+  syncHistoryButtons();
 }
 
 get('sidebar-toggle').onclick = () => {
   const open = document.body.classList.toggle('sidebar-open');
   get('sidebar-toggle').setAttribute('aria-expanded', String(open));
 };
-for (const button of viewButtons) button.onclick = () => showView(button.dataset.view);
+for (const button of viewButtons) button.onclick = () => navigateView(button.dataset.view);
 for (const button of document.querySelectorAll('.nav-group')) button.onclick = () => {
   const group = button.dataset.group;
   expandedGroups = expandedGroups.has(group) ? new Set() : new Set([group]);
@@ -707,7 +774,9 @@ get('scroll-bottom').onclick = () => {
   const node = get('conversation');
   node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' });
 };
-get('new-chat').onclick = () => withButton(get('new-chat'), async () => {
+get('new-chat').onclick = () => withButton(get('new-chat'), startNewChat);
+get('rail-new').onclick = () => withButton(get('rail-new'), startNewChat);
+async function startNewChat() {
   const data = await fetchResult('conversation', {});
   current = { ...data, tasks: data.tasks ?? [] };
   if (data.conversation != null) {
@@ -715,15 +784,41 @@ get('new-chat').onclick = () => withButton(get('new-chat'), async () => {
     localStorage.setItem('daymark-chat', activeChat);
   }
   render();
-  showView('chat');
+  navigateView('chat');
   get('question').focus();
+}
+let chatFilter = '';
+function closeSearch() {
+  const sidebar = get('sidebar');
+  sidebar.classList.remove('search-open');
+  const input = get('chat-search');
+  input.hidden = true;
+  input.value = '';
+  chatFilter = '';
+  renderChatHistory();
+}
+get('chat-search-toggle').onclick = () => {
+  const sidebar = get('sidebar');
+  const input = get('chat-search');
+  const open = sidebar.classList.toggle('search-open');
+  input.hidden = !open;
+  if (open) input.focus();
+  else { input.value = ''; chatFilter = ''; renderChatHistory(); }
+};
+get('chat-search').addEventListener('input', event => {
+  chatFilter = event.target.value.trim().toLowerCase();
+  renderChatHistory();
+});
+get('chat-search').addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeSearch();
 });
 function renderChatHistory() {
   const list = get('chat-list');
   list.replaceChildren();
-  const chats = [...(current?.conversations ?? [])].sort((a, b) => b.id - a.id);
+  const chats = [...(current?.conversations ?? [])].sort((a, b) => b.id - a.id)
+    .filter(chat => !chatFilter || chat.title.toLowerCase().includes(chatFilter));
   if (!chats.length) {
-    list.append(element('p', t('还没有对话。发消息或点「新对话」开始。'), 'muted'));
+    list.append(element('p', t(chatFilter ? '没有找到相关对话。' : '还没有对话。发消息或点「新对话」开始。'), 'muted'));
     return;
   }
   for (const chat of chats) list.append(chatRow(chat));
@@ -734,7 +829,7 @@ function chatRow(chat) {
   const title = element('button', chat.title, 'chat-row-title');
   title.type = 'button';
   title.title = chat.title;
-  title.onclick = () => { showView('chat'); setActiveChat(chat.id); };
+  title.onclick = () => { navigateView('chat'); setActiveChat(chat.id); closeSearch(); };
   const tools = element('div', '', 'chat-row-tools');
   const rename = element('button', '', 'chat-row-tool');
   rename.type = 'button';
@@ -841,7 +936,7 @@ get('classify-memory').onclick = () => withButton(get('classify-memory'), async 
 get('temporary-memory').onclick = () => {
   const value = pendingMemory.data.body;
   resetMemoryReview();
-  showView('chat');
+  navigateView('chat');
   oneTurnNote = true;
   get('question').value = t('仅本次使用：') + value;
   get('question').focus();
@@ -907,7 +1002,7 @@ function startMemorySave({ kind, scope, body, source, message_id = null }) {
   form.elements.body.value = body;
   form.elements.source.value = source;
   form.elements.message_id.value = message_id ?? '';
-  showView('memory');
+  navigateView('memory');
   form.requestSubmit();
 }
 
@@ -1072,7 +1167,7 @@ const renderDecision = createDecisionUI({
     calendarMonth = new Date(year, month - 1, day);
     const next = new Date(year, month - 1, day + 1);
     selectedDay = { key: dateKey, next: dateKey(next.getFullYear(), next.getMonth(), next.getDate()) };
-    showView('calendar');
+    navigateView('calendar');
     renderCalendar();
   },
 });
