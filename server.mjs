@@ -9,6 +9,8 @@ import { actionDecision, runAlignmentBenchmark } from './src/alignment/alignment
 import { calendarFile } from './src/calendar/calendar.mjs';
 import { GLOBAL_SCOPE, demoRecords, releaseStatus, release, repository } from './src/policy/policy.mjs';
 import { detectDecision, decisionContext } from './src/decision/decision.mjs';
+// 待办操作留痕（audit window）：task_audit 表、前后快照与决策卡回执文案。
+import { createTaskAudit, changeReceipt } from './src/tasks/task-audit.mjs';
 
 const dataDir = process.env.DAYMARK_DATA_DIR ?? new URL('./data/', import.meta.url).pathname;
 await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -49,6 +51,8 @@ db.exec('CREATE TABLE IF NOT EXISTS calendar_identity (id INTEGER PRIMARY KEY CH
 db.prepare('INSERT OR IGNORE INTO calendar_identity VALUES (1, ?)').run(randomUUID());
 const calendarId = db.prepare('SELECT uid FROM calendar_identity WHERE id = 1').get().uid;
 const tasks = () => db.prepare('SELECT * FROM tasks WHERE deleted = 0 ORDER BY starts, id').all();
+// 待办操作留痕：record 必须在任务路由的事务内调用（见下方 task 路由）。
+const taskAudit = createTaskAudit(db);
 db.exec(`CREATE TABLE IF NOT EXISTS conversations (
   id INTEGER PRIMARY KEY, title TEXT NOT NULL, project TEXT NOT NULL DEFAULT '', created TEXT NOT NULL
 );`);
@@ -106,7 +110,8 @@ const memorySnapshot = (edit, base, records) =>
 const state = () => {
   const current = draft();
   const activity = events();
-  return { ...workflow.state(), alignment: latestAlignment(), memoryDecisions: memoryDecisions(), tasks: tasks(), memory: memories(), messages: messages(), conversations: conversations(), draft: current, events: activity,
+  return { ...workflow.state(), alignment: latestAlignment(), memoryDecisions: memoryDecisions(), tasks: tasks(), taskAudit: taskAudit.list(),
+    memory: memories(), messages: messages(), conversations: conversations(), draft: current, events: activity,
     status: current ? releaseStatus(current, activity) : null, live: modelConfigured, model, release, repository };
 };
 
@@ -388,10 +393,13 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
     if (confirm === true) {
       try {
         if (effect.kind === 'task') {
-          await mutations['/api/task'](effect.payload ?? {});
+          // 决策卡触发的改期：关联该次选择，回执给出原时间、新时间和实际结果。
+          const previous = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(effect.payload?.id ?? -1);
+          await mutations['/api/task']({ ...(effect.payload ?? {}), via: {
+            decision: message_id, option: option.id, option_label: option.label, at,
+          } });
           const updated = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(effect.payload?.id ?? -1);
-          receipt = updated ? '事件已更新 · ' + updated.title + ' ' + updated.starts.replace('T', ' ') + ' → ' + updated.ends.replace('T', ' ')
-            : '事件已更新';
+          receipt = changeReceipt('updated', previous, updated);
         } else if (effect.kind === 'memory') {
           const payload = effect.payload ?? {};
           const impact = await mutations['/api/memory-impact']({
@@ -423,7 +431,7 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
     db.prepare('UPDATE messages SET review = ? WHERE id = ?').run(JSON.stringify(review), message_id);
     return state();
   },
-  '/api/task': ({ id, revision, title, starts, ends, memory_id, all_day = false, location = '', notes = '' }) => {
+  '/api/task': ({ id, revision, title, starts, ends, memory_id, all_day = false, location = '', notes = '', via }) => {
     if (typeof all_day !== 'boolean') fail(400, '请求内容不正确。');
     if (all_day) {
       starts = typeof starts === 'string' ? starts + 'T00:00' : starts;
@@ -442,26 +450,57 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
       fail(400, '请检查输入内容。');
     }
     const fields = [required(title, 200), starts, ends, memory_id ?? null, Number(all_day), location.trim(), notes.trim()];
+    // 待办变化与操作记录同事务提交：409/失败时两者一起回滚，不留错误成功记录。
     if (id == null) {
-      db.prepare('INSERT INTO tasks(title, starts, ends, memory_id, all_day, location, notes) VALUES (?,?,?,?,?,?,?)').run(...fields);
+      db.exec('BEGIN');
+      try {
+        const result = db.prepare('INSERT INTO tasks(title, starts, ends, memory_id, all_day, location, notes) VALUES (?,?,?,?,?,?,?)').run(...fields);
+        const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(Number(result.lastInsertRowid));
+        taskAudit.record(row, 'created', null, via);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
     } else {
       if (!Number.isSafeInteger(id) || !Number.isSafeInteger(revision)) fail(400, '请求内容不正确。');
-      const result = db.prepare(`UPDATE tasks SET title=?, starts=?, ends=?, memory_id=?, all_day=?,
-        location=?, notes=?, revision=revision+1 WHERE id=? AND revision=? AND deleted=0`).run(...fields, id, revision);
-      if (!result.changes) fail(409, '事件已变更，请刷新后重试。');
+      db.exec('BEGIN');
+      try {
+        const before = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(id);
+        const result = db.prepare(`UPDATE tasks SET title=?, starts=?, ends=?, memory_id=?, all_day=?,
+          location=?, notes=?, revision=revision+1 WHERE id=? AND revision=? AND deleted=0`).run(...fields, id, revision);
+        if (!result.changes) fail(409, '事件已变更，请刷新后重试。');
+        const after = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+        taskAudit.record(after, 'updated', before, via);
+        db.exec('COMMIT');
+      } catch (error) { db.exec('ROLLBACK'); throw error; }
     }
   },
-  '/api/task-delete': ({ id, revision }) => {
+  '/api/task-delete': ({ id, revision, via }) => {
     if (!Number.isSafeInteger(id) || !Number.isSafeInteger(revision)) fail(400, '请求内容不正确。');
-    if (!db.prepare('UPDATE tasks SET deleted=1, revision=revision+1 WHERE id=? AND revision=? AND deleted=0').run(id, revision).changes) {
-      fail(409, '事件已变更，请刷新后重试。');
-    }
+    db.exec('BEGIN');
+    try {
+      const before = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(id);
+      const result = db.prepare('UPDATE tasks SET deleted=1, revision=revision+1 WHERE id=? AND revision=? AND deleted=0').run(id, revision);
+      if (!result.changes) fail(409, '事件已变更，请刷新后重试。');
+      const after = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+      taskAudit.record(after, 'deleted', before, via);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
   },
-  '/api/task-status': ({ id, done }) => {
+  '/api/task-status': ({ id, done, via }) => {
     if (!Number.isSafeInteger(id) || typeof done !== 'boolean') fail(400, '请求内容不正确。');
-    if (!db.prepare('UPDATE tasks SET done = ? WHERE id = ? AND deleted = 0').run(Number(done), id).changes) {
-      fail(404, '找不到这条待办。');
-    }
+    const next = Number(done);
+    db.exec('BEGIN');
+    try {
+      const before = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(id);
+      if (!before) fail(404, '找不到这条待办。');
+      if (Number(before.done) === next) {
+        db.exec('ROLLBACK');
+        return; // 重复请求：状态未变化，不写操作记录
+      }
+      db.prepare('UPDATE tasks SET done = ? WHERE id = ?').run(next, id);
+      const after = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+      taskAudit.record(after, next ? 'done' : 'reopened', before, via);
+      db.exec('COMMIT');
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
   },
   '/api/demo': () => {
     const insert = db.prepare('INSERT INTO memory(kind,scope,body,source) SELECT ?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM memory WHERE source = ?)');

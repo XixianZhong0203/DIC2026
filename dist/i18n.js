@@ -416,7 +416,20 @@ const english = {
   "来源已保存": "Source saved",
   "声明核查完成": "Claims checked",
   "声明核查失败": "Claims check failed",
-  "还没有已保存的草稿。": "No draft has been saved yet."
+  "还没有已保存的草稿。": "No draft has been saved yet.",
+  // 待办操作留痕与回执（audit 分支）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "待办操作记录": "Task activity log",
+  "创建": "Created",
+  "修改": "Updated",
+  "删除": "Deleted",
+  "原时间": "Original time",
+  "新时间": "New time",
+  "结果": "Result",
+  "关联来源": "Linked source",
+  "经决策卡": "Via decision card",
+  "消息": "Message",
+  "查看待办": "View task"
 };
 
 export function translate(language, phrase) {

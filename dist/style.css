@@ -87,6 +87,14 @@ button:disabled { opacity: .55; cursor: default; }
 .attention, #notice:not(:empty) { padding: 8px 12px; background: #f8eed7; border-left: 3px solid #ab701b; white-space: pre-wrap; }
 #notice:not(:empty) { margin-bottom: 14px; }
 summary { cursor: pointer; }
+#task-audit details { margin: 4px 0; }
+#task-audit summary { font-size: .9rem; }
+#task-audit p { margin: 2px 0; }
+.task-flash { animation: task-flash 1.8s ease-out; }
+@keyframes task-flash {
+  0% { background: #fff3c4; }
+  100% { background: #f3f4ee; }
+}
 @media (max-width: 720px) {
   .grid { grid-template-columns: 1fr; }
   .workspace { display: none; }

@@ -27,6 +27,17 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     field_conflict: '模型输出字段不一致', claim_not_in_draft: '声明未在草稿正文中逐字出现',
     request_failed: '模型请求失败',
   };
+  const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
+    claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过' };
+  // 该机会最近一条活动记录：发送被拦截后在草稿区当场显示拦截原因（活动记录同步刷新）。
+  function latestBlocked(audit, itemId) {
+    const rows = (audit ?? []).filter(row => row.opportunity === itemId);
+    const latest = rows[0];
+    if (!latest || latest.action !== 'blocked') return null;
+    let detail = {};
+    try { detail = JSON.parse(latest.detail); } catch {}
+    return { reason: detail.reason ?? null, time: latest.time };
+  }
 
   function details(title, content) {
     const wrapper = element('details', '');
@@ -168,7 +179,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return wrap;
   }
 
-  function opportunityCard(item) {
+  function opportunityCard(item, audit) {
     const card = element('article', '', 'entry');
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
     card.append(details(t('出处') + ' · ' + item.source, item.evidence));
@@ -261,6 +272,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         } else {
           const attention = attentionClaims(item);
           if (attention) editor.append(attention);
+          // 发送被拦截：拦截原因 + 最新活动记录在草稿区当场显示。
+          const lastBlock = latestBlocked(audit, item.id);
+          if (lastBlock) {
+            editor.append(element('p', t('操作被拦截') + ' · ' + t(blockedReasons[lastBlock.reason] ?? lastBlock.reason) + ' · ' + new Date(lastBlock.time).toLocaleString(language()), 'attention'))
+          }
           editor.append(action(t(item.claims?.target === 'draft' ? '重新核查' : '核查关键声明'), () => request('opportunity-claims', {
             id: item.id, target: 'draft', draft_id: item.draft_id, language: language(),
           }), false));
@@ -280,7 +296,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   }
 
   return function render(state) {
-    get('opportunity-list').replaceChildren(...(state.opportunities ?? []).map(opportunityCard));
+    get('opportunity-list').replaceChildren(...(state.opportunities ?? []).map(item => opportunityCard(item, state.audit)));
     get('delegation-list').replaceChildren(...Object.entries(state.delegation ?? {}).map(([key, mode]) => {
       const row = element('div', '', 'entry');
       row.append(element('strong', t(labels[key])), element('p', t(labels[mode] ?? '仅起草')));
@@ -291,8 +307,6 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
       return row;
     }));
-    const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
-      claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过' };
     get('opportunity-audit').replaceChildren(...(state.audit ?? []).map(event => {
       const detail = JSON.parse(event.detail);
       const reason = event.action === 'blocked' && detail.reason ? ' · ' + t(blockedReasons[detail.reason] ?? detail.reason) : '';
