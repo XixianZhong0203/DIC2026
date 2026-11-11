@@ -541,7 +541,14 @@ const english = {
   "这个工作区还没有可带入的记录。": "No records to import in this workspace.",
   "请先选择要带入的记录。": "Select the records to import first.",
   "已带入 {n} 条记录，保留了原工作区与出处。": "Imported {n} record(s), keeping the original workspace and source.",
-  "没有其他工作区可以带入记录。": "There is no other workspace to import records from."
+  "没有其他工作区可以带入记录。": "There is no other workspace to import records from.",
+  // 人工复核来源记录（review-source-record 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "已展开来源": "Sources opened",
+  "尚未展开来源": "No sources opened yet",
+  "展开来源原文": "Opened source original",
+  "展开来源原文会记录下来，保存复核时随结论写入审计。": "Opened sources are recorded; saving the review writes them to the audit with your conclusion.",
+  "来源不属于当前线索，请刷新后重试。": "The source does not belong to the current lead. Refresh and try again."
 };
 
 export function translate(language, phrase) {

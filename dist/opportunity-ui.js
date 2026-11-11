@@ -1,4 +1,4 @@
-export function createOpportunityUI({ get, t, element, action, request, formAction, language, createTask }) {
+export function createOpportunityUI({ get, t, element, action, request, formAction, language, createTask, viewSource }) {
   formAction('opportunity-form', async (data, form) => {
     await request('opportunity', data);
     form.reset();
@@ -17,6 +17,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     simulated_send: '模拟发送成功', blocked: '操作被拦截', policy: '授权已更新', analysis_started: '开始分析', analysis_failed: '模型分析失败',
     evidence_checked: '核对原文', human_reviewed: '人工核实', approved: '已批准版本',
     source_added: '来源已保存', claims_checked: '声明核查完成', claims_failed: '声明核查失败',
+    review_source_viewed: '展开来源原文',
   };
 
   const sourceKindLabels = { evidence: '证据原文', customer: '客户记录', founder: '创始人提供' };
@@ -48,13 +49,68 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return wrapper;
   }
 
+  // 人工复核来源记录：当前草稿 + 当前来源集合下，创始人已展开哪些来源原文。
+  // 服务端（item.reviewViewed）是权威状态；本地集合用于即时显示，并在整页重渲染后
+  // 把展开过的原文重新打开，阅读不中断。草稿或来源变化 → 新绑定 → 从空开始；
+  // 旧查看记录只留在审计历史里，不会带到新复核上。
+  const recordViewSource = viewSource ?? (() => Promise.resolve());
+  const viewed = new Map(); // 机会 id -> { binding, ids: Set }
+  const viewedBinding = item =>
+    (item.reviewViewed?.draftId ?? item.draft_id ?? 'none') + '·' + (item.reviewViewed?.evidence ?? 'none');
+  function viewedState(item) {
+    const binding = viewedBinding(item);
+    let mine = viewed.get(item.id);
+    if (!mine || mine.binding !== binding) viewed.set(item.id, mine = { binding, ids: new Set() });
+    for (const sourceId of item.reviewViewed?.viewed ?? []) mine.ids.add(sourceId);
+    return mine;
+  }
+  const sourceOrder = id => (id === 'E1' ? [0, 0] : [1, Number(id.slice(1))]);
+  const sourceName = (item, sourceId) => sourceId === 'E1'
+    ? t('证据原文') + ' · ' + item.source
+    : ((item.sources ?? []).find(row => 'S' + row.id === sourceId)?.name ?? sourceId);
+  function reviewedText(item) {
+    const state = viewedState(item);
+    return state.ids.size
+      ? t('已展开来源') + ' · ' + [...state.ids]
+        .sort((a, b) => sourceOrder(a)[0] - sourceOrder(b)[0] || sourceOrder(a)[1] - sourceOrder(b)[1])
+        .map(sourceId => t(sourceName(item, sourceId))).join('、')
+      : t('尚未展开来源');
+  }
+  const viewLines = new Map(); // 机会 id -> Set<复核区状态行>
+  function reviewViewLine(item) {
+    const line = element('small', reviewedText(item), 'muted');
+    if (!viewLines.has(item.id)) viewLines.set(item.id, new Set());
+    viewLines.get(item.id).add(line);
+    return line;
+  }
+  function recordView(item, sourceId) {
+    const state = viewedState(item);
+    if (state.ids.has(sourceId)) return;
+    state.ids.add(sourceId);
+    for (const line of viewLines.get(item.id) ?? []) line.textContent = reviewedText(item);
+    void recordViewSource(item.id, sourceId); // 服务端记录查看动作（静默，不打断阅读）
+  }
+  // 绑定「可展开来源原文」的元素：展开时记录来源 ID，重渲染后保持展开。
+  function viewableDetails(item, sourceId, node) {
+    node.addEventListener('toggle', () => { if (node.open) recordView(item, sourceId); });
+    if (viewedState(item).ids.has(sourceId)) node.open = true;
+    return node;
+  }
+  // 已保存的人工核实结论 + 当前查看状态行。
+  function reviewedBlock(item) {
+    const block = element('details', '');
+    block.append(element('summary', t('人工核实')), element('p', item.review), reviewViewLine(item));
+    return block;
+  }
+
   function sourceBlock(item) {
     const block = element('details', '');
     const sources = item.sources ?? [];
     block.append(element('summary', t('来源') + ' · ' + (1 + sources.length)));
-    block.append(details(t(sourceKindLabels.evidence) + ' · ' + item.source, item.evidence));
+    block.append(viewableDetails(item, 'E1', details(t(sourceKindLabels.evidence) + ' · ' + item.source, item.evidence)));
     for (const row of sources) {
-      block.append(details(t(sourceKindLabels[row.kind] ?? row.kind) + (row.date ? ' · ' + row.date : '') + ' · ' + row.name, row.text));
+      block.append(viewableDetails(item, 'S' + row.id, details(
+        t(sourceKindLabels[row.kind] ?? row.kind) + (row.date ? ' · ' + row.date : '') + ' · ' + row.name, row.text)));
     }
     const form = element('form', '');
     const name = element('input', '');
@@ -100,7 +156,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       block.append(element('summary', summary),
         element('p', entry.quote + (entry.note ? '（' + entry.note + '）' : '')));
       if (entry.source.text) block.append(element('p', t('来源原文') + ' · ' + entry.source.text));
-      return block;
+      // 只有展示来源原文的展开项才计为「展开来源」；引文摘录不算。
+      return entry.source.text ? viewableDetails(item, entry.source.id, block) : block;
     };
     if (claim.conflict) {
       for (const entry of [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]) article.append(cited(entry, true));
@@ -210,7 +267,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       if (result.unknown) card.append(details(t('仍需核实'), result.unknown));
       if (result.suggestedReply) card.append(details(t('模型建议稿'), result.suggestedReply));
       card.append(details(t('模型原始输出'), result.raw));
-      if (item.review) card.append(details(t('人工核实'), item.review));
+      if (item.review) card.append(reviewedBlock(item));
     }
     // 人工复核结论绑定到当前草稿版本与当前来源版本：草稿换新版本或来源变化后，
     // 旧复核不能解锁当前草稿的发送门禁，表单重新出现，供针对当前草稿与来源记录结论。
@@ -218,6 +275,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     if ((!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) ||
       (item.draft_id && !reviewCurrent)) {
       const reviewForm = element('form', '');
+      // 复核区显示当前查看状态：已展开哪些来源 / 尚未展开来源。
+      // 这里记录的是查看动作，结论仍由创始人自己写下。
+      reviewForm.append(reviewViewLine(item),
+        element('small', t('展开来源原文会记录下来，保存复核时随结论写入审计。'), 'muted'));
       const resolution = element('textarea', '');
       resolution.required = true;
       resolution.maxLength = 2000;
@@ -279,7 +340,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
       if (item.review) card.append(element('p', t('核实记录') +
         (item.reviewStale ? ' · ' + t('复核已过期') + ' · ' + reviewStaleText(item) : '') + ' · ' + item.review,
-        item.reviewStale ? 'attention' : 'muted'));
+        item.reviewStale ? 'attention' : 'muted'), reviewViewLine(item));
       if (item.draft_id) {
         editor.open = true;
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
@@ -329,8 +390,23 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     get('opportunity-audit').replaceChildren(...(state.audit ?? []).map(event => {
       const detail = JSON.parse(event.detail);
       const reason = event.action === 'blocked' && detail.reason ? ' · ' + t(blockedReasons[detail.reason] ?? detail.reason) : '';
-      return details(t(labels[event.action] ?? event.action) + reason + ' · ' + new Date(event.time).toLocaleString(language()),
-        JSON.stringify(detail, null, 2));
+      let summary = t(labels[event.action] ?? event.action) + reason + ' · ' + new Date(event.time).toLocaleString(language());
+      let note = '';
+      if (event.action === 'review_source_viewed' && detail.name) {
+        // 查看动作随来源名称记录，一眼看出当时展开的是哪条原文。
+        summary = t(labels.review_source_viewed) + ' · ' + detail.name + ' · ' + new Date(event.time).toLocaleString(language());
+      } else if (event.action === 'human_reviewed' && Array.isArray(detail.viewed)) {
+        // 保存复核时已把已展开来源、草稿 ID、来源版本与结论写入审计；摘要标明已展开哪些来源。
+        // 功能上线前的旧记录没有 viewed 字段，不标注，避免误读。
+        note = detail.viewed.length
+          ? t('已展开来源') + ' · ' + (detail.viewedNames ?? []).join('、')
+          : t('尚未展开来源');
+      }
+      const block = element('details', '');
+      block.append(element('summary', summary));
+      if (note) block.append(element('p', note, 'muted'));
+      block.append(element('p', JSON.stringify(detail, null, 2)));
+      return block;
     }));
     const report = state.benchmark;
     get('model-results').replaceChildren();
