@@ -40,6 +40,9 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   if (!opportunityColumns.some(column => column.name === 'claims_review')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN claims_review TEXT');
   }
+  if (!opportunityColumns.some(column => column.name === 'review_draft')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN review_draft TEXT');
+  }
   const get = id => db.prepare('SELECT * FROM opportunities WHERE id=?').get(required(id, 100)) ?? fail(404, '找不到此机会。');
   const mode = action => db.prepare('SELECT mode FROM delegation WHERE action=?').get(action)?.mode;
   const audit = (id, action, detail) => db.prepare('INSERT INTO opportunity_log(opportunity,action,time,detail) VALUES (?,?,?,?)')
@@ -243,7 +246,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         }
         await runClaimsReview(id, target, language);
       },
-      '/api/opportunity-review': ({ id, analysis_id, resolution }) => {
+      '/api/opportunity-review': ({ id, analysis_id, draft_id, resolution }) => {
         const item = get(id);
         const result = item.analysis && JSON.parse(item.analysis);
         if (result) {
@@ -251,10 +254,12 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         } else if (analysis_id != null) {
           fail(409, '分析已变更，请重新核对。');
         }
+        // 针对草稿记录的人工复核结论只对当前草稿版本有效；草稿换新版本后失效。
+        if (draft_id != null && draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
         const review = required(resolution, 2000);
         transaction(() => {
-          db.prepare('UPDATE opportunities SET review=? WHERE id=?').run(review, id);
-          audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, resolution: review });
+          db.prepare('UPDATE opportunities SET review=?, review_draft=? WHERE id=?').run(review, draft_id ?? null, id);
+          audit(id, 'human_reviewed', { analysisId: analysis_id ?? null, draftId: draft_id ?? null, resolution: review });
         });
       },
       '/api/opportunity-draft': ({ id, recipient, body }) => {
@@ -291,10 +296,37 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           audit(id, 'blocked', { action: 'send', reason: 'unresolved_evidence', analysisId: analysis.analysisId });
           fail(409, '请先记录如何处理不确定性，再批准发送。');
         }
+        // 当前草稿的声明核查门槛：有反驳、证据不足、来源冲突、核查未完成或结果过期时先处理；
+        // 可改写后重新核查，或针对当前草稿记录人工复核结论后再批准发送。
+        const humanOverride = Boolean(item.review) && item.review_draft === item.draft_id;
+        if (!humanOverride) {
+          const review = item.claims_review ? safeParse(item.claims_review) : null;
+          const sourceRows = sourcesFor(id);
+          if (!review || review.target !== 'draft') {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_not_verified' });
+            fail(409, '草稿声明尚未核查。请先核查关键声明，或针对当前草稿记录人工复核结论。');
+          }
+          if (claimsStale(item, review, sourceRows)) {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_stale' });
+            fail(409, '草稿声明核查已过期（草稿或来源已变更）。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
+          }
+          if (review.error) {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_incomplete', error: review.error });
+            fail(409, '声明核查未完成。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
+          }
+          const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+          if (unresolved.length) {
+            audit(id, 'blocked', { action: 'send', reason: 'claims_unresolved',
+              claims: unresolved.map(claim => ({ id: claim.id, status: claim.status })) });
+            fail(409, '以下声明核查未通过：' +
+              unresolved.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+              '。请改写后重新核查，或针对当前草稿记录人工复核结论。');
+          }
+        }
         transaction(() => {
           db.prepare('UPDATE opportunities SET sent=1 WHERE id=?').run(id);
           audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: mode('send'),
-            evidence: item.review ? 'human_review' : 'model_supported' });
+            evidence: humanOverride ? 'human_review' : 'model_supported' });
           audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
         });
       },
