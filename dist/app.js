@@ -190,8 +190,15 @@ async function request(path, body) {
 }
 
 let visibleEvidence = null;
+// Panels are shown non-modally (show, not showModal): the page behind them
+// stays fully interactive, so an open panel can never make the rest of the
+// page inert. Esc still closes any open panel.
 get('close-sources').onclick = () => get('source-panel').close();
 get('source-panel').addEventListener('close', () => { visibleEvidence = null; });
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  for (const panel of document.querySelectorAll('dialog[open]')) panel.close();
+});
 
 // Extract memory candidates from the active chat and show them for confirmation.
 get('close-candidates').onclick = () => get('candidate-panel').close();
@@ -199,7 +206,7 @@ get('chat-extract').onclick = () => withButton(get('chat-extract'), async () => 
   if (!chatMessages().length) { showNotice(t('先发送一条消息再提取记忆。')); return; }
   const result = await fetchResult('memory-candidates', { conversation_id: activeChat, language });
   renderCandidatePanel(result);
-  get('candidate-panel').showModal();
+  get('candidate-panel').show();
 });
 
 function openSources(review) {
@@ -238,7 +245,7 @@ function openSources(review) {
     }
     body.append(trace);
   }
-  if (!get('source-panel').open) get('source-panel').showModal();
+  if (!get('source-panel').open) get('source-panel').show();
 }
 
 function clearRevision() {
