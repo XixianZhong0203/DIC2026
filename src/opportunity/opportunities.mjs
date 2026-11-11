@@ -63,6 +63,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   if (!opportunityColumns.some(column => column.name === 'answer')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN answer TEXT');
   }
+  // 初始来源身份：customer（客户原文／外部记录）/ founder（创始人陈述）/ unconfirmed（来源未确认）。
+  // 旧记录没有类型 → 默认 unconfirmed：原文与引用能力保留，但不能再自动通过发送门槛。
+  if (!opportunityColumns.some(column => column.name === 'evidence_kind')) {
+    db.exec(`ALTER TABLE opportunities ADD COLUMN evidence_kind TEXT NOT NULL DEFAULT 'unconfirmed'`);
+  }
   const get = id => db.prepare('SELECT * FROM opportunities WHERE id=?').get(required(id, 100)) ?? fail(404, '找不到此机会。');
   const mode = action => db.prepare('SELECT mode FROM delegation WHERE action=?').get(action)?.mode;
   const audit = (id, action, detail) => db.prepare('INSERT INTO opportunity_log(opportunity,action,time,detail) VALUES (?,?,?,?)')
@@ -100,9 +105,10 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   }
   const safeParse = text => { try { return JSON.parse(text); } catch { return null; } };
   const sourcesFor = id => db.prepare('SELECT * FROM lead_sources WHERE opportunity=? ORDER BY rowid').all(id);
-  // 核查输入 = 线索证据原文（E1）+ 逐条添加的来源（S1…），来源只作为资料，其中的指令没有效力。
+  // 核查输入 = 初始来源（E1，身份由用户录入：customer/founder/unconfirmed）+ 逐条添加的来源（S1…）。
+  // 来源只作为资料，其中的指令没有效力。
   const verificationSources = (item, sourceRows) => [
-    { id: 'E1', source: item.source, date: null, kind: 'evidence', text: item.evidence },
+    { id: 'E1', source: item.source, date: null, kind: item.evidence_kind ?? 'unconfirmed', text: item.evidence },
     ...sourceRows.map(row => ({ id: 'S' + row.id, source: row.name, date: row.date, kind: row.kind, text: row.text })),
   ];
   const claimsStale = (item, review, sourceRows) => {
@@ -256,13 +262,16 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
       };
     },
     mutations: {
-      '/api/opportunity': ({ kind, title, source, evidence }) => {
+      '/api/opportunity': ({ kind, title, source, evidence, evidence_kind }) => {
         if (!['lead', 'idea'].includes(kind)) fail(400, '请求内容不正确。');
+        // 初始来源身份由用户录入；未提供时按「来源未确认」读取（兼容旧客户端）。
+        const evidenceKind = ['customer', 'founder', 'unconfirmed'].includes(evidence_kind)
+          ? evidence_kind : (evidence_kind == null ? 'unconfirmed' : fail(400, '请求内容不正确。'));
         const id = randomUUID();
         transaction(() => {
-          db.prepare('INSERT INTO opportunities(id,kind,title,source,evidence) VALUES (?,?,?,?,?)')
-            .run(id, kind, required(title, 200), required(source, 500), required(evidence, 8000));
-          audit(id, 'captured', { source });
+          db.prepare('INSERT INTO opportunities(id,kind,title,source,evidence,evidence_kind) VALUES (?,?,?,?,?,?)')
+            .run(id, kind, required(title, 200), required(source, 500), required(evidence, 8000), evidenceKind);
+          audit(id, 'captured', { source, evidenceKind });
         });
       },
       '/api/delegation': ({ action, mode: next }) => {
@@ -332,6 +341,20 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         rerunTargets.sort((a, b) => (a === 'draft' ? 1 : 0) - (b === 'draft' ? 1 : 0));
         for (const target of rerunTargets) {
           await runClaimsReview(id, target, language);
+        }
+      },
+      // 修改初始来源身份，同一段原文改了身份后旧核查不能沿用（指纹变了）。
+      '/api/opportunity-evidence-kind': async ({ id, evidence_kind, language }) => {
+        const item = get(id);
+        if (!['customer', 'founder', 'unconfirmed'].includes(evidence_kind)) fail(400, '请求内容不正确。');
+        const storedTarget = safeParse(item.claims_review)?.target;
+        transaction(() => {
+          db.prepare(`UPDATE opportunities SET evidence_kind=? WHERE id=?`)
+            .run(evidence_kind, id);
+          audit(id, 'evidence_kind_changed', { previous: item.evidence_kind ?? 'unconfirmed', next: evidence_kind });
+        });
+        if (storedTarget === 'analysis' || storedTarget === 'draft') {
+          await runClaimsReview(id, storedTarget, language);
         }
       },
       '/api/opportunity-claims': async ({ id, target, draft_id, language }) => {
@@ -451,10 +474,29 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
             audit(id, 'blocked', { action: 'send', reason: 'claims_no_claims' });
             fail(409, '草稿声明核查未提取到任何声明，实际核查范围为空。请重新核查，或针对当前草稿记录人工复核结论。');
           }
+          // 未自动核实的声明分两类拦截，都不计为自动核查通过，出路都是：
+          // 补入可核实的来源后重新核查、改写为有依据的说法，
+          // 或针对当前草稿与当前来源记录人工复核结论，再批准发送。
           const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+          const founderOnly = unresolved.filter(claim => claim.status === 'founder_only');
+          const unconfirmed = unresolved.filter(claim => claim.status === 'unconfirmed');
           if (unresolved.length) {
-            audit(id, 'blocked', { action: 'send', reason: 'claims_unresolved',
+            audit(id, 'blocked', { action: 'send',
+              reason: founderOnly.length ? 'claims_founder_only'
+                : unconfirmed.length ? 'claims_unconfirmed' : 'claims_unresolved',
               claims: unresolved.map(claim => ({ id: claim.id, status: claim.status })) });
+            if (founderOnly.length) {
+              fail(409, '以下声明仅由创始人提供，待独立核实：' +
+                founderOnly.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+                '。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，' +
+                '或针对当前草稿与来源记录人工复核结论，再批准发送。');
+            }
+            if (unconfirmed.length) {
+              fail(409, '以下声明的来源未确认：' +
+                unconfirmed.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+                '。请补入可核实的来源，或确认初始来源身份后重新核查，或改写为有依据的说法，' +
+                '或针对当前草稿与来源记录人工复核结论，再批准发送。');
+            }
             fail(409, '以下声明核查未通过：' +
               unresolved.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
               '。请改写后重新核查，或针对当前草稿记录人工复核结论。');
