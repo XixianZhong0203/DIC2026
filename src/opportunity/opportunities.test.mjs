@@ -815,3 +815,121 @@ test('changing the initial source identity invalidates the stored verification',
   assert.equal(current().sent, 1);
   assert.ok(state().audit.some(event => event.action === 'evidence_kind_changed'));
 });
+
+// 改判回归用的模型双：「合同已签署」声明的证据状态完全由初始来源（E1）的身份决定——
+// unconfirmed → unconfirmed，founder → founder_only，customer → supported。
+// 分析模式固定多一条 unknown 的购买意向，让回答停在「不足/待核实」而非「充分」。
+const reidentificationDouble = user => {
+  if (!user.mode) return JSON.stringify({
+    status: 'unknown', quote: '客户已签约。',
+    reason: '初始来源陈述签约，身份未独立确认。', unknown: '缺少独立于初始来源的签署记录。',
+    conflict: '', clarification: '初始来源是客户原文还是创始人陈述？', suggestedReply: '请确认初始来源身份后继续。',
+  });
+  const e1 = user.sources.find(source => source.id === 'E1');
+  const signingStatus = e1.kind === 'customer' ? 'supported'
+    : e1.kind === 'founder' ? 'founder_only' : 'unconfirmed';
+  const signing = { id: '签约状态', dimension: '签约状态', text: '合同已签署', status: signingStatus,
+    items: [{ evidenceId: 'E1', stance: 'supports', quote: '客户已签约', note: '初始来源陈述已完成事实' }],
+    missing: '', rewrite: '' };
+  const claims = user.draft
+    ? [signing]
+    : [{ id: '购买意向', dimension: '购买意向', text: '客户想签约', status: 'unknown', items: [],
+       missing: '还缺客户明确的签约回复。', rewrite: '客户签约意向未确认。' }, signing];
+  return JSON.stringify({ claims });
+};
+
+test('re-identifying the initial source updates the lead answer and expires the draft review and viewed records', async () => {
+  const { call, current, state } = fixture(reidentificationDouble, {
+    title: '来源改判回归', source: '客户线程', evidence: '客户已签约。', evidence_kind: 'unconfirmed',
+  });
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户签约了吗？', language: 'zh-CN' });
+  const analysisId = JSON.parse(current().analysis).analysisId;
+  // 已有分析与草稿，最近一次核查针对草稿（claims_review 保持草稿目标）。
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '合同已签署。' });
+  const draft_id = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', draft_id, language: 'zh-CN' });
+  assert.equal(current().claims.target, 'draft');
+  assert.equal(current().claims.claims[0].status, 'unconfirmed');
+  // 旧身份下的线索回答：签约状态待核实（来源未确认）。
+  assert.equal(current().answer.situation, 'insufficient');
+  assert.deepEqual(current().answer.pending,
+    [{ dimension: '签约状态', text: '合同已签署', status: 'unconfirmed' }]);
+  // 针对当前草稿的人工复核与来源查看记录（都绑定旧证据版本）。
+  call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: '旧身份下的人工复核。' });
+  assert.equal(current().reviewStale, null);
+  call('opportunity-review-view', { id, source_id: 'E1' });
+  assert.deepEqual(current().reviewViewed.viewed, ['E1']);
+  // 改判初始来源身份为创始人陈述。
+  await call('opportunity-evidence-kind', { id, evidence_kind: 'founder', language: 'zh-CN' });
+  assert.equal(current().evidence_kind, 'founder');
+  // 线索回答同步更新：同一声明按新身份转为「仅创始人陈述」。
+  const answer = current().answer;
+  assert.equal(answer.situation, 'insufficient');
+  assert.deepEqual(answer.pending,
+    [{ dimension: '签约状态', text: '合同已签署', status: 'founder_only' }]);
+  // 草稿核查也按新身份重跑：仍是草稿目标，且绑定新证据版本。
+  assert.equal(current().claims.target, 'draft');
+  assert.equal(current().claimsStale, false);
+  assert.equal(current().claims.claims[0].status, 'founder_only');
+  // 旧人工复核与查看记录随证据版本变化失效（旧记录只留在审计历史里）。
+  assert.deepEqual(current().reviewStale, ['source_changed']);
+  assert.deepEqual(current().reviewViewed.viewed, []);
+  assert.ok(state().audit.some(event => event.action === 'evidence_kind_changed'));
+  assert.ok(state().audit.some(event => event.action === 'review_source_viewed'));
+  // 旧复核不再放行：直接请求发送按新身份拦截，且没有模拟发送结果。
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason,
+    'claims_founder_only');
+  assert.equal(current().sent, 0);
+  assert.equal(state().audit.some(event => event.action === 'simulated_send'), false);
+  // 针对新证据版本重新复核后放行。
+  call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: '新身份下重新复核。' });
+  assert.equal(current().reviewStale, null);
+  call('opportunity-send', { id, draft_id });
+  assert.equal(current().sent, 1);
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_review');
+});
+
+test('a mixed draft verification (one supported claim, one refuted) blocks the send with no simulated send', async () => {
+  const { call, current, state } = fixture(user => {
+    if (!user.mode) return JSON.stringify({ status: 'supported', quote: EVIDENCE, reason: 'Explicit acceptance.' });
+    if (!user.draft) return JSON.stringify({ claims: user.dimensions.map(dimension => ({
+      id: dimension, dimension, text: dimension, status: 'unknown', items: [],
+      missing: '缺少确认信息', rewrite: '尚未确认',
+    })) });
+    // 草稿正文含两条声明：客户意向（客户来源支持）+ 对外承诺（被客户撤回）。
+    const body = user.draft.body;
+    const confirmation = user.sources.find(source => source.kind === 'customer' && source.text.includes('确认采购计划'));
+    const withdrawal = user.sources.find(source => source.kind === 'customer' && source.text.includes('撤回交付承诺'));
+    const claims = [];
+    if (body.includes('客户已确认采购计划') && confirmation) claims.push({
+      id: '客户意向', dimension: '客户意向', text: '客户已确认采购计划',
+      items: [{ evidenceId: confirmation.id, stance: 'supports', quote: '确认采购计划', note: '客户来源确认' }],
+      missing: '', rewrite: '' });
+    if (body.includes('我们保证周五交付') && withdrawal) claims.push({
+      id: '对外承诺', dimension: '对外承诺', text: '我们保证周五交付',
+      items: [{ evidenceId: withdrawal.id, stance: 'withdraws', quote: '撤回交付承诺', note: '客户撤回承诺' }],
+      missing: '', rewrite: '' });
+    return JSON.stringify({ claims });
+  });
+  const { id } = current();
+  await call('opportunity-assess', { id, request: 'Can we promise Friday?' });
+  await call('opportunity-source', { id, name: '客户确认邮件', date: '2026-07-01', kind: 'customer',
+    text: '客户确认采购计划。', language: 'en' });
+  await call('opportunity-source', { id, name: '客户撤回邮件', date: '2026-07-02', kind: 'customer',
+    text: '客户撤回交付承诺。', language: 'en' });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '客户已确认采购计划，我们保证周五交付。' });
+  const draft_id = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', draft_id, language: 'en' });
+  const claims = current().claims.claims;
+  assert.equal(claims.length, 2);
+  assert.equal(claims.find(claim => claim.text === '客户已确认采购计划').status, 'supported');
+  assert.equal(claims.find(claim => claim.text === '我们保证周五交付').status, 'refuted');
+  // 一条获支持、另一条被反驳：直接请求发送仍返回 409，且没有模拟发送结果。
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason,
+    'claims_unresolved');
+  assert.equal(current().sent, 0);
+  assert.equal(state().audit.some(event => event.action === 'simulated_send'), false);
+});

@@ -565,7 +565,10 @@ const english = {
   "依据来源": "Supporting sources",
   "查看来源": "View sources",
   "补资料": "Add a source",
-  "采用澄清问题": "Use the clarification question"
+  "采用澄清问题": "Use the clarification question",
+  // 回答卡把 founder_only / unconfirmed 声明列入待核实项（evidence-answer follow-up 窗口）新增键。
+  // 只追加在 english 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "待核实": "Pending verification"
 };
 
 export function translate(language, phrase) {

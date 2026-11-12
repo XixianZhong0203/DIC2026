@@ -344,6 +344,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         }
       },
       // 修改初始来源身份，同一段原文改了身份后旧核查不能沿用（指纹变了）。
+      // 线索分析与草稿核查都要按新身份重跑：最近一次核查针对草稿时，分析目标的
+      // 核查（analysis_claims，「当前回答」的原料）也要重算，否则改判身份后
+      // 线索回答仍停留在旧身份的判断上；草稿目标的重跑放最后，claims_review
+      // 保持草稿目标（发送门禁与卡片沿用原语义），人工复核/查看记录则随
+      // 证据版本（evidenceHash）变化自然失效。
       '/api/opportunity-evidence-kind': async ({ id, evidence_kind, language }) => {
         const item = get(id);
         if (!['customer', 'founder', 'unconfirmed'].includes(evidence_kind)) fail(400, '请求内容不正确。');
@@ -353,8 +358,12 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
             .run(evidence_kind, id);
           audit(id, 'evidence_kind_changed', { previous: item.evidence_kind ?? 'unconfirmed', next: evidence_kind });
         });
-        if (storedTarget === 'analysis' || storedTarget === 'draft') {
-          await runClaimsReview(id, storedTarget, language);
+        const rerunTargets = [];
+        if (storedTarget === 'analysis' || storedTarget === 'draft') rerunTargets.push(storedTarget);
+        if (item.analysis && storedTarget !== 'analysis') rerunTargets.push('analysis');
+        rerunTargets.sort((a, b) => (a === 'draft' ? 1 : 0) - (b === 'draft' ? 1 : 0));
+        for (const target of rerunTargets) {
+          await runClaimsReview(id, target, language);
         }
       },
       '/api/opportunity-claims': async ({ id, target, draft_id, language }) => {

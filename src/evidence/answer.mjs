@@ -5,6 +5,10 @@
 //   已确认什么（confirmed）/ 缺少哪条信息（missing）/ 下一步怎么做（next）
 //   / 指向哪些来源（supporting）。
 //
+// 已提取声明里「仅创始人陈述」（founder_only）与「来源未确认」（unconfirmed）的
+// 条目不算已确认，单独列入待核实项（pending）：结论只到客户来源支持的部分，
+// 待核实项始终可见，不会被摘要省略。
+//
 // 并区分四种情形（situation），让「怎么说」和「怎么继续」各有边界：
 //   insufficient  证据不足  —— 现有材料只支持部分结论：说清已确认、缺哪条、下一步。
 //   conflict      来源冲突  —— 来源相互矛盾：展示需要比较的记录，不擅自下结论。
@@ -30,6 +34,13 @@ export function evidenceAnswer(bundle) {
   const unknown = of('unknown');
   const refuted = of('refuted');
   const incomplete = of('incomplete');
+  // 待核实项：仅创始人陈述（founder_only）与来源未确认（unconfirmed）的已提取声明。
+  // 它们可能与其他声明并存（如意向已被客户来源支持、签署状态只有创始人陈述），
+  // 因此按声明逐条列出，而不是折叠进某个单一缺口文案。
+  const pending = [
+    ...of('founder_only').map(claim => pendingItem(claim, 'founder_only')),
+    ...of('unconfirmed').map(claim => pendingItem(claim, 'unconfirmed')),
+  ];
 
   // --- 核查失败：模型核查失败，提示可重试（原文与来源不受失败影响）-----------
   if (b.error) {
@@ -42,6 +53,7 @@ export function evidenceAnswer(bundle) {
       retryable: true,
       compare: [],
       supporting: [],
+      pending: [],
       incomplete: incomplete.map(claim => claim.dimension || claim.id).filter(Boolean),
     };
   }
@@ -70,6 +82,7 @@ export function evidenceAnswer(bundle) {
       retryable: false,
       compare,
       supporting: [],
+      pending,
       incomplete: [],
     };
   }
@@ -82,7 +95,11 @@ export function evidenceAnswer(bundle) {
     const open = unknown.map(claim => claim.missing || claimLabel(claim)).join('；');
     const refutedNote = refuted.map(claim => claimLabel(claim) + ' 被来源反驳').join('；');
     const incompleteNote = incomplete.map(claim => claimLabel(claim) + ' 未完成核查').join('；');
-    const bounds = [open, refutedNote, incompleteNote].filter(Boolean).join('；') || '暂无仍未确认项。';
+    // 待核实项同样划入结论边界：结论只到已支持的部分，创始人陈述与未确认来源
+    // 撑住的声明明确标出「待独立核实／待核实」。
+    const pendingNote = pending.map(claim => claimLabel({ dimension: claim.dimension, text: claim.text })
+      + (claim.status === 'founder_only' ? '（仅创始人陈述，待独立核实）' : '（来源未确认，待核实）')).join('；');
+    const bounds = [open, refutedNote, incompleteNote, pendingNote].filter(Boolean).join('；') || '暂无仍未确认项。';
     return {
       situation: 'sufficient',
       confirmed,
@@ -92,6 +109,7 @@ export function evidenceAnswer(bundle) {
       retryable: false,
       compare: [],
       supporting: supportingSources(supported, bySourceId),
+      pending,
       incomplete: incomplete.map(claim => claim.dimension || claim.id).filter(Boolean),
     };
   }
@@ -110,12 +128,19 @@ export function evidenceAnswer(bundle) {
     retryable: false,
     compare: [],
     supporting: [],
+    pending,
     incomplete: incomplete.map(claim => claim.dimension || claim.id).filter(Boolean),
   };
 }
 
 function claimLabel(claim) {
   return (claim?.dimension ? claim.dimension + '：' : '') + (claim?.text || '（模型未返回声明原文）');
+}
+
+// 待核实条目：声明的维度与原文 + 待核实原因（founder_only / unconfirmed），
+// 措辞交给消费方（回答卡）按现有状态标签渲染。
+function pendingItem(claim, status) {
+  return { dimension: claim.dimension ?? '', text: claim.text ?? '', status };
 }
 
 // 当前结论所指向的来源：取被支持声明里 stance=supports 的逐字来源，去重、保序。

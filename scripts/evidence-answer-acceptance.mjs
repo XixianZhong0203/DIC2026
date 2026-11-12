@@ -4,6 +4,9 @@
 //     1) 先只有「想看案例」→ 当前回答必须是：已确认什么 / 缺少哪条信息 / 下一步可以怎么做
 //        （具体缺口 + 可操作建议），而不是笼统的「证据不足」。
 //     2) 补来一条明确表达签约意向的回复 → 系统更新结论（有边界的明确结论），并指向新增来源。
+//     5) 混合案例（另一条线索）：客户已明确表达签约意向（客户来源支持），
+//        但「合同已签约」只有创始人陈述 → 回答同时显示已确认的意向与待核实的签署状态
+//        （pending 列出 founder_only 声明，依据来源不指向创始人陈述）。
 //   另加两个情形：来源相互矛盾（展示需要比较的记录，不擅自下结论）；模型核查失败（可重试）。
 //
 //   node scripts/evidence-answer-acceptance.mjs
@@ -35,6 +38,7 @@ const base = 'http://127.0.0.1:' + serverPort;
 let mockFailMode = false;
 const intentText = '客户明确表示：我们希望尽快签约。';
 const contradictionText = '客户希望改为下周一。';
+const founderSignedText = '客户已签约。';
 function unknownClaims() {
   return JSON.stringify({ claims: [
     { id: '购买意向', dimension: '购买意向', text: '客户想先看案例', status: 'unknown',
@@ -49,6 +53,7 @@ function mockReply(input) {
     const sources = input.sources ?? [];
     const intent = sources.find(source => source.text?.includes('希望尽快签约'));
     const contradiction = sources.find(source => source.text?.includes('希望改为下周一'));
+    const founderSigned = sources.find(source => source.kind === 'founder' && source.text?.includes('已签约'));
     if (intent && contradiction) {
       // 同一声明同时被两条来源支持又反驳 → 核查判为来源冲突（conflict 带双方原文）。
       return JSON.stringify({ claims: [
@@ -60,6 +65,19 @@ function mockReply(input) {
           missing: '请确认以哪条记录为准。', rewrite: '' },
         { id: '签约状态', dimension: '签约状态', text: '客户已签约', status: 'unknown',
           items: [], missing: '合同是否签署仍待确认。', rewrite: '尚未确认合同是否签署。' },
+      ] });
+    }
+    if (intent && founderSigned) {
+      // 混合案例：意向由客户来源支持，签署状态只有创始人陈述（核查器按来源身份判 founder_only）。
+      return JSON.stringify({ claims: [
+        { id: '购买意向', dimension: '购买意向', text: '客户有签约意向', status: 'supported',
+          items: [{ evidenceId: intent.id, stance: 'supports', quote: '我们希望尽快签约',
+            note: '客户明确表示签约意向' }],
+          missing: '', rewrite: '客户已明确表达签约意向。' },
+        { id: '签约状态', dimension: '签约状态', text: '客户已签约', status: 'founder_only',
+          items: [{ evidenceId: founderSigned.id, stance: 'supports', quote: '客户已签约',
+            note: '创始人陈述已完成事实' }],
+          missing: '', rewrite: '仅创始人陈述合同已签署。' },
       ] });
     }
     if (intent) {
@@ -256,11 +274,51 @@ record('after the retry the answer recovers to a usable state',
   a5?.situation === 'insufficient' && a5.retryable === false ? 'PASS' : 'FAIL',
   a5 ? 'situation=' + a5.situation : 'no answer');
 
+// ---------------------------------------------------------------------------
+console.log('\n5) 混合案例：明确签约意向（客户来源）+「合同已签约」只有创始人陈述');
+const captured3 = await api('/api/opportunity', {
+  kind: 'lead', title: '第三条线索：意向与创始人称已签约', source: '客户线程',
+  evidence: '客户表示想先看案例。',
+});
+record('create the third lead', captured3.ok ? 'PASS' : 'FAIL', captured3.error ?? '');
+if (!captured3.ok) await cleanup(1);
+const mixedTitle = '第三条线索：意向与创始人称已签约';
+const id3 = (await api('/api/state')).data.opportunities.find(item => item.title === mixedTitle).id;
+const assessed3 = await api('/api/opportunity-assess', { id: id3, request: '客户是否想签约？', language: 'zh-CN' });
+record('assess the mixed lead', assessed3.ok ? 'PASS' : 'FAIL', assessed3.error ?? '');
+if (!assessed3.ok) await cleanup(1);
+const intentSource = await api('/api/opportunity-source', {
+  id: id3, name: '客户回复', date: '2026-07-10', kind: 'customer', text: intentText, language: 'zh-CN',
+});
+const founderSource = await api('/api/opportunity-source', {
+  id: id3, name: '创始人记录', date: null, kind: 'founder', text: founderSignedText, language: 'zh-CN',
+});
+record('save the explicit intent (customer) and the signing statement (founder)',
+  intentSource.ok && founderSource.ok ? 'PASS' : 'FAIL',
+  intentSource.error ?? founderSource.error ?? '');
+if (!intentSource.ok || !founderSource.ok) await cleanup(1);
+const a6 = (await leadByTitle(mixedTitle)).answer;
+record('the answer is SUFFICIENT and confirms the explicit intent',
+  a6?.situation === 'sufficient' && /签约意向/.test(a6?.confirmed ?? '') ? 'PASS' : 'FAIL',
+  a6 ? 'situation=' + a6.situation + ' confirmed=' + a6.confirmed : 'no answer');
+record('the founder-only signing claim is listed as pending verification, not confirmed',
+  a6?.pending?.some(entry => entry.status === 'founder_only') ? 'PASS' : 'FAIL',
+  JSON.stringify(a6?.pending ?? []));
+record('the pending item carries the dimension and the claim text',
+  a6?.pending?.some(entry => entry.dimension === '签约状态' && entry.text === '客户已签约') ? 'PASS' : 'FAIL',
+  JSON.stringify(a6?.pending ?? []));
+record('the bounds name the unverified signing step as pending independent verification',
+  /签署|签约/.test(a6?.bounds ?? '') && /待独立核实/.test(a6?.bounds ?? '') ? 'PASS' : 'FAIL',
+  a6?.bounds ?? '');
+record('supporting sources point at the customer source, not the founder statement',
+  a6?.supporting?.length === 1 && /客户回复/.test(a6?.supporting?.[0]?.label ?? '') ? 'PASS' : 'FAIL',
+  JSON.stringify(a6?.supporting ?? []));
+
 const summary = {
   at: new Date().toISOString(),
   results,
   summary: { passed: passed(), failed: failed() },
-  answers: { first: a1, afterIntent: a2, conflict: a3, failed: a4, recovered: a5 },
+  answers: { first: a1, afterIntent: a2, conflict: a3, failed: a4, recovered: a5, mixed: a6 },
 };
 console.log('\nSummary: ' + passed() + ' passed, ' + failed() + ' failed\n' + JSON.stringify(summary, null, 2));
 await cleanup(failed() ? 1 : 0);

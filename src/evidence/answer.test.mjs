@@ -69,6 +69,58 @@ test('sufficient: a supported intent gives a bounded conclusion and points at th
   assert.equal(answer.retryable, false);
 });
 
+// 混合案例：客户已明确表达签约意向（客户来源支持），但「合同已签署」只有创始人陈述。
+// 回答必须同时给出已确认的意向与待核实的签署状态，而不是把签署状态并入已确认。
+test('mixed case: confirmed intent plus a founder-only signing claim → pending verification is listed', () => {
+  const answer = evidenceAnswer(onlyCaseRequest({
+    status: 'supported',
+    quote: '客户明确表示希望签约。',
+    unknown: '',
+    suggestedReply: '可安排合同细节确认。',
+    claims: [
+      { id: '购买意向', dimension: '购买意向', text: '客户已明确表达签约意向', status: 'supported',
+        items: [{ evidenceId: 'S2', stance: 'supports', quote: '希望签约',
+          source: { id: 'S2', source: '客户回复', kind: 'customer', text: '客户明确表示希望签约。' } }],
+        missing: '', rewrite: '已明确表达签约意向。' },
+      { id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'founder_only',
+        items: [{ evidenceId: 'S1', stance: 'supports', quote: '已签约',
+          source: { id: 'S1', source: '创始人记录', kind: 'founder', text: '客户已签约。' } }],
+        missing: '', rewrite: '仅创始人陈述合同已签署。' },
+    ],
+    sources: [
+      { id: 'E1', name: '客户线程', kind: 'evidence', text: '客户表示想先看案例。' },
+      { id: 'S1', name: '创始人记录', kind: 'founder', text: '客户已签约。' },
+      { id: 'S2', name: '客户回复', kind: 'customer', text: '客户明确表示希望签约。' },
+    ],
+  }));
+  assert.equal(answer.situation, 'sufficient');
+  assert.match(answer.confirmed, /签约意向/); // 已确认：明确表达签约意向
+  assert.deepEqual(answer.pending, [
+    { dimension: '签约状态', text: '合同已签署', status: 'founder_only' },
+  ]);
+  assert.match(answer.bounds, /合同已签署/); // 边界：待核实的签署状态
+  assert.match(answer.bounds, /待独立核实/);
+  assert.deepEqual(answer.supporting.map(source => source.id), ['S2']); // 依据来源只有客户来源
+});
+
+test('an unconfirmed-identity claim is listed as pending verification in an insufficient answer', () => {
+  const answer = evidenceAnswer(onlyCaseRequest({
+    claims: [
+      { id: '购买意向', dimension: '购买意向', text: '客户想签约', status: 'unknown',
+        items: [], missing: '还缺客户明确的签约回复。', rewrite: '' },
+      { id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'unconfirmed',
+        items: [{ evidenceId: 'E1', stance: 'supports', quote: '客户已签约',
+          source: { id: 'E1', source: '客户线程', kind: 'unconfirmed', text: '客户已签约。' } }],
+        missing: '', rewrite: '' },
+    ],
+  }));
+  assert.equal(answer.situation, 'insufficient');
+  assert.deepEqual(answer.pending, [
+    { dimension: '签约状态', text: '合同已签署', status: 'unconfirmed' },
+  ]);
+  assert.deepEqual(answer.supporting, []); // 未确认来源不构成依据
+});
+
 test('conflict: shows the records that must be compared and withholds a conclusion', () => {
   const answer = evidenceAnswer(onlyCaseRequest({
     status: 'conflict',
