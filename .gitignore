@@ -12,3 +12,11 @@ data/
 /docs/MINIMAL-CASES.md
 /docs/SAFETY-AND-ALIGNMENT.md
 /docs/EVIDENCE-MODULE-EXPERIMENT.md
+
+# Local evaluation material and development process files
+/evaluation/claim/runs/
+/evaluation/claim/prompt/fingerprints.json
+/evaluation/claim/prompt/PROMPT.md
+/evaluation/draft-verification/output/
+/server.log
+/server.pid
