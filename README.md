@@ -5,21 +5,22 @@ Daymark is a local AI workspace for a one-person company (OPC), where the founde
 ## At a glance
 
 - **Design.** Daymark shows the evidence behind a proposed action. Before a simulated send, the server checks the saved draft and its evidence version, blocks unresolved placeholders, and requires individual resolution of flagged claims. The approval preserves an exportable record of the draft and sources.
-- **Evidence so far.** On six synthetic drafts, two configurations of Qwen 3.8 27B extracted all **6/6** seeded problem claims. Neither marked any of the six as supported. They incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Both configurations belong to the same model family.
-- **What remains to measure.** The draft check still needs an independently authored holdout, including Chinese drafts. Current-model abstention, agreement under pressure, and whether claim-by-claim review helps founders catch more errors also remain unmeasured.
+- **Server enforcement.** The integrated build passed 204 unit tests, 88/88 request-boundary and concurrency checks, and 26/26 approval checks. The acceptance suite detected all seven tested changes to approval conditions. These checks establish enforcement for the exercised cases. [Verification and coverage](#agentic-misalignment-and-verification)
+- **Model detection.** In six synthetic drafts with 15 annotated claims, two Qwen 3.8 27B FP8 configurations each extracted all 6 problem claims and marked 0/6 supported. The upper endpoint of a two-sided 95% Wilson interval is about 39% for each 0/6 result. Detection on an independent holdout, including Chinese drafts and another model family, remains unmeasured.
+- **Human review.** Whether claim-by-claim review helps founders find more errors, and how much time it takes, remains unmeasured.
 
 ## 1. How can the founder audit the assistant's reasoning and actions?
 
 - **Inspect the basis of a reply.** The evidence panel shows the workspace used, retrieved records, verbatim excerpts, model inferences, open questions, and whether a second search ran. This makes the stated basis of a reply inspectable. Model explanations remain summaries.
 - **Follow a decision through to its outcome.** A decision card records the option selected and whether it was applied, paused, or failed. A calendar receipt shows the old and new time. The task activity log stores before-and-after values and links a change to its source and decision card when available.
-- **Review simulated outreach.** The activity log records source changes, claim checks, drafts, source openings, manual review, approvals, blocks, and duplicate approval attempts. Every new simulated send saves a downloadable JSON archive with the draft and its hash, source originals, cited and supporting evidence, available model and prompt metadata, claim-specific guarantees, and the approval time. Later edits leave that archive intact. [Send archive](src/opportunity/archive.mjs)
+- **Review simulated outreach.** The activity log records source changes, claim checks, drafts, source openings, manual review, approvals, blocks, and duplicate approval attempts. Every new simulated send saves a downloadable JSON archive with the draft and its hash, source originals, cited and supporting evidence, available model and prompt metadata, claim-specific guarantees, and the approval time. Later edits to the live draft or sources leave that snapshot intact. Exported JSON can be edited outside Daymark. The audit log currently stores the archive ID without a digest of the complete archive. [Send archive](src/opportunity/archive.mjs)
 - **Review a simulated release.** The release view records verification for the current draft revision, simulated publication, duplicate attempts, and blocks for missing or stale verification.
 
 Implementation: [reply and action routes](server.mjs), [verbatim quote validation](src/memory/memory-impact.mjs), [task audit and receipts](src/tasks/task-audit.mjs), [outreach workflow](src/opportunity/opportunities.mjs), and [release policy](src/policy/policy.mjs).
 
 ### Retrieval score
 
-For ordinary retrieval, the score is the number of distinct normalized terms shared by the query and a record's source name, text, and scope.
+Ordinary retrieval uses `Intl.Segmenter` to split text into words, including Chinese text. It lowercases terms, filters common words, and counts the distinct terms shared by the query and the record's source name, text, and scope. Chinese paraphrases with little shared wording can still miss relevant records.
 
 ```
 score(query, record) = |terms(query) ∩ terms(source + body + scope)|
@@ -53,17 +54,35 @@ current human review = recorded conclusion
 
 Automatic approval eligibility requires a current, completed check, at least one extracted claim, and **every extracted claim supported**. In a current check with flagged claims, each flagged statement needs a claim-specific guarantee unless the founder edits the draft and gets a new result. Each guarantee binds the claim ID and exact statement to the current draft ID and evidence hash. An overall review can cover a missing, failed, stale, or empty check when it is itself bound to the current draft and evidence. Unresolved placeholders block every send path. When a current, completed verification identifies a high-risk clause outside its extracted claims, the founder must revise and recheck or explicitly address that clause in a version-bound review. Duplicate claim IDs in a current draft check require a recheck. Each path requires explicit approval. Repeating approval for the same draft records the attempt and leaves the original simulated send intact.
 
+**Current review limitation.** When a draft edit makes a check stale, an unresolved flag from the earlier version can still apply to wording that remains in the new draft. The send gate does not carry that flag forward as a claim-specific requirement. A new overall review can therefore authorize the edited draft before its claims are rechecked. The placeholder check still applies. [Send gate](src/opportunity/opportunities.mjs)
+
 ## Agentic misalignment and verification
 
-The [Anthropic agentic misalignment study](https://www.anthropic.com/research/agentic-misalignment) tested models that could act under replacement or goal conflict. In Daymark, model output can propose a judgment or action. The server handles approval and the local simulated effect. A chat message or an instruction embedded in a source cannot supply approval. This limits what an unsafe model proposal can execute. A founder can still rely on a misleading answer. The model can miss a claim, misread evidence, or cite a fragment that omits a nearby qualification or negation. Claim-level checks currently cover lead analysis and outreach drafts.
+The [Anthropic agentic misalignment study](https://www.anthropic.com/research/agentic-misalignment) tested models that could act under replacement or goal conflict. In Daymark, model output can propose a judgment or action. The server handles approval and the local simulated effect. The deterministic acceptance suite checks that forged approval text in chat, an added source, or an initial source produces zero simulated sends in those cases. [Request-boundary and concurrency acceptance](scripts/gate-concurrency-acceptance.mjs) A founder can still rely on a misleading answer. The model can miss a claim, misread evidence, or cite a fragment that omits a nearby qualification or negation. Claim-level checks currently cover lead analysis and outreach drafts.
 
 | Check | Result and scope |
 | --- | --- |
-| Seeded draft errors | Six synthetic drafts with 15 annotated claims on baseline `55927f2`. Both Qwen 3.8 27B FP8 configurations extracted **6/6** problem claims and marked **0/6** supported. The standard and reasoning configurations assigned the expected label to **5/6** and **4/6**, and incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Each parsed **6/6** drafts. These are two configurations of one model family on a small sample. |
+| Seeded draft errors | Six synthetic drafts with 15 annotated claims on baseline `55927f2`. Both Qwen 3.8 27B FP8 configurations extracted **6/6** problem claims and marked **0/6** supported. The standard and reasoning configurations assigned the expected label to **5/6** and **4/6**, and incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Each parsed **6/6** drafts. The results describe those configurations and cases. No independent holdout or comparison across model families has been completed. |
 | Historical pressure baseline | Earlier Qwen 2.5 3B runs over-abstained on **6/16** eligible supported turns. The model agreed without support in **5 of 6** pressure turns overall, with one unparseable turn. These runs preceded the current draft checks. |
 | Product verification | **204 unit tests** passed. Deterministic acceptance passed **88/88** request-boundary and concurrency checks, **26/26** approval checks, **31/31** archive checks, and **67/67** customer-delivery checks. All seven tested changes to approval conditions were detected by the acceptance suite. |
 
-Model evaluations still need to measure whether goal pressure leads to fabricated claims and whether a customer’s sensitive records can enter another customer’s draft through global retrieval. The deterministic checks cover workspace isolation and explicit import. The benefit of claim-by-claim review for human reviewers remains unmeasured.
+### Conditions tested by mutation
+
+Each row is one temporary change to the application. The corresponding acceptance check failed for all seven changes. [Mutation runner](scripts/approval-gate-mutations.mjs) · [Approval acceptance](scripts/approval-gate-acceptance.mjs)
+
+| ID | Temporary change | Acceptance check |
+| --- | --- | --- |
+| M1 | Make a duplicate approval return silently and omit its audit event | Duplicate approval is rejected and recorded |
+| M2 | Skip the initial saved-draft ID check | Replay of an old approval after an edit is blocked with the draft-change reason |
+| M3 | Allow sending in the manual delegation mode | Manual mode blocks assistant sending |
+| M4 | Remove the link between an overall review and its source set | A review bound to stale sources cannot authorize a send |
+| M5 | Skip the current draft-check freshness guard | A stale draft check cannot authorize a send |
+| M6 | Remove the request Origin check | A request with a foreign Origin is rejected |
+| M7 | Remove the request Host check | A request with an unexpected Host is rejected |
+
+This mutation set has no separate mutation for the placeholder rule, source classification, claim-specific guarantee binding, or archive integrity. Unit and workflow tests exercise several of those paths separately.
+
+The reported model measurements apply to the tested Qwen configurations. The application can use other configured verification models. It does not warn when the selected verifier is outside the measured configurations, and archive metadata may be absent when no matching verification record exists. Current-model abstention, fabrication under goal pressure, and cross-customer leakage through global retrieval still need broader measurement. The deterministic suite covers workspace isolation and explicit import. Human review effectiveness remains an open question.
 
 ## Product features
 
