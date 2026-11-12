@@ -291,6 +291,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           (entry.quote ? ' · ' + entry.quote : ''), entry.text));
       }
     }
+    // 待核实项：仅创始人陈述／来源未确认的已提取声明（evidenceAnswer.pending）。
+    // 措辞复用声明状态标签，与声明核查区一致；结论只到已支持的部分，这里不被省略。
+    if (answer.pending?.length) {
+      const pendingText = answer.pending.map(entry =>
+        (entry.dimension ? t(entry.dimension) + '：' : '') + (entry.text || t('模型未返回声明原文'))
+        + '（' + t(claimStatusLabels[entry.status] ?? entry.status) + '）').join('；');
+      block.append(element('p', t('待核实') + ' · ' + pendingText, 'attention'));
+    }
     if (answer.next) block.append(element('p', t('下一步') + ' · ' + answer.next));
     if (answer.incomplete?.length) {
       block.append(element('small', t('未完成核查') + ' · ' + answer.incomplete.join('、'), 'attention'));

@@ -76,7 +76,7 @@ const analysis = (status, analysisId, overrides = {}) => JSON.stringify({
 const answer = overrides => ({
   situation: 'insufficient', confirmed: '客户表示想先看案例。',
   missing: '缺少客户明确的签约回复。', bounds: '', next: '可以先发案例并询问采购计划。',
-  retryable: false, compare: [], supporting: [], incomplete: [],
+  retryable: false, compare: [], supporting: [], pending: [], incomplete: [],
   ...overrides,
 });
 const item = overrides => ({
@@ -421,6 +421,30 @@ test('a sufficient answer shows a bounded conclusion and points at the supportin
   assert.ok(text.includes('仍缺 · 合同是否签署仍待确认。'), 'what is still missing is shown');
   assert.ok(text.includes('结论边界 · 合同是否签署仍待确认。'), 'the conclusion bound is shown');
   assert.ok(text.includes('依据来源 · 客户回复'), 'the new supporting source is pointed to');
+});
+
+test('the answer lists founder-only and unconfirmed claims as pending verification alongside the confirmed part', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    analysis: analysis('supported', 'a1'),
+    answer: answer({
+      situation: 'sufficient',
+      confirmed: '客户已明确表达签约意向。',
+      missing: '',
+      bounds: '签约状态：合同已签署（仅创始人陈述，待独立核实）',
+      next: '可安排合同细节确认。',
+      supporting: [{ id: 'S2', label: '客户回复' }],
+      pending: [
+        { dimension: '签约状态', text: '合同已签署', status: 'founder_only' },
+        { dimension: '公司业绩', text: '业绩翻番', status: 'unconfirmed' },
+      ],
+    }),
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('已确认 · 客户已明确表达签约意向。'), 'the confirmed intent is shown');
+  assert.ok(text.includes('待核实 · 签约状态：合同已签署（由创始人提供，待独立核实）；公司业绩：业绩翻番（来源未确认，待核实）'),
+    'founder-only and unconfirmed claims are listed as pending items');
+  assert.ok(text.includes('结论边界 · 签约状态：合同已签署（仅创始人陈述，待独立核实）'), 'the bound names the pending step');
 });
 
 test('a conflict answer lists the records to compare and withholds a conclusion', () => {
