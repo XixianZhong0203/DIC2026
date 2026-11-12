@@ -629,7 +629,7 @@ test('acceptance: founder says signed while the customer only says willing — b
   // 直接请求发送也被拦。
   assert.throws(() => call('opportunity-send', { id, draft_id }), {
     status: 409,
-    message: '以下声明仅由创始人提供，待独立核实：签约状态。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或针对当前草稿与来源记录人工复核结论，再批准发送。',
+    message: '以下声明仅由创始人提供，待独立核实：签约状态。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或逐条记录担保，再批准发送。',
   });
   assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_founder_only');
   // 补入已签合同记录：来源变化自动重新核查 → 有依据（supported），进入待批准。
@@ -643,7 +643,7 @@ test('acceptance: founder says signed while the customer only says willing — b
   assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'model_supported');
 });
 
-test('a founder-only claim may be released by a review bound to the current draft and sources', async () => {
+test('a founder-only claim requires a claim-specific guarantee even after a current overall review', async () => {
   const { call, current, state } = fixture(signingDouble);
   const { id } = current();
   await call('opportunity-assess', { id, request: '客户签约了吗？', language: 'zh-CN' });
@@ -660,9 +660,13 @@ test('a founder-only claim may be released by a review bound to the current draf
   // 针对当前草稿与当前来源记录人工复核结论 → 批准并发送。
   call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: '已人工核对，此版本可发送。' });
   assert.equal(current().reviewStale, null);
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  const flagged = current().claims.claims[0];
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: flagged.id,
+    text: flagged.text, reason: '已逐条核对并承担此声明。' });
   call('opportunity-send', { id, draft_id });
   assert.equal(current().sent, 1);
-  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_review');
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_guarantee');
 });
 
 test('a founder-only claim may be released by rewriting to an evidence-grounded statement and re-verifying', async () => {
@@ -790,9 +794,13 @@ test('a legacy review computed on generic E1 cannot bypass the typed-source rule
   assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_unconfirmed');
   // 保留处理路径：针对当前草稿与来源记录人工复核结论后批准。
   call('opportunity-review', { id, analysis_id: JSON.parse(current().analysis).analysisId, draft_id, resolution: '已人工核对。' });
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  const flagged = current().claims.claims[0];
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: flagged.id,
+    text: flagged.text, reason: '已逐条核对并承担此声明。' });
   call('opportunity-send', { id, draft_id });
   assert.equal(current().sent, 1);
-  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_review');
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_guarantee');
 });
 
 test('changing the initial source identity invalidates the stored verification', async () => {
@@ -886,9 +894,13 @@ test('re-identifying the initial source updates the lead answer and expires the 
   // 针对新证据版本重新复核后放行。
   call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: '新身份下重新复核。' });
   assert.equal(current().reviewStale, null);
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  const flagged = current().claims.claims[0];
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: flagged.id,
+    text: flagged.text, reason: '已逐条核对并承担此声明。' });
   call('opportunity-send', { id, draft_id });
   assert.equal(current().sent, 1);
-  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_review');
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_guarantee');
 });
 
 test('a mixed draft verification (one supported claim, one refuted) blocks the send with no simulated send', async () => {

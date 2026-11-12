@@ -279,11 +279,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   // 与发送门槛一致的本地镜像：可批准 = 绑定当前草稿与来源的人工复核，
   // 或草稿核查新鲜、范围非空、每条被标记声明都有逐条担保（或全部获支持）。
   function sendable(item) {
-    if (item.review) return !item.reviewStale;
     const review = item.claims;
-    if (!review || review.target !== 'draft' || review.error || item.claimsStale) return false;
-    const claims = review.claims ?? [];
-    if (!claims.length) return false;
+    if (review?.target !== 'draft' || review.error || item.claimsStale || !review.claims?.length) {
+      return Boolean(item.review && !item.reviewStale);
+    }
+    const claims = review.claims;
     return claims.every(claim => claim.status === 'supported' || isGuaranteed(item, claim));
   }
   // 一条被标记声明的逐条复核条目：原句、判定、依据（复用 claimSection 的展示），
@@ -420,8 +420,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   // 人工复核结论绑定当前草稿与当前来源版本：复核过期（草稿变了或来源变了）时不再显示待批准。
   function approvalStatus(item) {
     if (!item.draft_id) return { label: '尚未保存草稿', tone: 'muted' };
-    if (item.review) {
-      if (!item.reviewStale) return { label: '待批准', tone: 'muted' };
+    if (sendable(item)) return { label: '待批准', tone: 'muted' };
+    if (item.reviewStale && !flaggedClaims(item).length) {
       return { label: t('复核已过期') + ' · ' + reviewStaleText(item), tone: 'attention' };
     }
     const review = item.claims;
@@ -480,7 +480,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     // 人工复核结论绑定到当前草稿版本与当前来源版本：草稿换新版本或来源变化后，
     // 旧复核不能解锁当前草稿的发送门禁，表单重新出现，供针对当前草稿与来源记录结论。
     const reviewCurrent = Boolean(item.review) && item.review_draft === item.draft_id && !item.reviewStale;
-    if ((!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) ||
+    const flagged = flaggedClaims(item);
+    if (flagged.length || (!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) ||
       (item.draft_id && !reviewCurrent)) {
       const reviewForm = element('form', '');
       // 复核区显示当前查看状态：已打开哪些来源 / 尚未打开来源。
@@ -488,7 +489,6 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       reviewForm.append(reviewViewLine(item),
         element('small', t('展开来源原文会记录下来，保存复核时随结论写入审计。'), 'muted'));
       // 逐条人工复核：当前草稿核查中被标记的声明，逐条给出原句、判定、依据与处理入口。
-      const flagged = flaggedClaims(item);
       if (flagged.length) {
         reviewForm.append(element('small', t('有问题的声明') + ' · ' + flagged.length +
           ' · ' + t('逐条处理：改写或删除后重新核查，或保留并记录担保理由。'), 'attention'));

@@ -416,7 +416,7 @@ record('the unsupported sentence is named: draft verification shows the gap',
     text.includes('缺少信息 · 缺客户 A 明确确认改期的记录') &&
     text.includes('建议改写 · 客户 A 提议将交付改至 2026-11-17 15:30，是否改期仍待客户确认。') &&
     text.includes('采用改写并重新核查') ? 'PASS' : 'FAIL');
-  record('approval status is not awaiting approval', text.includes('需要处理') ? 'PASS' : 'FAIL');
+  record('approval status is not awaiting approval', text.includes('待处理 1 条') ? 'PASS' : 'FAIL');
 }
 const blocked = await api('/api/opportunity-send', { id: leadId, draft_id: draftId });
 record('send is blocked: the claim is unresolved', !blocked.ok && blocked.status === 409 && blocked.error.includes('对外承诺') ? 'PASS' : 'FAIL',
@@ -489,7 +489,7 @@ record('viewing state shows the current version (S3 opened)',
 {
   const text = await renderUiFresh();
   record('review area shows the current viewing state',
-    text.includes('已展开来源 · 客户 A 确认邮件（11 月 12 日）') && !text.includes('尚未展开来源') ? 'PASS' : 'FAIL');
+    text.includes('已打开 · 客户 A 确认邮件（11 月 12 日）') && !text.includes('尚未打开来源') ? 'PASS' : 'FAIL');
 }
 
 const sent = await api('/api/opportunity-send', { id: leadId, draft_id: draftId });

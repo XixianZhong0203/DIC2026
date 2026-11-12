@@ -520,11 +520,13 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const sourceRows = sourcesFor(id);
         // 人工复核放行同时校验两个绑定：当前草稿版本 + 当前来源集合。
         // 旧记录缺少来源版本（review_evidence 为空）时不放行，需重新复核。
-        const humanOverride = Boolean(item.review) && item.review_draft === item.draft_id &&
+        const review = item.claims_review ? safeParse(item.claims_review) : null;
+        const verifiedScope = review?.target === 'draft' && !review.error &&
+          !claimsStale(item, review, sourceRows) && Boolean(review.claims?.length);
+        const humanOverride = !verifiedScope && Boolean(item.review) && item.review_draft === item.draft_id &&
           item.review_evidence === evidenceHash(item, sourceRows);
         let guaranteedClaims = [];
         if (!humanOverride) {
-          const review = item.claims_review ? safeParse(item.claims_review) : null;
           if (review && review.target === 'draft') {
             // 草稿目标核查存在时，声明门禁先于分析层面门槛执行：逐条声明的核查结论
             // （含逐条担保）是更具体、更可操作的拦截依据，且逐条担保放行路径
@@ -563,17 +565,17 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
                 fail(409, '以下声明仅由创始人提供，待独立核实：' +
                   founderOnly.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
                   '。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，' +
-                  '或针对当前草稿与来源记录人工复核结论，再批准发送。');
+                  '或逐条记录担保，再批准发送。');
               }
               if (unconfirmed.length) {
                 fail(409, '以下声明的来源未确认：' +
                   unconfirmed.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
                   '。请补入可核实的来源，或确认初始来源身份后重新核查，或改写为有依据的说法，' +
-                  '或针对当前草稿与来源记录人工复核结论，再批准发送。');
+                  '或逐条记录担保，再批准发送。');
               }
               fail(409, '以下声明核查未通过：' +
                 unhandled.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
-                '。请改写后重新核查，或对该声明逐条记录担保，或针对当前草稿记录人工复核结论。');
+                '。请改写后重新核查，或对该声明逐条记录担保。');
             }
           } else {
             // 尚无草稿目标核查：先按分析层面门槛提示（保持原顺序），再提示核查草稿声明。
