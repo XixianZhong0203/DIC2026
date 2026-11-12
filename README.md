@@ -26,25 +26,14 @@ Daymark selects up to 12 positively scored records. If the model identifies miss
 - **Start with the right workspace.** A chat retrieves its project's active memories and global records. A workspace change can start a fresh conversation with the current input. The app distinguishes continuing, starting a new task, switching, and comparing workspaces. Cross-workspace merges and moves of populated chats are blocked. The founder can explicitly import selected records with their original workspace and source noted. [Intent classification](src/chat/chat-intent.mjs) · [Workspace routes](server.mjs)
 - **Keep decisions and proposals distinct.** Extract memory candidates from chat, inspect their source and scope, and confirm what to save. When a new instruction overlaps an existing preference, the decision card can offer a one-time exception, a scoped addition, or a replacement. An external request to reschedule remains a proposal. The existing arrangement stays visible until the founder decides. [Memory management](src/memory/memory-impact.mjs)
 - **Recheck at confirmation.** A decision card can display the current arrangement, a proposed change, source records, and calendar options. Confirmation checks the relevant calendar or memory again. A changed situation pauses the write and can refresh the choices. The confirmation handler serializes requests for the same card and can recover a missing receipt from a committed task audit or memory record. A local calendar change records the founder's action and leaves customer acceptance as a separate fact. [Decision cards and rechecks](src/decision/decision.mjs) · [Confirmation and receipt recovery](src/decision/confirm.mjs)
-- **Say what remains unknown.** In chat, Daymark can name an evidence gap, search saved records, or propose a clarifying question. The lead's **Current answer** distinguishes insufficient evidence, conflicting sources, failed verification, and a supported conclusion with limits. For example, “The customer expressed intent to sign. Whether the contract was signed remains unconfirmed.” Claims verified only by a founder statement or an unconfirmed source are listed as pending-verification items alongside the confirmed part, and re-identifying the initial source re-runs the lead and draft verifications so the answer stays current. The card can open sources, focus the source entry form, or fill a clarification draft. [Lead answer](src/evidence/answer.mjs)
-
-### Memory conflict ranking
-
-When the founder proposes a memory change, Daymark ranks existing records for review with personalized PageRank. The seed is the term-overlap score plus two points for a matching scope, normalized across up to 80 candidates. Edges use the number of shared body terms, plus one for a matching scope. Let `s` be the normalized seed and `P` the row-normalized edge matrix. A record with no outgoing edge redistributes its mass according to `s`.
-
-```
-r₀ = s
-rₜ₊₁ = 0.15s + 0.85Pᵀrₜ
-```
-
-After 20 iterations the default view returns up to eight candidates. The score ranks records for review. The model can classify candidate conflicts and the founder decides what to save. [Ranking and scope code](src/memory/memory-impact.mjs) · [Semantic Commit](https://arxiv.org/abs/2504.09283)
+- **Say what remains unknown.** In chat, Daymark can name an evidence gap, search saved records, or propose a clarifying question. The lead's **Current answer** distinguishes insufficient evidence, conflicting sources, failed verification, and a supported conclusion with limits. For example, “The customer expressed intent to sign. Whether the contract was signed remains unconfirmed.” Claims verified only by a founder statement or an unconfirmed source are listed as pending-verification items alongside the confirmed part, and re-identifying the initial source re-runs the lead and draft verifications so the answer stays current. The card lists founder-only and unconfirmed claims as pending even when other claims are supported. It can open sources, focus the source entry form, or fill a clarification draft. Adding a source or correcting its identity refreshes the lead answer and reruns any existing draft check. [Lead answer](src/evidence/answer.mjs)
 
 ## 3. How can the founder catch unsupported agreement before relying on an answer?
 
 1. **Check the claim against its source.** Lead analysis verifies purchase intent and signing status. Saved outreach drafts can be checked for customer intent, signing status, company performance, and external commitments. The configured model identifies the relationship between a claim and a source. Daymark checks that quoted text appears in the specified source, and that an extracted draft claim occurs in the draft. A source marked as merely relevant carries no supporting or opposing weight. [Claim verification](src/opportunity/claims.mjs) · [FEVER](https://aclanthology.org/N18-1074/)
 2. **Show provenance and competing evidence.** The founder labels the initial record as customer or external, founder-provided, or unconfirmed. Legacy initial records default to unconfirmed. Founder-only or unconfirmed support is flagged and cannot satisfy the automatic send check. The label records the stated origin. Conflicting sources remain visible unless the dated record explicitly revises or withdraws the relevant earlier opposing records. An expression of intent can support intent while signing remains unconfirmed.
-3. **Show the actual verification scope before approval.** The saved draft lists checked claims, problematic sentences, sources, missing information, and suggested rewrites. A rewrite saves a new draft version and rechecks it. An empty set of extracted claims requires further handling. The founder can add evidence, revise and recheck, or record a human review for the current version.
-4. **Enforce the decision at the action endpoint.** The simulated send checks delegation mode, the current draft, lead assessment or review, and the current draft's verification or human review. The application records the block reason or the approved version and simulated result. Simulated publishing separately checks explicit acceptance, the action, scope and draft revision, and current-version verification. [Send gate](src/opportunity/opportunities.mjs) · [Release gate](src/alignment/alignment.mjs)
+3. **Show the actual verification scope before approval.** The saved draft lists checked claims, problematic sentences, sources, missing information, and suggested rewrites. A rewrite saves a new draft version and rechecks it. An empty set of extracted claims requires further handling. For each flagged claim, the founder can add evidence, rewrite or remove the statement and recheck, or explicitly stand behind it with a recorded reason. Approval records which flagged claims the founder stood behind. The review log records source openings. Opening a source does not establish that it was read or understood.
+4. **Enforce the decision at the action endpoint.** The simulated send checks delegation mode, the saved draft version, and the applicable claim check or manual review. The application records the block reason or the approved version and simulated result. Simulated publishing separately checks explicit acceptance, the action, scope and draft revision, and current-version verification. [Send gate](src/opportunity/opportunities.mjs) · [Release gate](src/alignment/alignment.mjs)
 
 ### Version checks
 
@@ -56,35 +45,46 @@ current human review = recorded conclusion
                        AND review.evidence_hash = current evidence hash
 ```
 
-The send endpoint can also accept a current automatic verification with a nonempty set of supported claims. In either case, the founder explicitly approves the saved draft. Daymark simulates the effect locally.
+Automatic approval eligibility requires a current, completed check, at least one extracted claim, and **every extracted claim supported**. In a current check with flagged claims, each flagged statement needs a claim-specific guarantee unless the founder edits the draft and gets a new result. Each guarantee binds the claim ID and exact statement to the current draft ID and evidence hash. An overall review can cover a missing, failed, stale, or empty check when it is itself bound to the current draft and evidence. Each path requires explicit approval before Daymark simulates sending locally.
 
-### What the checks cover
+## Agentic misalignment and verification
 
-- **Product verification.** The integrated release passed **172/172 unit tests** and **67/67 checks** in the synthetic customer-delivery flow. The latter uses a deterministic mock model to exercise project isolation, decision receipts, unsupported claims, review and simulated send. [End-to-end walkthrough](scripts/customer-delivery-acceptance.mjs) · [Evidence-answer acceptance](scripts/evidence-answer-acceptance.mjs)
-- **Historical model baseline.** In a small synthetic run of an earlier workflow, `qwen2.5:3b` over-abstained in **6/16** parseable turns where evidence supported a conclusion and gave unsupported agreement in **5/5** parseable pressure turns in the workspace benchmark. Detection and false-positive rates for the current draft verifier remain unmeasured. [Benchmark implementation](src/alignment/alignment.mjs) · [Evaluation runner](evaluation/round1.mjs)
-- **Current limits.** Source labels reflect user-recorded provenance. Model interpretation and claim extraction can miss or misread material. Claim-by-claim checks currently cover lead analysis and outreach drafts. The draft send checks use their own verification state.
+The [Anthropic agentic misalignment study](https://www.anthropic.com/research/agentic-misalignment) tested models that could act under replacement or goal conflict. In Daymark, model output can propose a judgment or action. The server handles approval and the local simulated effect. A chat message or an instruction embedded in a source cannot supply approval. This limits what an unsafe model proposal can execute. A founder can still rely on a misleading answer, and the model can miss a claim or misread evidence. Claim-level checks currently cover lead analysis and outreach drafts.
+
+| Check | Result and scope |
+| --- | --- |
+| Seeded draft errors | Six synthetic drafts with 15 annotated claims on baseline `55927f2`. Both Qwen 3.8 27B FP8 configurations extracted **6/6** problem claims and marked **0/6** supported. The standard and reasoning configurations assigned the expected label to **5/6** and **4/6**, and incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Each parsed **6/6** drafts. These are two configurations of one model family on a small sample. |
+| Historical pressure baseline | Earlier Qwen 2.5 3B runs over-abstained on **6/16** eligible supported turns. The model agreed without support in **5 of 6** pressure turns overall, with one unparseable turn. These runs preceded the current draft checks. |
+| Product verification | **176 unit tests** and the scripted lead-answer and customer-delivery checks exercise application behavior. The scripted checks use deterministic model responses. |
+
+Remaining tests include asking the assistant to bypass review, measuring fabrication under pressure to close a deal, and checking whether sensitive customer records can enter another customer's draft through global retrieval. Workspace isolation and explicit import are already covered by scripted checks. The wider behavior with real models still needs measurement.
 
 ## Product features
 
 | Area | Available functions |
 | --- | --- |
-| **Workspaces and chat** | Create, rename, group, search, resume, merge within a workspace, and delete conversations. Autosave chat history, show message times, and suggest new chats or workspace switches. |
+| **Workspaces and chat** | Create, rename, group, search, resume, merge within a workspace, and delete conversations. Autosave chat history, show message times, suggest new chats or workspace switches, and choose a model and thinking level per conversation. |
 | **Records and memory** | Capture source text, facts, preferences, rules, and proposals. Extract and confirm memory candidates, review overlapping records, inspect changes, and import selected records with provenance. |
 | **Leads and improvement ideas** | Open public search links, record prospects or ideas manually, add dated sources, assess opportunities, check lead claims, prepare outreach, and create follow-up tasks. Recent leads and upcoming tasks open their matching cards. |
 | **Decisions and planning** | Review scheduling and preference conflicts, choose an option, preview calendar changes, confirm or clarify, and inspect receipts. Create, edit, complete, reopen, and delete tasks with source links, dates, locations, and notes. View the calendar and export events as ICS. |
-| **Delegation and simulations** | Configure analysis, drafting, and approval policies. Verify outreach drafts, record source viewing and human review, simulate approved sends, and simulate version-checked releases. |
+| **Delegation and simulations** | Configure analysis, drafting, and approval policies. Verify outreach drafts, record source viewing, manual review and claim-specific guarantees, simulate approved sends, and simulate version-checked releases. |
 | **Developer tools** | Run unit checks, synthetic workspace and opportunity comparisons, and product acceptance scripts. Keep generated traces and screenshots local. |
 
 ## Run locally
 
 Use Node.js 24 or later. Start the server with `npm start` and open [Daymark](http://127.0.0.1:4173). The interface supports English and Chinese. Run `npm test` for unit checks.
 
-Chat, memory extraction, and automated claim interpretation use the configured model. Retrieval, scope, quote matching, version checks, confirmation, and audit writes run in application code. Example local Ollama configuration in `.env`:
+Copy [.env.example](.env.example) to `.env` and configure a model. The [catalog](src/models.mjs) includes Qwen 3.8 27B through LiteLLM and OpenCode models. You can also set `OPENAI_BASE_URL` and `MODEL_ID` for a custom OpenAI-compatible endpoint such as Ollama. Use the composer menu to choose a model and the available thinking level for each conversation. Chat, topic detection, and memory extraction follow that selection. Lead analysis, claim verification, and evaluations use the configured default model. Hosted model requests can include relevant records and recent conversation.
 
-```dotenv
-OPENAI_BASE_URL=http://127.0.0.1:11434/v1
-MODEL_ID=qwen2.5:3b
-OPENAI_API_KEY=
+For the optional GPT models, sign in to the Codex CLI, run `node scripts/codex-bridge.mjs` in a separate terminal, then set `DAYMARK_CODEX_PICKER=1` in Daymark's `.env` and restart. GPT‑6.1 Sol offers **Low**. GPT‑5.6 Sol, Terra, and Luna offer **Low** or **Medium**. The local bridge uses standard processing. Availability depends on the signed-in Codex account. The workspace database lives in `data/`.
+
+## Appendix · Memory ranking
+
+When the founder proposes a memory change, Daymark ranks existing records for review with personalized PageRank. The seed is the term-overlap score plus two points for a matching scope, normalized across up to 80 candidates. Edges use the number of shared body terms, plus one for a matching scope. Let `s` be the normalized seed and `P` the row-normalized edge matrix. A record with no outgoing edge redistributes its mass according to `s`.
+
+```
+r₀ = s
+rₜ₊₁ = 0.15s + 0.85Pᵀrₜ
 ```
 
-Start the configured model before using chat. Restart Daymark after changing configuration. The workspace database lives in `data/`. When using a hosted OpenAI-compatible provider, relevant records and recent conversation can be included in model requests.
+After 20 iterations the default view returns up to eight candidates. The score ranks records for review. The model can classify candidate conflicts and the founder decides what to save. [Ranking and scope code](src/memory/memory-impact.mjs) · [Semantic Commit](https://arxiv.org/abs/2504.09283)
