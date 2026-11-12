@@ -36,6 +36,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     field_conflict: '模型输出字段不一致', claim_not_in_draft: '声明未在草稿正文中逐字出现',
     request_failed: '模型请求失败', empty_claim_text: '声明原文为空',
     truncated_negation: '声明截断了否定词，语义可能反转',
+    quote_missing_context: '引文缺少关键上下文（截掉了原文的否定/条件/限定）', quote_ambiguous: '引文在原文中出现多次且含义不同，需更完整的引文',
   };
   const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
     claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过', claims_no_claims: '未提取到声明',
@@ -232,7 +233,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
     }
     for (const reason of new Set((claim.failedChecks ?? []).map(check => check.reason))) {
-      article.append(element('small', t(checkReasonLabels[reason] ?? reason)));
+      // 引文上下文问题带结构化 detail（被截子句 + 原因），随标签一起展示原文与原因。
+      const check = (claim.failedChecks ?? []).find(entry => entry.reason === reason);
+      article.append(element('small', t(checkReasonLabels[reason] ?? reason) +
+        (check?.detail ? ' · ' + check.detail : '')));
     }
     return article;
   }
@@ -291,18 +295,44 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     }
     return block;
   }
+  // 核查配置行：展示核查记录在核查时刻落下的实际配置。
+  // 旧记录缺 model 字段 → 整行显示「未记录」（不用渲染时刻的当前配置补写历史）；
+  // 记录里 effort=null → 「端点默认」档位（核查路径从不逐请求发送 reasoning_effort）。
+  const effortLabels = { low: '低', medium: '中', high: '高' };
+  function checkConfigText(record) {
+    if (!record || record.model == null) return t('未记录');
+    const effort = 'effort' in record
+      ? (record.effort == null ? t('端点默认') : t(effortLabels[record.effort] ?? record.effort))
+      : t('未记录');
+    const prompts = record.prompts;
+    const versions = (prompts && (prompts.claims || prompts.analysis))
+      ? (prompts.claims || '—') + ' / ' + (prompts.analysis || '—')
+      : t('未记录');
+    return t('核查模型') + ' · ' + record.model + ' · ' + t('思考档位') + ' · ' + effort +
+      ' · ' + t('提示版本') + ' · ' + versions;
+  }
   function archiveEntry(archive) {
     const entry = element('details', '');
     const approval = archive.approval ?? {};
     const basis = t(archiveBasisLabels[approval.basis] ?? approval.basis ?? 'pending');
-    entry.append(element('summary', new Date(archive.sentAt).toLocaleString(language()) + ' · ' + basis +
-      (archive.sent ? ' · ' + t('已发送') : '')));
+    // 档案字节被改成非法 JSON 时 state 附带最小占位（archiveId + integrity）：时间显示「未记录」。
+    entry.append(element('summary', (archive.sentAt ? new Date(archive.sentAt).toLocaleString(language()) : t('未记录')) +
+      ' · ' + basis + (archive.sent ? ' · ' + t('已发送') : '')));
     entry.append(element('p',
       (approval.recipient ? t('收件人') + ' · ' + approval.recipient + ' · ' : '') + t('批准依据') + ' · ' + basis));
     if (approval.body) entry.append(details(t('草稿正文'), approval.body));
-    const verification = archive.verification ?? {};
-    entry.append(element('small', t('核查模型') + ' · ' + (verification.model ?? t('未记录')) +
-      ' · ' + t('提示版本') + ' · ' + (verification.prompts?.claims ?? '—') + ' / ' + (verification.prompts?.analysis ?? '—')));
+    // 核查配置取档案内嵌的 verification 块（核查时刻写下的实际值，旧档案不补写）。
+    entry.append(element('small', checkConfigText(archive.verification ?? {})));
+    // 完整性：存档 digest 与存储字节重算的比对结果（服务端 state 附带）；
+    // mismatch 高亮：档案内容与批准记录不一致。
+    const integrity = archive.integrity ?? null;
+    if (integrity) {
+      entry.append(element('small',
+        t('完整性') + ' · ' + (integrity.status === 'verified' ? t('校验通过')
+          : integrity.status === 'mismatch' ? t('档案内容与批准记录不一致')
+          : t('无完整性记录')),
+        integrity.status === 'mismatch' ? 'attention' : undefined));
+    }
     // 三档来源（都读档案内嵌快照，与活动来源无关）：
     // 1. 提供给模型的来源 = 核查输入全集（含全文）；
     // 2. 回答引用的来源 = 分析引文所出（E1）+ 结构化回答明指的来源；
@@ -386,6 +416,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       (claim.dimension ? t(claim.dimension) + '：' : '') + (claim.text || t('模型未返回声明原文')));
     if (!review.error) block.append(element('small', t('本次核查范围') + ' · ' +
       (scope.length ? scope.join('；') : t('未提取到声明'))));
+    block.append(element('small', checkConfigText(review)));
     if (review.claims?.length) {
       for (const claim of review.claims) block.append(claimSection(claim, item));
     } else {

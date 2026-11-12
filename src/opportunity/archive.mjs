@@ -7,14 +7,22 @@ import { createHash, randomUUID } from 'node:crypto';
 // 不保留任何指向活动数据的指针。因此发送之后来源或草稿再怎么修改，
 // 旧档案仍能还原「当时基于什么批准了什么」（本窗口的验收线）。
 //
+// 完整性（改动发现）：存档时对「实际保存的 JSON 字节」计算 SHA-256（storeArchive 返回 digest，
+// 不写入档案 JSON 本身——写进去会改变字节口径），摘要随档案 ID 写入批准审计
+// （窗口 1 写入 approved，手动冻结写入 archived）；导出时用同一字节口径重算并比对，
+// 结果 verified（校验通过）/ mismatch（档案内容与批准记录不一致）/ unrecorded（无完整性记录，旧档案）。
+// 档案 JSON 里的核查配置（模型/思考档位/提示版本）取核查记录在核查时刻写下的实际值，
+// 旧核查记录缺字段时记 null（界面显示「未记录」），不用冻结时刻的当前配置补写历史。
+//
 // 分工（窗口对齐）：
-//   本窗口：档案字段（schema）、构建器 buildSendArchive、存储、导出（/api/opportunity-archive/:id）
-//   与界面三档来源展示。
+//   本窗口：档案字段（schema）、构建器 buildSendArchive、存储（含存档摘要）、
+//   导出（/api/opportunity-archive/:id，含完整性校验）与界面的三档来源、核查配置与完整性展示。
 //   窗口 1：/api/opportunity-send 门槛通过后的写入——复用的正是下面这个纯函数，
-//   它传入的 approval 取自当时的 approved 审计（basis/sentAt 以发送时刻为准）。
+//   它传入的 approval 取自当时的 approved 审计（basis/sentAt 以发送时刻为准），
+//   storeArchive 返回的 digest 由窗口 1 随档案 ID 写入批准审计（approved）。
 //   构建器是 schema 的唯一来源；发送前手动冻结（/api/opportunity-archive）与发送时写入共用它。
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 
@@ -35,8 +43,7 @@ export function sourceSnapshot(opportunity, sourceRows) {
 export function buildSendArchive(ctx) {
   const {
     opportunity, sourceRows, claims = null, analysis = null, answer = null,
-    reviewViewed = null, viewingTrail = [], model = null, effort = null,
-    prompts = {}, approval = {},
+    reviewViewed = null, viewingTrail = [], approval = {},
   } = ctx;
 
   const snapshot = sourceSnapshot(opportunity, sourceRows);
@@ -105,10 +112,12 @@ export function buildSendArchive(ctx) {
     sourcesProvidedToModel: snapshot.map(source => source.id),
     answerCitedSources: [...cited.values()].map(entryOf).filter(Boolean),
     verification: {
-      model,
-      // 思考档位：null = 端点默认档位（核查路径不逐请求指定档位）。
-      effort,
-      prompts: { claims: prompts.claims ?? null, analysis: prompts.analysis ?? null },
+      // 配置三项取核查记录在核查时刻写下的实际值（runClaimsReview 落库），不从 ctx 传入：
+      // 旧核查记录缺字段 → 三项为 null（界面显示「未记录」），不用冻结时刻的当前配置补写历史；
+      // effort=null = 端点默认档位（核查路径不发送 reasoning_effort）。
+      model: claims?.model ?? null,
+      effort: claims?.effort ?? null,
+      prompts: claims?.prompts ?? (claims?.promptVersion ? { claims: claims.promptVersion, analysis: null } : null),
       target: claims?.target ?? null,
       at: claims?.at ?? null,
       // 核查失败时记录原因（原文与来源不受失败影响，档案如实呈现「未完成核查」）。
@@ -152,15 +161,44 @@ export function createArchiveTable(db) {
   `);
 }
 
+// 返回实际存储字节的摘要（digest = SHA-256(archive 列字节)）。调用方（窗口 1 发送时刻 /
+// 手动冻结）把它随 archiveId 写进审计，导出时按同一字节口径重算比对——因此摘要
+// 不写进档案 JSON（写进去就改变了被摘要的字节）。
 export function storeArchive(db, archive) {
+  const bytes = JSON.stringify(archive);
   db.prepare('INSERT INTO opportunity_archives(id, opportunity, created, archive) VALUES (?,?,?,?)')
-    .run(archive.archiveId, archive.opportunityId, new Date().toISOString(), JSON.stringify(archive));
-  return archive;
+    .run(archive.archiveId, archive.opportunityId, new Date().toISOString(), bytes);
+  return { archive, digest: sha256(bytes) };
+}
+
+// 取档案行：raw 是列的原始字节（完整性校验与导出的字节口径），parsed 是解析后的对象。
+export function loadArchiveRow(db, archiveId) {
+  const row = db.prepare('SELECT id, opportunity, archive FROM opportunity_archives WHERE id=?').get(archiveId);
+  if (!row) return null;
+  let parsed;
+  try { parsed = JSON.parse(row.archive); } catch { parsed = null; }
+  return { id: row.id, opportunity: row.opportunity, raw: row.archive, parsed };
 }
 
 export function loadArchive(db, archiveId) {
-  const row = db.prepare('SELECT archive FROM opportunity_archives WHERE id=?').get(archiveId);
-  try { return row ? JSON.parse(row.archive) : null; } catch { return null; }
+  return loadArchiveRow(db, archiveId)?.parsed ?? null;
+}
+
+// —— 完整性校验：对档案列字节重算 SHA-256，与审计里记录的 digest 比对 ——
+// 记录在 detail 带本档案 archiveId + digest 的审计事件里（approved = 窗口 1 发送时刻写入，
+// archived = 手动冻结写入）；没有记录 → unrecorded（旧档案，界面显示「无完整性记录」）。
+// 有记录时按当前字节重算 actual：一致 → verified，不一致 → mismatch（档案内容与批准记录不一致）。
+export function archiveIntegrity(db, opportunityId, archiveId, storedBytes) {
+  const recorded = db.prepare(`
+    SELECT detail FROM opportunity_log
+    WHERE opportunity=? AND action IN ('approved','archived') AND detail IS NOT NULL
+    ORDER BY time DESC, id DESC
+  `).all(opportunityId)
+    .map(row => { try { return JSON.parse(row.detail); } catch { return null; } })
+    .find(detail => detail?.archiveId === archiveId && typeof detail.digest === 'string');
+  if (!recorded) return { status: 'unrecorded' };
+  const actual = sha256(storedBytes);
+  return { status: actual === recorded.digest ? 'verified' : 'mismatch', digest: recorded.digest, actual };
 }
 
 export function archivesForOpportunity(db, opportunityId) {

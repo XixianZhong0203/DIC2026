@@ -8,7 +8,12 @@
 //   3) 之后再给已发送线索新增一条来源（活动核查随之重跑、活动状态变化）；
 //   4) 导出旧档案：当时的草稿正文与哈希、来源快照全文、逐条声明的担保原句与理由、
 //      核查模型/思考档位/提示版本、来源打开记录、批准依据与批准时间都仍是发送时刻的值；
-//   5) 档案只插入不更新：改动前后的导出字节一致；未被抽中的线索没有档案、也未发送。
+//      导出经 X-Archive-Integrity 头报告完整性（verified）；
+//   5) 档案只插入不更新：改动前后的导出字节一致；未被抽中的线索没有档案、也未发送；
+//   6) 完整性：存档 digest 绑定存储字节——篡改档案体 → mismatch（导出仍 200 留证、
+//      state 同步上报），恢复原字节 → verified；
+//   7) 换用不同模型配置（第二台服务器共享同一数据目录，默认模型 id 换成 mock-model-2）：
+//      新核查记录与新档案记新模型，旧档案的模型信息保持核查时刻的值（不回填）。
 //
 // 模型请求打到本地确定性 mock（真实服务从临时工作目录启动，src/models.mjs 替换为
 // mock 目录以隔离真实端点；被测代码与工作树一致）。
@@ -23,7 +28,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { evidenceHash } from '../src/opportunity/claims.mjs';
+import { evidenceHash, CLAIMS_PROMPT_VERSION } from '../src/opportunity/claims.mjs';
+import { ANALYSIS_PROMPT_VERSION } from '../src/opportunity/opportunities.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = 4241;
@@ -140,9 +146,9 @@ await mock.listen(mockPort, '127.0.0.1');
 const MOCK_MODELS = `// 测试模型目录（send-archive 验收窗口）：单一本地 mock 模型，指向脚本启动的
 // 确定性 mock 服务。替换工作树目录仅用于隔离真实端点；被测代码不受影响。
 const BASE = process.env.OPENAI_BASE_URL ?? 'http://127.0.0.1:0/v1';
-export const MODELS = [{ id: 'mock-model', name: 'Mock Model', base: BASE, keyEnv: 'MOCK_API_KEY', fallbackKey: 'mock', timeout: 15000, efforts: {} }];
+export const MODELS = [{ id: '%ID%', name: 'Mock Model', base: BASE, keyEnv: 'MOCK_API_KEY', fallbackKey: 'mock', timeout: 15000, efforts: {} }];
 export const modelById = id => (typeof id === 'string' && MODELS.find(entry => entry.id === id)) || null;
-export const DEFAULT_MODEL_ID = 'mock-model';
+export const DEFAULT_MODEL_ID = '%ID%';
 export const defaultModel = () => modelById(DEFAULT_MODEL_ID) ?? MODELS[0];
 export const modelKey = entry => {
   const fromEnv = entry.keyEnv ? (process.env[entry.keyEnv] ?? '').trim() : '';
@@ -155,12 +161,13 @@ export const conversationModel = (conv, defaultEntry) => {
   return { entry, effort };
 };
 `;
+const mockModelsFile = id => MOCK_MODELS.replaceAll('%ID%', id);
 const workDir = await mkdtemp(path.join(tmpdir(), 'daymark-send-archive-'));
 await mkdir(path.join(workDir, 'src'), { recursive: true });
 cpSync(path.join(root, 'src'), path.join(workDir, 'src'), { recursive: true });
 copyFileSync(path.join(root, 'server.mjs'), path.join(workDir, 'server.mjs'));
 copyFileSync(path.join(root, 'package.json'), path.join(workDir, 'package.json'));
-writeFileSync(path.join(workDir, 'src', 'models.mjs'), MOCK_MODELS);
+writeFileSync(path.join(workDir, 'src', 'models.mjs'), mockModelsFile('mock-model'));
 const dataDir = path.join(workDir, 'data');
 const server = spawn(process.execPath, ['server.mjs'], {
   cwd: workDir,
@@ -172,14 +179,15 @@ let serverLog = '';
 server.stdout.on('data', chunk => { serverLog += chunk; });
 server.stderr.on('data', chunk => { serverLog += chunk; });
 
-async function api(route, body) {
+const apiFor = origin => async (route, body) => {
   const options = body === undefined ? { method: 'GET' } : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   };
-  const response = await fetch(base + route, options);
+  const response = await fetch(origin + route, options);
   const data = await response.json().catch(() => ({}));
   return { ok: response.ok, status: response.status, data, error: data.error ?? null };
-}
+};
+const api = apiFor(base);
 const state = async () => (await api('/api/state')).data;
 const leadOf = (snapshot, label) => (snapshot.opportunities ?? []).find(item => item.title === label + ' 交付跟进');
 
@@ -298,6 +306,15 @@ const exportAfterText = await exportAfter.text();
 const archive = JSON.parse(exportAfterText);
 record('the stored row is byte-identical after the source change (insert-only)',
   exportAfter.ok && exportBeforeText === exportAfterText ? 'PASS' : 'FAIL');
+record('the export verifies integrity against the recorded digest',
+  exportAfter.headers.get('x-archive-integrity') === 'verified' ? 'PASS' : 'FAIL',
+  'header=' + exportAfter.headers.get('x-archive-integrity'));
+record('the live check record stores the actual config at check time',
+  live?.claims?.model === 'mock-model' && live?.claims?.effort === null &&
+  live?.claims?.prompts?.claims === CLAIMS_PROMPT_VERSION && live?.claims?.prompts?.analysis === ANALYSIS_PROMPT_VERSION ? 'PASS' : 'FAIL',
+  'model=' + live?.claims?.model + ' effort=' + live?.claims?.effort + ' prompts=' + JSON.stringify(live?.claims?.prompts));
+record('the state surfaces the archive integrity',
+  leadOf(st, picked.label)?.archives?.[0]?.integrity?.status === 'verified' ? 'PASS' : 'FAIL');
 record('the approved draft body and hash survive the source change',
   archive.approval.body === picked.draftBody && archive.approval.bodyHash === sha256(picked.draftBody) ? 'PASS' : 'FAIL',
   'recipient=' + archive.approval.recipient);
@@ -316,7 +333,7 @@ record('the claim verdict keeps its supporting quote and justification (担保�
   'status=' + claim.status + ' quote=' + claim.items?.[0]?.quote);
 record('the verification model, thinking level, and prompt versions are recorded',
   archive.verification.model === 'mock-model' && archive.verification.effort === null &&
-  archive.verification.prompts?.claims === 'claims-v1' && archive.verification.prompts?.analysis === 'analysis-v1' ? 'PASS' : 'FAIL',
+  archive.verification.prompts?.claims === CLAIMS_PROMPT_VERSION && archive.verification.prompts?.analysis === ANALYSIS_PROMPT_VERSION ? 'PASS' : 'FAIL',
   'model=' + archive.verification.model + ' prompts=' + JSON.stringify(archive.verification.prompts));
 record('the verification binding points at the old draft + old source set',
   archive.verification.draftId === pickedItem.draft_id &&
@@ -337,6 +354,94 @@ record('the source viewing record is embedded in the archive',
   'viewedNames=' + JSON.stringify(archive.viewing?.viewedNames));
 record('the un-picked lead has no archive and was not sent',
   leadOf(st, other.label)?.archives?.length === 0 && leadOf(st, other.label)?.sent === 0 ? 'PASS' : 'FAIL');
+
+// ---------------------------------------------------------------------------
+// 5) 完整性：篡改档案被检出（mismatch，导出仍 200 留证）；恢复原字节 → verified
+// ---------------------------------------------------------------------------
+console.log('\n5) 篡改档案 → mismatch；恢复原字节 → verified');
+const { DatabaseSync } = await import('node:sqlite');
+const tempDb = new DatabaseSync(path.join(dataDir, 'daymark.sqlite'));
+const tampered = exportBeforeText + '（篡改）';
+tempDb.prepare('UPDATE opportunity_archives SET archive=? WHERE id=?').run(tampered, archiveId);
+const exportTampered = await fetch(base + '/api/opportunity-archive/' + archiveId);
+const exportTamperedText = await exportTampered.text();
+record('tampering the stored archive is detected as a mismatch (still served for forensics)',
+  exportTampered.ok && exportTamperedText === tampered &&
+  exportTampered.headers.get('x-archive-integrity') === 'mismatch' ? 'PASS' : 'FAIL',
+  'header=' + exportTampered.headers.get('x-archive-integrity'));
+st = await state();
+record('the mismatch is surfaced in the state',
+  leadOf(st, picked.label)?.archives?.[0]?.integrity?.status === 'mismatch' ? 'PASS' : 'FAIL');
+tempDb.prepare('UPDATE opportunity_archives SET archive=? WHERE id=?').run(exportBeforeText, archiveId);
+tempDb.close();
+const exportRestored = await fetch(base + '/api/opportunity-archive/' + archiveId);
+record('restoring the original bytes restores the verified status',
+  (await exportRestored.text()) === exportBeforeText &&
+  exportRestored.headers.get('x-archive-integrity') === 'verified' ? 'PASS' : 'FAIL');
+
+// ---------------------------------------------------------------------------
+// 6) 换用不同模型配置（第二台服务器，同库同 mock，默认模型 id 换成 mock-model-2）：
+//    新核查记录与新档案记新模型；旧档案的模型信息保持核查时刻的值。
+// ---------------------------------------------------------------------------
+console.log('\n6) 换用不同模型配置：新档案记新配置，旧档案保持核查时刻的记录');
+server.kill('SIGTERM');
+const port2 = 4243;
+const base2 = 'http://127.0.0.1:' + port2;
+const workDir2 = await mkdtemp(path.join(tmpdir(), 'daymark-send-archive-model2-'));
+await mkdir(path.join(workDir2, 'src'), { recursive: true });
+cpSync(path.join(root, 'src'), path.join(workDir2, 'src'), { recursive: true });
+copyFileSync(path.join(root, 'server.mjs'), path.join(workDir2, 'server.mjs'));
+copyFileSync(path.join(root, 'package.json'), path.join(workDir2, 'package.json'));
+writeFileSync(path.join(workDir2, 'src', 'models.mjs'), mockModelsFile('mock-model-2'));
+// 同一数据目录（共享 DB 与旧档案）、同一 mock 服务：只有默认模型 id 变化——模拟模型配置变更。
+const server2 = spawn(process.execPath, ['server.mjs'], {
+  cwd: workDir2,
+  env: { ...process.env, PORT: String(port2), DAYMARK_DATA_DIR: dataDir,
+    OPENAI_BASE_URL: 'http://127.0.0.1:' + mockPort + '/v1', MOCK_API_KEY: 'mock' },
+  stdio: ['ignore', 'pipe', 'pipe'],
+});
+const api2 = apiFor(base2);
+let up2 = false;
+for (let i = 0; i < 100 && !up2; i++) {
+  try { up2 = (await fetch(base2 + '/api/state')).ok; } catch {
+    if (server2.exitCode != null) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+record('a second server runs with a different default model (mock-model-2)', up2 ? 'PASS' : 'FAIL');
+const otherId = leadIds[other.label];
+// 未抽中的线索：再存一遍同一正文 → 新草稿版本（mock 按正文匹配，重查仍通过）；
+// 新核查记录随新配置落库。
+const redrafted = await api2('/api/opportunity-draft', {
+  id: otherId, recipient: other.label.replace(/[^a-z]/gi, '').toLowerCase() + '@client.test', body: other.draftBody,
+});
+record('a new draft is saved under the changed config', redrafted.ok ? 'PASS' : 'FAIL', redrafted.error ?? '');
+let st2 = (await api2('/api/state')).data;
+const rechecked = await api2('/api/opportunity-claims', {
+  id: otherId, target: 'draft', draft_id: leadOf(st2, other.label)?.draft_id, language: 'zh-CN',
+});
+record('re-verification passes under the new config', rechecked.ok ? 'PASS' : 'FAIL', rechecked.error ?? '');
+st2 = (await api2('/api/state')).data;
+record('the new check record stores the new model config',
+  leadOf(st2, other.label)?.claims?.model === 'mock-model-2' &&
+  leadOf(st2, other.label)?.claims?.effort === null ? 'PASS' : 'FAIL',
+  'model=' + leadOf(st2, other.label)?.claims?.model);
+const frozen2 = await api2('/api/opportunity-archive', { id: otherId });
+const archiveId2 = frozen2.data?.archive;
+record('freezing under the new config stores a new archive', frozen2.ok && Boolean(archiveId2) ? 'PASS' : 'FAIL',
+  String(frozen2.error ?? archiveId2));
+const export2 = await fetch(base2 + '/api/opportunity-archive/' + archiveId2);
+const archive2 = JSON.parse(await export2.text());
+record('the new archive records the new model config',
+  archive2.verification?.model === 'mock-model-2' ? 'PASS' : 'FAIL', 'model=' + archive2.verification?.model);
+const exportOld = await fetch(base2 + '/api/opportunity-archive/' + archiveId);
+const archiveOld = JSON.parse(await exportOld.text());
+record('the old archive keeps the model recorded at its check time',
+  archiveOld.verification?.model === 'mock-model' &&
+  exportOld.headers.get('x-archive-integrity') === 'verified' ? 'PASS' : 'FAIL',
+  'model=' + archiveOld.verification?.model + ' integrity=' + exportOld.headers.get('x-archive-integrity'));
+server2.kill('SIGTERM');
+await rm(workDir2, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
 // 汇总 + 留档

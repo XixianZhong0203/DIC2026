@@ -634,7 +634,13 @@ const english = {
   "高风险句未被覆盖": "Uncovered high-risk clauses",
   "上一版仍有未处理声明": "Unresolved claim from an earlier draft",
   "已复核上一版保留声明": "Reviewed claims carried over from an earlier draft",
-  "风险声明改写后需重新核查": "Recheck the draft after rewriting or removing a flagged claim"
+  "风险声明改写后需重新核查": "Recheck the draft after rewriting or removing a flagged claim",
+  "思考档位": "Thinking tier",
+  "端点默认": "Endpoint default",
+  "完整性": "Integrity",
+  "校验通过": "Verified",
+  "无完整性记录": "No integrity record",
+  "档案内容与批准记录不一致": "Archive content does not match the approval record"
 };
 
 export function translate(language, phrase) {

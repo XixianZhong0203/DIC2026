@@ -1,4 +1,4 @@
-import { loadArchive } from './src/opportunity/archive.mjs';
+import { loadArchiveRow, archiveIntegrity } from './src/opportunity/archive.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
@@ -750,10 +750,13 @@ createServer(async (req, res) => {
     // 发送时刻的自动写入由窗口 1 在同一 schema 上接入。
     const archiveMatch = /^\/api\/opportunity-archive\/([^/]+)$/.exec(route);
     if (req.method === 'GET' && archiveMatch) {
-      const archive = loadArchive(db, archiveMatch[1]);
-      if (!archive) fail(404, '页面不存在。');
-      res.setHeader('Content-Disposition', 'attachment; filename="daymark-send-archive-' + archive.archiveId + '.json"');
-      return res.end(JSON.stringify(archive, null, 2));
+      const row = loadArchiveRow(db, archiveMatch[1]);
+      // 行不存在才 404；字节被改成非法 JSON 时仍原样导出（篡改本身就是证据，导出是留证手段）。
+      if (!row) fail(404, '页面不存在。');
+      const integrity = archiveIntegrity(db, row.opportunity, row.id, row.raw);
+      res.setHeader('X-Archive-Integrity', integrity.status);
+      res.setHeader('Content-Disposition', 'attachment; filename="daymark-send-archive-' + row.id + '.json"');
+      return res.end(row.raw);
     }
     if (req.method === 'GET' && route === '/api/state') return res.end(JSON.stringify(state()));
     if (req.method !== 'POST' || !Object.hasOwn(mutations, route)) fail(404, '页面不存在。');

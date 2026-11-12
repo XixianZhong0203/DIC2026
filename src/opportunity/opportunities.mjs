@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaimReport, verifyClaims, draftChecks,
   evidenceHash, sha256, CLAIMS_PROMPT_VERSION } from './claims.mjs';
 import { evidenceAnswer } from '../evidence/answer.mjs';
-import { buildSendArchive, createArchiveTable, storeArchive } from './archive.mjs';
+import { buildSendArchive, createArchiveTable, storeArchive, archiveIntegrity } from './archive.mjs';
 
 // 代码归属（窗口对齐）：人工复核来源记录窗口负责 review_viewed 列、/api/opportunity-review-view、
 // reviewSourceIndex/currentViewed、human_reviewed 审计中的 viewed/viewedNames 与 state().reviewViewed。
@@ -327,7 +327,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     const draftChecksResult = target === 'draft'
       ? draftChecks(item.body ?? '', claims.map(claim => claim.text))
       : null;
-    const review = { ...binding, model, promptVersion: CLAIMS_PROMPT_VERSION, effort: null, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
+    const review = { ...binding, model, effort: null, prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION }, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
     transaction(() => {
       const current = get(id);
       const currentSources = sourcesFor(id);
@@ -366,13 +366,18 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     }
     // 发送档案：每条机会的不可变快照（新→旧）。界面从档案展示三档来源与批准上下文；
     // 活动来源被修改后，这里仍是发送时刻的原文。
-    const archiveRows = db.prepare('SELECT opportunity, archive FROM opportunity_archives ORDER BY created DESC, rowid DESC').all();
+    const archiveRows = db.prepare('SELECT id, opportunity, archive FROM opportunity_archives ORDER BY created DESC, rowid DESC').all();
     const archivesByOpportunity = new Map();
     for (const row of archiveRows) {
+      // 完整性：对存储字节重算 SHA-256 与审计记录的 digest 比对（列的原始字节在手，无需另查）。
+      // 字节被改成非法 JSON（篡改）时不跳过整行：archiveId 就是表主键，无需解析也能定位审计记录。
+      const integrity = archiveIntegrity(db, row.opportunity, row.id, row.archive);
+      if (!archivesByOpportunity.has(row.opportunity)) archivesByOpportunity.set(row.opportunity, []);
       try {
-        if (!archivesByOpportunity.has(row.opportunity)) archivesByOpportunity.set(row.opportunity, []);
-        archivesByOpportunity.get(row.opportunity).push(JSON.parse(row.archive));
-      } catch {}
+        archivesByOpportunity.get(row.opportunity).push({ ...JSON.parse(row.archive), archiveId: row.id, integrity });
+      } catch {
+        archivesByOpportunity.get(row.opportunity).push({ archiveId: row.id, integrity });
+      }
     }
     const opportunities = db.prepare('SELECT * FROM opportunities ORDER BY rowid DESC').all()
       .map(item => {
@@ -757,11 +762,10 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
               reviewedCoverage: uncovered };
             const archive = buildSendArchive({ opportunity: item, sourceRows, claims: review, analysis,
               answer: safeParse(item.answer), reviewViewed: currentViewed(item, sourceRows), viewingTrail: viewingTrail(id),
-              model: review?.model ?? null, effort: review?.effort ?? null,
-              prompts: { claims: review?.promptVersion, analysis: analysis?.promptVersion }, approval });
-            storeArchive(db, archive);
+              approval });
+            const { digest } = storeArchive(db, archive);
             audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: approval.mode,
-              evidence: basis, archiveId: archive.archiveId,
+              evidence: basis, archiveId: archive.archiveId, digest,
               ...(guaranteedClaims.length ? { guaranteedClaims } : {}) }, sentAt);
             audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
           }
@@ -817,13 +821,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const archive = buildSendArchive({
           opportunity: item, sourceRows, claims, analysis, answer,
           reviewViewed: viewed, viewingTrail: viewingTrail(id),
-          model, effort: null,
-          prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION },
           approval,
         });
         transaction(() => {
-          storeArchive(db, archive);
-          audit(id, 'archived', { archiveId: archive.archiveId, basis: approval.basis, sent: approval.sent });
+          const { digest } = storeArchive(db, archive);
+          audit(id, 'archived', { archiveId: archive.archiveId, digest, basis: approval.basis, sent: approval.sent });
         });
         return { ...state(), archive: archive.archiveId };
       },
