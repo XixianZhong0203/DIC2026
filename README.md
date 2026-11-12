@@ -1,6 +1,12 @@
 # Daymark · DIC 2026
 
-Daymark is a local AI workspace for a one-person company (OPC). The founder makes business decisions and is often the only person reviewing what the assistant says or does. Daymark brings source evidence, open questions, and approval controls into that review.
+Daymark is a local AI workspace for a one-person company (OPC), where the founder often makes decisions and reviews the assistant’s work alone.
+
+## At a glance
+
+- **Design.** Daymark shows the evidence behind a proposed action. The server checks the saved draft and its evidence version before simulating a send. Each flagged claim in a current, completed check needs individual resolution before the founder approves the draft.
+- **Evidence so far.** On six synthetic drafts, two configurations of Qwen 3.8 27B extracted all **6/6** seeded problem claims. Neither marked any of the six as supported. They incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Both configurations belong to the same model family.
+- **What remains to measure.** The draft check still needs an independently authored holdout, including Chinese drafts. Current-model abstention, agreement under pressure, and whether claim-by-claim review helps founders catch more errors also remain unmeasured.
 
 ## 1. How can the founder audit the assistant's reasoning and actions?
 
@@ -26,7 +32,7 @@ Daymark selects up to 12 positively scored records. If the model identifies miss
 - **Start with the right workspace.** A chat retrieves its project's active memories and global records. A workspace change can start a fresh conversation with the current input. The app distinguishes continuing, starting a new task, switching, and comparing workspaces. Cross-workspace merges and moves of populated chats are blocked. The founder can explicitly import selected records with their original workspace and source noted. [Intent classification](src/chat/chat-intent.mjs) · [Workspace routes](server.mjs)
 - **Keep decisions and proposals distinct.** Extract memory candidates from chat, inspect their source and scope, and confirm what to save. When a new instruction overlaps an existing preference, the decision card can offer a one-time exception, a scoped addition, or a replacement. An external request to reschedule remains a proposal. The existing arrangement stays visible until the founder decides. [Memory management](src/memory/memory-impact.mjs)
 - **Recheck at confirmation.** A decision card can display the current arrangement, a proposed change, source records, and calendar options. Confirmation checks the relevant calendar or memory again. A changed situation pauses the write and can refresh the choices. The confirmation handler serializes requests for the same card and can recover a missing receipt from a committed task audit or memory record. A local calendar change records the founder's action and leaves customer acceptance as a separate fact. [Decision cards and rechecks](src/decision/decision.mjs) · [Confirmation and receipt recovery](src/decision/confirm.mjs)
-- **Say what remains unknown.** In chat, Daymark can name an evidence gap, search saved records, or propose a clarifying question. The lead's **Current answer** distinguishes insufficient evidence, conflicting sources, failed verification, and a supported conclusion with limits. For example, “The customer expressed intent to sign. Whether the contract was signed remains unconfirmed.” Claims verified only by a founder statement or an unconfirmed source are listed as pending-verification items alongside the confirmed part, and re-identifying the initial source re-runs the lead and draft verifications so the answer stays current. The card lists founder-only and unconfirmed claims as pending even when other claims are supported. It can open sources, focus the source entry form, or fill a clarification draft. Adding a source or correcting its identity refreshes the lead answer and reruns any existing draft check. [Lead answer](src/evidence/answer.mjs)
+- **Say what remains unknown.** In chat, Daymark can name an evidence gap, search saved records, or propose a clarifying question. The lead's **Current answer** distinguishes insufficient evidence, conflicting sources, failed verification, and a supported conclusion with limits. For example, “The customer expressed intent to sign. Whether the contract was signed remains unconfirmed.” The card lists founder-only claims and claims from unconfirmed sources as pending, even when other claims are supported. It can open sources, focus the source entry form, or fill a clarification draft. Adding a source or correcting its identity refreshes the lead answer and reruns any existing draft check. [Lead answer](src/evidence/answer.mjs)
 
 ## 3. How can the founder catch unsupported agreement before relying on an answer?
 
@@ -37,7 +43,7 @@ Daymark selects up to 12 positively scored records. If the model identifies miss
 
 ### Version checks
 
-Automatic draft verification binds the draft ID, recipient, body hash, and evidence hash. Human review binds the draft ID and the evidence hash. Source-viewing records use the same version boundary. SHA-256 fingerprints capture changes to the draft body or the evidence set, including the recorded identity of the initial source. Re-identifying the initial source re-runs the stored lead and draft verifications, so the current answer, the draft send gate, and any bound human review or viewing record all move to the new version at once.
+Automatic draft verification binds the draft ID, recipient, body hash, and evidence hash. Human review binds the draft ID and the evidence hash. Source-viewing records use the same version boundary. SHA-256 fingerprints capture changes to the draft body or the evidence set, including the recorded identity of the initial source. Re-identifying the initial source refreshes the lead answer and any existing draft check. Previous human reviews and source-viewing records remain in the audit history under their original evidence version.
 
 ```
 current human review = recorded conclusion
@@ -49,15 +55,15 @@ Automatic approval eligibility requires a current, completed check, at least one
 
 ## Agentic misalignment and verification
 
-The [Anthropic agentic misalignment study](https://www.anthropic.com/research/agentic-misalignment) tested models that could act under replacement or goal conflict. In Daymark, model output can propose a judgment or action. The server handles approval and the local simulated effect. A chat message or an instruction embedded in a source cannot supply approval. This limits what an unsafe model proposal can execute. A founder can still rely on a misleading answer, and the model can miss a claim or misread evidence. Claim-level checks currently cover lead analysis and outreach drafts.
+The [Anthropic agentic misalignment study](https://www.anthropic.com/research/agentic-misalignment) tested models that could act under replacement or goal conflict. In Daymark, model output can propose a judgment or action. The server handles approval and the local simulated effect. A chat message or an instruction embedded in a source cannot supply approval. This limits what an unsafe model proposal can execute. A founder can still rely on a misleading answer. The model can miss a claim, misread evidence, or cite a fragment that omits a nearby qualification or negation. Claim-level checks currently cover lead analysis and outreach drafts.
 
 | Check | Result and scope |
 | --- | --- |
 | Seeded draft errors | Six synthetic drafts with 15 annotated claims on baseline `55927f2`. Both Qwen 3.8 27B FP8 configurations extracted **6/6** problem claims and marked **0/6** supported. The standard and reasoning configurations assigned the expected label to **5/6** and **4/6**, and incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Each parsed **6/6** drafts. These are two configurations of one model family on a small sample. |
 | Historical pressure baseline | Earlier Qwen 2.5 3B runs over-abstained on **6/16** eligible supported turns. The model agreed without support in **5 of 6** pressure turns overall, with one unparseable turn. These runs preceded the current draft checks. |
-| Product verification | **176 unit tests** and the scripted lead-answer and customer-delivery checks exercise application behavior. The scripted checks use deterministic model responses. |
+| Product verification | **176 unit tests**, **31 lead-answer checks**, and **67 customer-delivery checks** passed on the integrated release. The two scripted suites use deterministic model responses to exercise application behavior. |
 
-Remaining tests include asking the assistant to bypass review, measuring fabrication under pressure to close a deal, and checking whether sensitive customer records can enter another customer's draft through global retrieval. Workspace isolation and explicit import are already covered by scripted checks. The wider behavior with real models still needs measurement.
+Pending checks include attempts to bypass approval through chat, source text, or cross-site requests, and concurrent edits or repeat approvals. Model evaluations still need to measure whether goal pressure leads to fabricated claims, whether the interface makes flagged claims visible before approval, and whether a customer’s sensitive records can enter another customer’s draft through global retrieval. Scripted checks already cover workspace isolation and explicit import.
 
 ## Product features
 
