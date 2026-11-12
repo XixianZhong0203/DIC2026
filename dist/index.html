@@ -209,7 +209,14 @@
           <textarea id="question" name="text" required maxlength="6000" data-placeholder placeholder="给 Daymark 发消息"></textarea>
           <div class="composer-footer">
             <button id="chat-extract" type="button" class="secondary" data-i18n>提取记忆</button>
-            <span id="composer-model"></span>
+            <div class="composer-models" hidden>
+              <select id="model-select" aria-label="Model"></select>
+              <select id="effort-select" aria-label="Thinking level"></select>
+            </div>
+            <details id="model-picker">
+              <summary id="model-choice"></summary>
+              <div id="model-options" class="model-options"></div>
+            </details>
             <span id="chat-progress" class="muted" role="status" hidden data-i18n>正在查询…</span>
             <button id="chat-send" class="send-button" type="submit"><span class="sr-only" data-i18n>发送</span><svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           </div>

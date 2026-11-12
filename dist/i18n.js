@@ -589,12 +589,19 @@ const english = {
   "本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。请在下方记录人工复核结论。": "No claims were extracted; the verification scope is empty and does not count as passing. Record a manual review conclusion below.",
   "批准发送将记录由创始人担保的声明": "Approving the send records which claims the founder stands behind",
   "请先核查关键声明，或针对当前草稿记录人工复核结论，再批准发送。": "Verify the key claims or record a manual review for this draft before approving the send.",
-  "逐条改写、删除或记录担保后，再批准发送。": "Rewrite, delete, or stand behind each flagged claim before approving the send."
+  "逐条改写、删除或记录担保后，再批准发送。": "Rewrite, delete, or stand behind each flagged claim before approving the send.",
+  "模型默认": "Model default",
+  "低": "Low",
+  "中": "Medium",
+  "高": "High",
+  "思考": "Thinking"
 };
 
 export function translate(language, phrase) {
   if (language !== 'en') return phrase;
-  const status = /^模型服务返回 HTTP (\d+)。请检查模型、凭证和账户配置。$/.exec(phrase);
-  if (status) return english['模型服务返回 HTTP {status}。请检查模型、凭证和账户配置。'].replace('{status}', status[1]);
+  // 模型服务错误可能带上游说明（如免费池额度用尽）：翻译固定前缀，原文附上。
+  const status = /^模型服务返回 HTTP (\d+)。请检查模型、凭证和账户配置。(?: 上游：(.+))?$/s.exec(phrase);
+  if (status) return english['模型服务返回 HTTP {status}。请检查模型、凭证和账户配置。'].replace('{status}', status[1]) +
+    (status[2] ? ' Upstream: ' + status[2] : '');
   return Object.hasOwn(english, phrase) ? english[phrase] : phrase;
 }

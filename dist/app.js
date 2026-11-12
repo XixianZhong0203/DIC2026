@@ -80,7 +80,8 @@ function activeChatProject() {
 
 // Create a fresh conversation in a project (new chats inherit it) and open it.
 async function newChatIn(project) {
-  const data = await fetchResult('conversation', { project });
+  // 新会话带上 composer 当前选定的模型与思考档位。
+  const data = await fetchResult('conversation', { project, model: get('model-select').value, effort: get('effort-select').value });
   current = { ...data, tasks: data.tasks ?? [] };
   if (data.conversation != null) {
     activeChat = data.conversation;
@@ -314,7 +315,10 @@ function openSources(review) {
         (status === 'failed' ? ' · ' + t('模型分析失败') : '')));
     }
     trace.append(element('p', t('核对原文片段') + ' · ' + review.trace.matchedQuotes));
-    if (review.trace.attemptedModel) trace.append(element('p', t('调用模型') + ' · ' + review.trace.attemptedModel));
+    if (review.trace.attemptedModel) {
+      const effortLabel = review.trace.modelEffort && EFFORT_LABELS[review.trace.modelEffort] ? t(EFFORT_LABELS[review.trace.modelEffort]) : '';
+      trace.append(element('p', t('调用模型') + ' · ' + review.trace.attemptedModel + (effortLabel ? ' · ' + t('思考') + ' ' + effortLabel : '')));
+    }
     for (const record of review.trace.retrieved) {
       trace.append(element('p', '#' + record.id + ' · ' + (record.scope || t('未分组')) + ' · ' + record.source + ' · ' + record.kind));
     }
@@ -330,6 +334,111 @@ function clearRevision() {
   get('revision').hidden = get('revision-original').hidden = get('cancel').hidden = true;
 }
 
+// 多模型选择（multi-model 窗口）：composer 里两个下拉框决定本会话用哪个模型、
+// 哪个思考档位。选择立即写入服务端会话记录（/api/conversation-model）；还没有
+// 会话记录时先缓存在 localStorage，随新会话一起提交。
+const EFFORT_LABELS = { low: '低', medium: '中', high: '高' };
+let savedModel = localStorage.getItem('daymark-model') ?? '';
+let savedEffort = localStorage.getItem('daymark-effort') ?? '';
+
+function renderModelPicker() {
+  const models = current?.models ?? [];
+  if (!models.length) return;
+  const conv = (current.conversations ?? []).find(item => item.id === activeChat);
+  const modelSelect = get('model-select');
+  modelSelect.replaceChildren(...[...models].sort((a, b) => Number(b.requiredEffort) - Number(a.requiredEffort)).map(entry => {
+    const option = document.createElement('option');
+    option.value = entry.id;
+    option.textContent = entry.name;
+    return option;
+  }));
+  const wantedModel = conv?.model || savedModel || current.model;
+  modelSelect.value = models.some(entry => entry.id === wantedModel) ? wantedModel : models[0].id;
+  const effortSelect = get('effort-select');
+  const levels = (models.find(entry => entry.id === modelSelect.value)?.efforts ?? []).filter(level => EFFORT_LABELS[level]);
+  const entry = models.find(item => item.id === modelSelect.value);
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = t('模型默认');
+  effortSelect.replaceChildren(...(entry.requiredEffort ? [] : [none]));
+  for (const level of levels) {
+    const option = document.createElement('option');
+    option.value = level;
+    option.textContent = t(EFFORT_LABELS[level]);
+    effortSelect.append(option);
+  }
+  effortSelect.disabled = levels.length === 0;
+  const wantedEffort = conv?.model ? conv.effort ?? '' : savedEffort;
+  effortSelect.value = levels.includes(wantedEffort) ? wantedEffort : entry.requiredEffort ? levels[0] : '';
+  const panel = get('model-options');
+  const effortLabel = option => ({ low: language === 'en' ? 'Low' : '轻度', medium: language === 'en' ? 'Medium' : '中度' }[option.value] ?? option.textContent);
+  get('model-choice').textContent = modelSelect.selectedOptions[0].textContent +
+    (effortSelect.value ? ' · ' + effortLabel(effortSelect.selectedOptions[0]) : '');
+  panel.replaceChildren();
+  function group(title, select, label, choose) {
+    const fieldset = element('fieldset');
+    fieldset.append(element('legend', title));
+    for (const option of select.options) {
+      const row = element('button', label(option), 'model-option');
+      row.type = 'button';
+      row.setAttribute('aria-label', label(option));
+      row.setAttribute('aria-pressed', String(option.selected));
+      if (option.selected) row.append(element('span', '✓'));
+      row.addEventListener('click', async () => {
+        if (chatBusy || modelSaving) return;
+        choose(option.value);
+        await applyModelChoice();
+        get('model-choice').focus();
+      });
+      fieldset.append(row);
+    }
+    panel.append(fieldset);
+  }
+  group(language === 'en' ? 'Model' : '模型', modelSelect, option => option.textContent, value => {
+    modelSelect.value = value;
+    const next = models.find(item => item.id === value);
+    if (!next.efforts.includes(effortSelect.value)) effortSelect.value = '';
+    if (next.requiredEffort && !effortSelect.value) {
+      if (![...effortSelect.options].some(option => option.value === 'low')) effortSelect.add(new Option('Low', 'low'));
+      effortSelect.value = 'low';
+    }
+  });
+  group(language === 'en' ? 'Thinking effort' : '思考强度', effortSelect, effortLabel, value => {
+    effortSelect.value = value;
+  });
+}
+
+let modelSaving = false;
+async function applyModelChoice() {
+  const model = get('model-select').value;
+  const effort = get('effort-select').value;
+  modelSaving = true;
+  get('chat-send').disabled = true;
+  try {
+    if (activeChat != null) {
+      const data = await fetchResult('conversation-model', { id: activeChat, model, effort });
+      current = { ...data, tasks: data.tasks ?? [] };
+    }
+    savedModel = model;
+    savedEffort = effort;
+    localStorage.setItem('daymark-model', model);
+    localStorage.setItem('daymark-effort', effort);
+  } catch (error) {
+    showNotice(error.message);
+  } finally {
+    modelSaving = false;
+    render();
+  }
+}
+get('model-picker').addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  get('model-picker').open = false;
+  get('model-choice').focus();
+});
+document.addEventListener('click', event => {
+  if (!get('model-picker').contains(event.target)) get('model-picker').open = false;
+});
+
 function render() {
   renderPlanner();
   renderOpportunities(current);
@@ -341,7 +450,7 @@ function render() {
   get('connection').textContent = t(live ? '模型已连接' : '模型未连接');
   get('connection').classList.toggle('live', live);
   get('chat-send').disabled = chatBusy || !live || !get('question').value.trim();
-  get('composer-model').textContent = live ? 'Daymark' + (current.model ? ' · ' + current.model : '') : '';
+  renderModelPicker();
   get('scroll-bottom').setAttribute('aria-label', t('回到底部'));
   layoutComposer(messages.length > 0);
   renderChatHistory();
@@ -817,8 +926,12 @@ async function sendChat(text, target) {
   try {
     const body = { text, language,
       temporary: oneTurnNote && text.startsWith(t('仅本次使用：')) };
-    if (target?.project != null) body.project = target.project;
-    else body.conversation_id = activeChat;
+    if (target?.project != null) {
+      body.project = target.project;
+      // 新建会话时初始化模型与思考档位（来自 composer 选择器）。
+      body.model = get('model-select').value || undefined;
+      body.effort = get('effort-select').value || undefined;
+    } else body.conversation_id = activeChat;
     await request('chat', body);
     if (current.conversation != null) {
       activeChat = current.conversation;
@@ -838,6 +951,7 @@ async function sendChat(text, target) {
 // fails, the original input goes through as a normal message and the manual
 // switch entry stays available.
 formAction('chat', async data => {
+  if (modelSaving) return;
   const text = data.text;
   if (heldSwitch) {
     // Enter while the card is open: send directly in the current conversation.
