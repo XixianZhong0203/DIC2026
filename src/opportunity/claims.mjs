@@ -8,6 +8,9 @@ import { createHash } from 'node:crypto';
 // （记录在 revises 中明确指明被修订的更早来源）时，才更新当前结论；
 // 仅日期较新、存在无日期记录、最新日期相同无法排序、或修订无法对应到声明内更早记录时，
 // 保留来源冲突并返回双方原文。
+// 提示版本（send-archive 窗口）：声明核查提示（claimMessages）的稳定标识。
+// 提示文案变化时应更新版本号；发送档案记录当时所用版本，用于还原「当时基于什么提示判定」。
+export const CLAIMS_PROMPT_VERSION = 'claims-v1';
 export const ANALYSIS_DIMENSIONS = ['购买意向', '签约状态'];
 export const DRAFT_DIMENSIONS = ['客户意向', '签约状态', '公司业绩', '对外承诺'];
 export const STANCES = ['supports', 'refutes', 'withdraws', 'neutral'];
@@ -94,19 +97,37 @@ export function claimMessages({ mode, request, assessment, draft, dimensions, so
 }
 
 // 解析模型输出，返回每条声明的原始字段。结构不合法时抛错由调用方记为未完成核查。
-export function parseClaims(raw, { mode, expectIds }) {
+export function parseClaims(raw, options) {
+  return parseClaimReport(raw, options).claims;
+}
+
+// 解析模型输出，返回 { claims, warnings }。
+// 重复声明 ID 保留第一条、忽略其后重复并记入 warnings：重复抽取是模型错误，
+// 但第一条已经覆盖该声明，核查照常进行；warning 供界面作为待处理项显示。
+export function parseClaimReport(raw, { mode, expectIds }) {
   let parsed;
   try { parsed = JSON.parse(jsonText(raw)); } catch { throw { reason: 'parse_failed', message: '结构无效' }; }
   if (!Array.isArray(parsed?.claims)) throw { reason: 'parse_failed', message: '结构无效' };
-  const claims = parsed.claims.map(claim => ({
-    id: String(claim?.id ?? '').slice(0, 200),
-    dimension: String(claim?.dimension ?? '').slice(0, 200),
-    text: String(claim?.text ?? '').slice(0, 2000),
-    status: String(claim?.status ?? '').slice(0, 40),
-    items: claim?.items,
-    missing: String(claim?.missing ?? '').slice(0, 2000),
-    rewrite: String(claim?.rewrite ?? '').slice(0, 4000),
-  }));
+  const warnings = [];
+  const claims = [];
+  const seen = new Set();
+  for (const claim of parsed.claims) {
+    const id = String(claim?.id ?? '').slice(0, 200);
+    if (seen.has(id)) {
+      warnings.push({ reason: 'duplicate_claim_id', id });
+      continue;
+    }
+    seen.add(id);
+    claims.push({
+      id,
+      dimension: String(claim?.dimension ?? '').slice(0, 200),
+      text: String(claim?.text ?? '').slice(0, 2000),
+      status: String(claim?.status ?? '').slice(0, 40),
+      items: claim?.items,
+      missing: String(claim?.missing ?? '').slice(0, 2000),
+      rewrite: String(claim?.rewrite ?? '').slice(0, 4000),
+    });
+  }
   if (mode === 'analysis' && expectIds?.length) {
     for (const id of expectIds) {
       if (!claims.some(claim => claim.id === id)) {
@@ -114,7 +135,7 @@ export function parseClaims(raw, { mode, expectIds }) {
       }
     }
   }
-  return claims;
+  return { claims, warnings };
 }
 
 function normalizeItems(claimItems, byId) {
@@ -160,8 +181,25 @@ function decisiveSupersession(items, supports, opposes) {
   return leader;
 }
 
+// 判断正文中某次出现之前的前缀是否紧跟否定词：所有出现都被否定时，
+// 说明声明原文是从否定句里截出来的片段（正文「不会承诺下周交付」只抽出「承诺下周交付」），
+// 原文已不携带声明所述含义，不能按正向声明核查。
+const ZH_NEG_1 = '不没无未非别莫';
+const ZH_NEG_2 = ['不会', '不能', '没有', '无法', '不愿', '不敢', '不可', '不要', '不想', '不肯', '绝不', '从不', '不再', '未必', '并非', '切勿', '莫要'];
+const ZH_NEG_3 = ['不可能', '不愿意', '不打算'];
+const EN_NEGATION = /(?:^|\s)(?:not|no|never|without|won't|don't|doesn't|didn't|can't|cannot|couldn't|wouldn't|shouldn't|isn't|aren't|wasn't|weren't|hasn't|haven't|hadn't|refuse[sd]?\s+to|failed?\s+to|fails?\s+to)\s*$/i;
+export function isNegatedPrefix(prefix) {
+  if (!prefix) return false;
+  const tail = prefix.slice(-4);
+  if (ZH_NEG_1.includes([...tail].at(-1) ?? '')) return true;
+  if (ZH_NEG_2.some(word => tail.endsWith(word))) return true;
+  if (ZH_NEG_3.some(word => tail.endsWith(word))) return true;
+  return EN_NEGATION.test(prefix.slice(-40));
+}
+
 // 程序校验 + 时间/范围判定：引文未找到、字段相互矛盾时判未完成核查。
-// options.body（草稿核查）额外要求声明原文逐字出现在正文中，否则改写无法定位，同样判未完成核查。
+// options.body（草稿核查）额外要求声明原文逐字出现在正文中，否则改写无法定位，同样判未完成核查；
+// 正文存在而声明原文为空（empty_claim_text）、或声明从否定句中截断（truncated_negation）同样判未完成核查。
 export function resolveClaim(claim, sources, options = {}) {
   const byId = new Map(sources.map(source => [source.id, source]));
   const items = normalizeItems(claim?.items, byId);
@@ -169,15 +207,27 @@ export function resolveClaim(claim, sources, options = {}) {
   const failedChecks = invalid.flatMap(item => item.reasons.map(reason => ({ reason })));
   const body = typeof options.body === 'string' ? options.body : null;
   const text = String(claim?.text ?? '').trim();
-  const inBody = body == null || !text || body.includes(text);
-  if (!inBody) failedChecks.push({ reason: 'claim_not_in_draft' });
+  const inBody = body == null || (text !== '' && body.includes(text));
+  if (body != null && text === '') failedChecks.push({ reason: 'empty_claim_text' });
+  else if (!inBody) failedChecks.push({ reason: 'claim_not_in_draft' });
+  let truncatedNegation = false;
+  if (body != null && inBody) {
+    let negatedOnly = true;
+    let at = body.indexOf(text);
+    while (at !== -1) {
+      if (!isNegatedPrefix(body.slice(0, at))) negatedOnly = false;
+      at = body.indexOf(text, at + text.length);
+    }
+    truncatedNegation = negatedOnly;
+  }
+  if (truncatedNegation) failedChecks.push({ reason: 'truncated_negation' });
   const valid = items.filter(item => item.valid);
   const missing = String(claim?.missing ?? '').trim();
   const rewrite = String(claim?.rewrite ?? '').trim();
   const base = { id: claim?.id ?? '', dimension: claim?.dimension ?? '', text: String(claim?.text ?? ''),
     rawStatus: STATUSES.includes(claim?.status) ? claim.status : null, items, missing, rewrite,
     conflict: null, withdrawn: false, failedChecks };
-  if (invalid.length || !inBody) return { ...base, status: 'incomplete' };
+  if (invalid.length || !inBody || truncatedNegation) return { ...base, status: 'incomplete' };
   // neutral（相关但不定论，如客户对"已完成"事实只表达意愿）既不算支持也不算反驳：
   // 一条未定论的客户引文不能改变证据状态。
   const supports = valid.filter(item => item.stance === 'supports');
@@ -214,4 +264,51 @@ export function resolveClaim(claim, sources, options = {}) {
 
 export function verifyClaims(claims, sources, options = {}) {
   return claims.map(claim => resolveClaim(claim, sources, options));
+}
+
+// —— 草稿确定性检查（独立于模型输出，可复现）：核查完成后仍可能留下的两类待处理项 ——
+// 1. 占位符：正文里仍留有 [待确认：…] 一类方括号占位符（含 待核实/待定/TBD/to be confirmed）——
+//    未确认内容必须在发送前落实。全角（待确认）是模型建议改写的约定写法（标记「待确认」），
+//    不属于占位符，不在扫描范围。
+// 2. 未被抽取的高风险句：正文按句/子句拆分，子句命中高风险模式（已完成事实／对外承诺／数字）
+//    却不被任何已抽取声明原文覆盖 → 模型可能漏抽了这一句（如一句里有两项承诺只抽到一项）。
+const PLACEHOLDER = /\[(?:待确认|待核实|待定|TBD|to be confirmed|to be verified)[^\[\]]*\]/gi;
+const ZH_HIGH_RISK = [
+  /已(?:经)?(?:签署|签订|签约|签好|交付|付款|支付|到账|回款|完成|上线|验收|启动|开通|部署|投产)/,
+  /(?:承诺|保证|确保|担保)[^\n。]{0,24}?(?:完成|交付|上线|付款|签约|启动|验收|部署|开通|发出|回复|安排|做到|达成|实现)/,
+  /(?:今天|明天|后天|下周|下月|本月|月底|周[一二三四五六日天]|(?:\d+|两|几|数)\s*个?\s*(?:工作日|日|天|周|星期|月|季度|小时))\s*(?:前|内|之前|之内)?\s*(?:完成|交付|上线|付款|签约|启动|验收|部署|开通)/,
+  /(?:\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|个|名|家|份|天|日|周|小时|美元|人民币)|翻(?:倍|番))/,
+];
+const EN_HIGH_RISK = [
+  /\b(?:signed|delivered|paid|completed|shipped|launched|deployed|collected|received)\b/i,
+  /\b(?:has|have|had|was|were|being)\s+(?:been\s+)?(?:signed|delivered|paid|completed|made|launched|deployed|collected|received)\b/i,
+  /\b(?:commit(?:s|ted|ting)?|guarantee[sd]?|ensur(?:e|es|ed)|promis(?:e|es|ed)|pledge[sd]?)\b/i,
+  /\b(?:by|within|before|until)\s+(?:\d+\s*(?:days?|hours?|weeks?|business days?|working days?|months?|quarters?|years?)|(?:one|two|three|four|five|six|seven|eight|nine|ten|a few)\s*(?:days?|hours?|weeks?)|\w+days?|the\s+\w+|next\s+\w+|tomorrow|tonight|end of (?:the\s+)?\w+)/i,
+  /\b(?:\d+(?:\.\d+)?\s*(?:%|percent|billion|million|times|days?|hours?|weeks?|USD|EUR|CNY|RMB|dollars?|euros?|yen)|doubled|tripled|increased by|grew by|growth of)\b/i,
+];
+const isHighRisk = clause => ZH_HIGH_RISK.some(re => re.test(clause))
+  || EN_HIGH_RISK.some(re => re.test(clause));
+// 按中文逗号/顿号、英文逗号和连接词（and/as well as/also）拆子句，去掉开头连接词与结尾标点。
+function clauseParts(sentence) {
+  return sentence.split(/，|、|；|;|\s+and\s+|\s+as well as\s+|,\s+|\s+also\s+/i)
+    .map(part => part
+      .replace(/^[，、；;,\s]+/, '')
+      .replace(/^(?:并且|而且|同时|此外|另外|然后|接着|还|又|并)\s*/, '')
+      .replace(/^(?:and also|as well as|in addition|additionally|plus|then|also|and)\s+/i, '')
+      .replace(/[。！？.!?…]+\s*$/, '')
+      .trim());
+}
+export function draftChecks(body, claimTexts) {
+  const text = typeof body === 'string' ? body : '';
+  const texts = [...new Set((claimTexts ?? []).map(value => String(value ?? '').trim()).filter(value => value.length >= 2))];
+  const placeholders = [...new Set([...text.matchAll(PLACEHOLDER)].map(match => match[0]))];
+  const unextracted = [];
+  for (const sentence of text.split(/(?<=[。！？!?；;…\n])/)) {
+    for (const clause of clauseParts(sentence)) {
+      if (clause.length < 2 || !isHighRisk(clause)) continue;
+      if (texts.some(claim => clause.includes(claim) || claim.includes(clause))) continue;
+      unextracted.push(clause);
+    }
+  }
+  return { placeholders, unextracted: [...new Set(unextracted)] };
 }

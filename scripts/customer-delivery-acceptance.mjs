@@ -32,8 +32,9 @@ import { createOpportunityUI } from '../dist/opportunity-ui.js';
 import { translate } from '../dist/i18n.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const port = 4203;
-const mockPort = 4204;
+const reserve = createServer();
+await new Promise((resolve, reject) => reserve.once('error', reject).listen(0, '127.0.0.1', resolve));
+const port = reserve.address().port;
 const cdpPort = 4399;
 const base = 'http://127.0.0.1:' + port;
 const A = '客户 A';
@@ -98,7 +99,9 @@ const mock = createServer((req, res) => {
     res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(canned) } }] }));
   });
 });
-await mock.listen(mockPort, '127.0.0.1');
+await new Promise((resolve, reject) => mock.once('error', reject).listen(0, '127.0.0.1', resolve));
+const mockPort = mock.address().port;
+await new Promise(resolve => reserve.close(resolve));
 
 // ---------------------------------------------------------------------------
 // 启动真实服务
@@ -132,10 +135,10 @@ function cleanup(code) {
 
 let up = false;
 for (let i = 0; i < 100 && !up; i++) {
-  try { up = (await fetch(base + '/api/state')).ok; } catch {
+  try { up = serverLog.includes('Daymark · ' + base) && (await fetch(base + '/api/state')).ok; } catch {
     if (server.exitCode != null) break;
-    await new Promise(resolve => setTimeout(resolve, 100));
   }
+  if (!up) await new Promise(resolve => setTimeout(resolve, 100));
 }
 if (!up) {
   console.log('FAIL  server did not start\n' + serverLog);

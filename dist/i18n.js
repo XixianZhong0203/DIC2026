@@ -595,7 +595,43 @@ const english = {
   "低": "Low",
   "中": "Medium",
   "高": "High",
-  "思考": "Thinking"
+  "思考": "Thinking",
+  // 声明核查待处理项（claim-verification 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "仍有待处理项": "Pending items remain",
+  "占位符未处理": "Unresolved placeholder",
+  "未被抽取的高风险句": "High-risk clause not extracted",
+  "重复声明已忽略": "Duplicate claim ignored",
+  "声明原文为空": "Claim text is empty",
+  "声明截断了否定词，语义可能反转": "Claim truncates a negation; its meaning may be inverted",
+  // 发送档案（send-archive 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "发送档案": "Send archive",
+  "冻结当前状态为发送档案": "Freeze the current state as a send archive",
+  "还没有发送档案。冻结会把当前草稿、来源、核查与批准状态存为不可变快照；发送后来源再怎么改，档案里仍是当时批准的原文。": "No send archive yet. Freezing stores the current draft, sources, verification, and approval state as an immutable snapshot; later source edits cannot change what was approved.",
+  "发送档案已冻结": "Send archive frozen",
+  "批准依据": "Approval basis",
+  "草稿正文": "Draft body",
+  "已发送": "Sent",
+  "人工复核": "Human review",
+  "声明核查通过": "Claim verification passed",
+  "未达发送门槛": "Send gate not met",
+  "核查模型": "Verification model",
+  "未记录": "Not recorded",
+  "提示版本": "Prompt version",
+  "提供给模型的来源": "Sources provided to the model",
+  "回答引用的来源": "Sources cited by the answer",
+  "核查判定支持该声明的来源": "Sources the verification verdict supports the statement with",
+  "无来源": "No sources",
+  "回答未引用来源": "The answer cites no sources",
+  "档案中没有声明核查记录": "The archive has no claim verification record",
+  "该声明没有来自来源的支持性引文": "No supporting quote from any source for this claim",
+  "逐条担保理由": "Per-claim justification",
+  "查看记录": "Viewing record",
+  "导出发送档案": "Export send archive",
+  // 核查与草稿覆盖（claim-verification 窗口，窗口 1 发送门槛）新增键。
+  // 只追加在 english 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "高风险句未被覆盖": "Uncovered high-risk clauses"
 };
 
 export function translate(language, phrase) {

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { opportunityWorkflow } from './opportunities.mjs';
-import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, verifyClaims } from './claims.mjs';
+import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaimReport, verifyClaims, draftChecks } from './claims.mjs';
 
 const EVIDENCE = '客户询问了报价和交付周期。';
 
@@ -685,4 +685,249 @@ test('the prompt names the neutral stance and the founder/customer source bounda
     dimensions: DRAFT_DIMENSIONS, sources, language: 'en' })[0].content;
   assert.ok(en.includes('neutral') && en.includes('still a founder source')
     && en.includes('never supports'), 'the en prompt covers neutral and the founder boundary');
+});
+
+// —— parseClaimReport：结构错误判 parse_failed；重复声明 ID 去重并记 warning ——
+
+test('malformed model output is a parse failure, never a partial review', () => {
+  const malformed = [
+    '{"claims":[{"id":"a"',            // 截断的 JSON
+    'Here is the report:\n{"claims":[]}',  // JSON 前后裹了散文
+    '```json\n{"claims":[]',           // 只有开头的代码围栏
+    '{"claims":"none"}',               // claims 不是数组
+    '',                                // 空输出
+  ];
+  for (const raw of malformed) {
+    assert.throws(() => parseClaimReport(raw, {}), { reason: 'parse_failed', message: '结构无效' });
+  }
+});
+
+test('output wrapped in a complete JSON code fence still parses', () => {
+  const raw = '```json\n{"claims":[{"id":"签约状态","dimension":"签约状态","text":"客户会签约","status":"unknown","items":[],"missing":"缺少确认","rewrite":"尚未确认"}]}\n```';
+  const { claims, warnings } = parseClaimReport(raw, {});
+  assert.equal(claims.length, 1);
+  assert.deepEqual(warnings, []);
+});
+
+test('analysis mode requires every expected dimension id', () => {
+  assert.throws(() => parseClaimReport(
+    JSON.stringify({ claims: [{ id: '购买意向', dimension: '购买意向', text: '客户有购买意向',
+      status: 'unknown', items: [], missing: '缺少预算确认', rewrite: '尚未确认' }] }),
+    { mode: 'analysis', expectIds: ANALYSIS_DIMENSIONS },
+  ), { reason: 'field_conflict', message: '缺少声明 签约状态' });
+});
+
+test('a duplicate claim id keeps the first occurrence and records a warning', () => {
+  const raw = JSON.stringify({ claims: [
+    { id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'unknown', items: [], missing: '缺少确认', rewrite: '尚未确认' },
+    { id: '签约状态', dimension: '签约状态', text: '同 ID 的重复抽取', status: 'unknown', items: [], missing: '缺少确认', rewrite: '尚未确认' },
+  ]});
+  const { claims, warnings } = parseClaimReport(raw, {});
+  assert.equal(claims.length, 1);
+  assert.equal(claims[0].text, '客户会签约');
+  assert.deepEqual(warnings, [{ reason: 'duplicate_claim_id', id: '签约状态' }]);
+});
+
+// —— 字段矛盾：缺 note、立场值不在枚举、模型谎报 supported 都没有引文支撑 ——
+
+test('an item without a note, or with an unknown stance, is a field conflict leaving the claim incomplete', () => {
+  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
+  const [noNote] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(noNote.status, 'incomplete');
+  assert.ok(noNote.failedChecks.some(check => check.reason === 'field_conflict'));
+  const [badStance] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'backing', quote: '希望在本季度签约', note: '立场值不在枚举内' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(badStance.status, 'incomplete');
+  assert.ok(badStance.failedChecks.some(check => check.reason === 'field_conflict'));
+});
+
+test('a model-asserted supported status without any supporting items is never supported', () => {
+  const sources = [{ id: 'S1', source: '6 月邮件', date: null, kind: 'customer', text: '客户表示希望在本季度签约。' }];
+  const [forged] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'supported',
+    items: [], missing: '', rewrite: '',
+  }], sources);
+  assert.equal(forged.status, 'incomplete');
+  assert.ok(forged.failedChecks.some(check => check.reason === 'field_conflict'));
+});
+
+// —— 捣乱输入：额外字段、缺字段、空引文都不能改变判定、不能产生假通过 ——
+
+test('extra fields on the report, a claim, or an item do not change the verdict', () => {
+  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
+  const base = {
+    id: '签约状态', dimension: '签约状态', text: '客户已确认签约', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '表达签约意向' }],
+    missing: '', rewrite: '',
+  };
+  // 模型多吐字段：顶层备注/模型名、声明上的置信度与推理、条目上的打分——都不得影响判定。
+  const { claims, warnings } = parseClaimReport(JSON.stringify({
+    notes: '顶层额外信息', model: 'test double',
+    claims: [{
+      ...base,
+      confidence: 0.99, reasoning: '客户想签约', extra: { nested: { a: 1 } },
+      items: base.items.map(item => ({ ...item, score: 1, flagged: true, modelNote: '条目级额外信息' })),
+    }],
+  }), {});
+  assert.equal(claims.length, 1);
+  assert.deepEqual(warnings, []);
+  assert.equal(claims[0].status, 'supported');
+  const [clean] = verifyClaims(parseClaimReport(JSON.stringify({ claims: [base] }), {}).claims, sources);
+  const [messy] = verifyClaims(claims, sources);
+  assert.equal(messy.status, 'supported');
+  assert.deepEqual(messy.failedChecks, []);
+  assert.deepEqual(messy, clean, 'extra fields must not change the verdict');
+});
+
+test('a claim missing status/items/missing/rewrite is incomplete; unknown needs missing plus rewrite', () => {
+  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
+  const [sparse] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户已确认签约',
+  }], sources);
+  assert.equal(sparse.status, 'incomplete');
+  assert.ok(sparse.failedChecks.some(check => check.reason === 'field_conflict'));
+  // 缺 items 键但有具体缺口与改写：unknown 可采信。
+  const [noItemsKey] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户会签约',
+    missing: '缺少已签署合同的记录', rewrite: '客户表示希望在本季度签约',
+  }], sources);
+  assert.equal(noItemsKey.status, 'unknown');
+  assert.deepEqual(noItemsKey.failedChecks, []);
+  assert.deepEqual(noItemsKey.items, []);
+});
+
+test('an item with an empty (or blank) quote is a quote_not_found leaving the claim incomplete', () => {
+  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
+  for (const quote of ['', '   ']) {
+    const [claim] = verifyClaims([{
+      id: '签约状态', dimension: '签约状态', text: '客户会签约', status: 'supported',
+      items: [{ evidenceId: 'S1', stance: 'supports', quote, note: '空引文' }],
+      missing: '', rewrite: '',
+    }], sources);
+    assert.equal(claim.status, 'incomplete');
+    assert.ok(claim.failedChecks.some(check => check.reason === 'quote_not_found'));
+  }
+});
+
+// —— 草稿正文检查：空原文与截断否定词（仅 body 存在时生效，判未完成核查） ——
+
+test('a draft claim with empty text is an incomplete verification', () => {
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '', status: 'unknown',
+    items: [], missing: '', rewrite: '',
+  }], [], { body: '感谢关注，期待合作。' });
+  assert.equal(claim.status, 'incomplete');
+  assert.ok(claim.failedChecks.some(check => check.reason === 'empty_claim_text'));
+});
+
+test('a draft claim whose only occurrences in the body are negated is an incomplete verification', () => {
+  const cases = [
+    ['承诺下周交付', '我们不会承诺下周交付。'],
+    ['承诺下周交付', '我们不承诺下周交付。'],
+    ['commit to delivery', 'We will not commit to delivery next week.'],
+  ];
+  for (const [text, body] of cases) {
+    const [claim] = verifyClaims([{
+      id: '交付', dimension: '对外承诺', text, status: 'unknown',
+      items: [], missing: '缺少客户确认', rewrite: '尚未确认',
+    }], [], { body });
+    assert.equal(claim.status, 'incomplete', `expected incomplete for ${text} in ${body}`);
+    assert.ok(claim.failedChecks.some(check => check.reason === 'truncated_negation'),
+      `expected truncated_negation for ${text} in ${body}`);
+  }
+});
+
+test('a clean or mixed occurrence is not flagged; without a body the checks never run', () => {
+  const [zh] = verifyClaims([{
+    id: '交付', dimension: '对外承诺', text: '承诺下周交付', status: 'unknown',
+    items: [], missing: '缺少客户确认', rewrite: '尚未确认',
+  }], [], { body: '我们承诺下周交付。' });
+  assert.equal(zh.status, 'unknown');
+  assert.deepEqual(zh.failedChecks, []);
+  const [en] = verifyClaims([{
+    id: '交付', dimension: '对外承诺', text: 'commit to delivery', status: 'unknown',
+    items: [], missing: 'no confirmation yet', rewrite: 'not yet confirmed',
+  }], [], { body: 'We commit to delivery next week.' });
+  assert.equal(en.status, 'unknown');
+  assert.deepEqual(en.failedChecks, []);
+  // 混合出现：正文里既有被否定的一次也有正向的一次 → 不整体判截断。
+  const [mixed] = verifyClaims([{
+    id: '交付', dimension: '对外承诺', text: '按期完成', status: 'unknown',
+    items: [], missing: '缺少客户确认', rewrite: '尚未确认',
+  }], [], { body: '我们不会承诺下周交付，但会按期完成。' });
+  assert.deepEqual(mixed.failedChecks, []);
+  // 同一段正文里，只被否定过的那条仍判截断。
+  const [mixedNegated] = verifyClaims([{
+    id: '交付', dimension: '对外承诺', text: '承诺下周交付', status: 'unknown',
+    items: [], missing: '缺少客户确认', rewrite: '尚未确认',
+  }], [], { body: '我们不会承诺下周交付，但会按期完成。' });
+  assert.ok(mixedNegated.failedChecks.some(check => check.reason === 'truncated_negation'));
+  // 分析模式没有 body：即使原文与某个假设正文构成否定关系也不运行检查。
+  const [analysis] = verifyClaims([{
+    id: '交付', dimension: '对外承诺', text: '承诺下周交付', status: 'unknown',
+    items: [], missing: '缺少客户确认', rewrite: '尚未确认',
+  }], []);
+  assert.equal(analysis.status, 'unknown');
+  assert.deepEqual(analysis.failedChecks, []);
+});
+
+test('an occurrence at the very start of the body has no prefix and is not a truncated negation', () => {
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'unknown',
+    items: [], missing: '缺少合同记录', rewrite: '尚未确认',
+  }], [], { body: '合同已签署。' });
+  assert.equal(claim.status, 'unknown');
+  assert.deepEqual(claim.failedChecks, []);
+});
+
+// —— draftChecks：占位符与未被抽取的高风险句（独立于模型输出的确定性检查） ——
+
+test('a second commitment in one sentence that was not extracted surfaces as unextracted', () => {
+  const { placeholders, unextracted } = draftChecks('我们承诺下周五前完成交付，并在两周内完成上线。', ['下周五前完成交付']);
+  assert.deepEqual(placeholders, []);
+  assert.deepEqual(unextracted, ['在两周内完成上线']);
+});
+
+test('English commitments that were not extracted surface as unextracted', () => {
+  const { unextracted } = draftChecks('We will complete delivery by Friday, and launch within two weeks.', []);
+  assert.deepEqual(unextracted, ['We will complete delivery by Friday', 'launch within two weeks']);
+});
+
+test('bracket placeholders are pending items; the full-width （待确认） rewrite convention is not', () => {
+  assert.deepEqual(draftChecks('费用为[待确认：具体金额]元。', []).placeholders, ['[待确认：具体金额]']);
+  assert.deepEqual(draftChecks('费用为[待核实]元。', []).placeholders, ['[待核实]']);
+  assert.deepEqual(draftChecks('The amount [TBD] will follow.', []).placeholders, ['[TBD]']);
+  assert.deepEqual(draftChecks('费用（待确认）后补。', []).placeholders, []);
+});
+
+// —— E2E：核查结果随 warnings 与 draftChecks 一起落库并暴露给界面 ——
+
+test('the stored draft review carries the deterministic pending items', async () => {
+  const { call, current } = fixture(
+    { status: 'unknown', quote: EVIDENCE, reason: '未确认' },
+    user => JSON.stringify({
+      claims: user.draft ? [{
+        id: '交付', dimension: '对外承诺', text: '下周五前完成交付', status: 'unknown',
+        items: [], missing: '缺少客户对交付时间的确认', rewrite: '预计下周五前完成交付（待确认）',
+      }] : user.dimensions.map(dimension => ({
+        id: dimension, dimension, text: dimension, status: 'unknown', items: [],
+        missing: '缺少确认信息', rewrite: '尚未确认',
+      })),
+    }),
+  );
+  const { id } = current();
+  call('opportunity-draft', { id, recipient: 'client@example.test',
+    body: '我们承诺下周五前完成交付，并在两周内完成上线。' });
+  await call('opportunity-claims', { id, target: 'draft', language: 'zh-CN' });
+  const item = current();
+  assert.equal(item.claimsStale, false);
+  assert.deepEqual(item.claims.warnings, []);
+  assert.deepEqual(item.claims.draftChecks, { placeholders: [], unextracted: ['在两周内完成上线'] });
 });

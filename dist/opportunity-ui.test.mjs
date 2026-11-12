@@ -251,7 +251,29 @@ test('a blocked send shows the block reason in the draft editor while the draft 
   assert.ok(draftBody, 'the draft content is still present for editing');
 });
 
-// 人工复核来源记录：复核区显示「已打开哪些来源 / 尚未打开来源」，展开来源原文时
+test('a blocked send for an uncovered high-risk clause names the gate reason in the draft editor', () => {
+  const { render, nodes } = harness();
+  render({
+    opportunities: [item({
+      draft_id: 'd1', recipient: 'client@example.test',
+      body: '我们承诺下周五前完成交付，并在两周内完成上线。',
+      analysis: analysis('supported', 'a1'),
+      claims: { target: 'draft', at: '2026-07-10T00:00:00Z', error: null, draftId: 'd1',
+        recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
+        warnings: [],
+        draftChecks: { placeholders: [], unextracted: ['在两周内完成上线'] },
+        claims: [{ id: '对外承诺', dimension: '对外承诺', text: '下周五前完成交付', status: 'supported',
+          items: [], missing: '', rewrite: '', conflict: null, withdrawn: false, failedChecks: [] }] },
+    })], delegation: {},
+    audit: [{ id: 9, opportunity: 'o1', action: 'blocked', time: '2026-11-11T09:00:00.000Z',
+      detail: JSON.stringify({ action: 'send', reason: 'claims_uncovered',
+        placeholders: [], uncovered: ['在两周内完成上线'] }) }],
+  });
+  const blocked = find(nodes, node => node.tag === 'p' && String(node.text).startsWith('操作被拦截 · 高风险句未被覆盖'));
+  assert.ok(blocked, 'the draft editor names the uncovered high-risk clause gate reason on the spot');
+});
+
+// 人工复核来源记录：复核区显示「已展开哪些来源 / 尚未展开来源」，展开来源原文时
 // 记录来源 ID（服务端权威），草稿或来源变化后新复核从空的查看状态开始。
 
 test('the review area shows that no source has been opened yet', () => {
@@ -513,4 +535,45 @@ test('an unanalyzed lead renders no answer block', () => {
   const { renderOne, fullText } = harness();
   const card = renderOne(item({}));
   assert.ok(!fullText(card).includes('当前回答'), 'no answer is claimed without an analysis');
+});
+
+// 待处理项：声明全部 supported 之后，草稿里仍可能留着占位符或未被抽取的高风险句
+// （一句里有两项承诺、模型只抽到一项）。它们要在卡片顶部明确显示「仍有待处理项」，
+// 当前状态不能显示「待批准」。
+
+test('a draft review with pending items surfaces them at the top and withholds awaiting-approval', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '我们承诺下周五前完成交付，并在两周内完成上线。',
+    analysis: analysis('supported', 'a1'),
+    claims: { target: 'draft', at: '2026-07-10T00:00:00Z', error: null, draftId: 'd1',
+      recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
+      warnings: [],
+      draftChecks: { placeholders: ['[待确认：金额]'], unextracted: ['在两周内完成上线'] },
+      claims: [{ id: '对外承诺', dimension: '对外承诺', text: '下周五前完成交付', status: 'supported',
+        items: [], missing: '', rewrite: '', conflict: null, withdrawn: false, failedChecks: [] }] },
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('仍有待处理项 · 2'), 'the pending count is named at the top of the card');
+  assert.ok(text.includes('未被抽取的高风险句 · 在两周内完成上线'), 'the unextracted clause is listed');
+  assert.ok(text.includes('占位符未处理 · [待确认：金额]'), 'the placeholder is listed');
+  assert.ok(text.includes('当前状态 · 仍有待处理项 · 2'), 'the status line says pending items remain, with the count');
+  assert.ok(!text.includes('当前状态 · 待批准'), 'pending items are not shown as awaiting approval');
+});
+
+test('a clean draft review without pending items stays awaiting approval', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd1', recipient: 'client@example.test', body: '我们下周五前完成交付。',
+    analysis: analysis('supported', 'a1'),
+    claims: { target: 'draft', at: '2026-07-10T00:00:00Z', error: null, draftId: 'd1',
+      recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
+      warnings: [],
+      draftChecks: { placeholders: [], unextracted: [] },
+      claims: [{ id: '对外承诺', dimension: '对外承诺', text: '下周五前完成交付', status: 'supported',
+        items: [], missing: '', rewrite: '', conflict: null, withdrawn: false, failedChecks: [] }] },
+  }));
+  const text = fullText(card);
+  assert.ok(text.includes('当前状态 · 待批准'), 'no pending items means awaiting approval');
+  assert.ok(!text.includes('仍有待处理项'), 'the pending label does not appear');
 });

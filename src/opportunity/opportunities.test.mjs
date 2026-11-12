@@ -804,6 +804,96 @@ test('a legacy review computed on generic E1 cannot bypass the typed-source rule
   assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_guarantee');
 });
 
+// —— 窗口 1 发送门槛：声明全部有依据之后，draftChecks 待处理项仍拦截发送 ——
+
+test('acceptance: an unresolved placeholder blocks the send until the draft resolves it and is re-verified', async () => {
+  const { call, current, state } = fixture(user => user.mode
+    ? (user.draft
+      ? JSON.stringify({ claims: [{
+          id: '对外承诺', dimension: '对外承诺', text: '下周五前完成交付', status: 'supported',
+          items: [{ evidenceId: 'E1', stance: 'supports', quote: EVIDENCE, note: '客户确认了交付日期' }],
+          missing: '', rewrite: '',
+        }] })
+      : JSON.stringify({ claims: user.dimensions.map(dimension => ({
+          id: dimension, dimension, text: dimension, status: 'unknown', items: [],
+          missing: '缺少确认信息', rewrite: '尚未确认',
+        })) }))
+    : JSON.stringify({ status: 'supported', quote: EVIDENCE, reason: 'Explicit acceptance.' }));
+  const { id } = current();
+  await call('opportunity-assess', { id, request: 'Can we promise Friday?' });
+  call('opportunity-draft', { id, recipient: 'client@example.test',
+    body: '我们承诺下周五前完成交付。费用为 [TBD] 元，稍后补上。' });
+  const draft_id = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', language: 'zh-CN' });
+  assert.equal(current().claimsStale, false);
+  assert.ok(current().claims.claims.every(claim => claim.status === 'supported'));
+  // 声明全部有依据，但正文里还留着方括号占位符：确定性检查把它列为待处理项。
+  assert.deepEqual(current().claims.draftChecks, { placeholders: ['[TBD]'], unextracted: [] });
+  assert.throws(() => call('opportunity-send', { id, draft_id }), {
+    status: 409,
+    message: '草稿正文仍有未确认的占位符：[TBD]。请落实后再批准发送。',
+  });
+  const blocked = state().audit.filter(event => event.action === 'blocked')[0];
+  assert.equal(JSON.parse(blocked.detail).reason, 'claims_placeholders');
+  assert.deepEqual(JSON.parse(blocked.detail).placeholders, ['[TBD]']);
+  call('opportunity-review', { id, draft_id, resolution: '已人工核对。' });
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  assert.equal(state().audit.some(event => event.action === 'simulated_send'), false);
+  // 落实占位符：新草稿版本使旧核查过期。
+  call('opportunity-draft', { id, recipient: 'client@example.test',
+    body: '我们承诺下周五前完成交付。费用已确认，请查收。' });
+  const newDraft = current().draft_id;
+  assert.notEqual(newDraft, draft_id);
+  assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_stale');
+  // 重新核查：占位符已落实，待处理项为空，可批准发送。
+  await call('opportunity-claims', { id, target: 'draft', draft_id: newDraft, language: 'zh-CN' });
+  assert.deepEqual(current().claims.draftChecks, { placeholders: [], unextracted: [] });
+  call('opportunity-send', { id, draft_id: newDraft });
+  assert.equal(current().sent, 1);
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'model_supported');
+});
+
+test('acceptance: a second commitment in one sentence that the model did not extract blocks the send', async () => {
+  // 一句里有两项承诺，模型只抽到一项：漏掉的那项必须作为待处理项拦在发送前。
+  const { call, current, state } = fixture(user => user.mode
+    ? (user.draft
+      ? JSON.stringify({ claims: [{
+          id: '对外承诺', dimension: '对外承诺', text: '下周五前完成交付', status: 'supported',
+          items: [{ evidenceId: 'E1', stance: 'supports', quote: EVIDENCE, note: '客户确认了交付日期' }],
+          missing: '', rewrite: '',
+        }] })
+      : JSON.stringify({ claims: user.dimensions.map(dimension => ({
+          id: dimension, dimension, text: dimension, status: 'unknown', items: [],
+          missing: '缺少确认信息', rewrite: '尚未确认',
+        })) }))
+    : JSON.stringify({ status: 'supported', quote: EVIDENCE, reason: 'Explicit acceptance.' }));
+  const { id } = current();
+  await call('opportunity-assess', { id, request: 'Can we promise Friday?' });
+  const analysisId = JSON.parse(current().analysis).analysisId;
+  call('opportunity-draft', { id, recipient: 'client@example.test',
+    body: '我们承诺下周五前完成交付，并在两周内完成上线。' });
+  const draft_id = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', language: 'zh-CN' });
+  assert.equal(current().claimsStale, false);
+  assert.ok(current().claims.claims.every(claim => claim.status === 'supported'));
+  // 模型漏抽了「在两周内完成上线」：高风险句未被任何已抽取声明覆盖。
+  assert.deepEqual(current().claims.draftChecks, { placeholders: [], unextracted: ['在两周内完成上线'] });
+  assert.throws(() => call('opportunity-send', { id, draft_id }), {
+    status: 409,
+    message: '以下高风险句未被任何已抽取声明覆盖（模型可能漏抽）：在两周内完成上线。请重新核查或改写，确认没有遗漏后再批准发送，或针对当前草稿与来源记录人工复核结论。',
+  });
+  const blocked = state().audit.filter(event => event.action === 'blocked')[0];
+  assert.equal(JSON.parse(blocked.detail).reason, 'claims_uncovered');
+  assert.deepEqual(JSON.parse(blocked.detail).uncovered, ['在两周内完成上线']);
+  // 统一逃生口：针对当前草稿与来源记录人工复核结论后批准发送。
+  call('opportunity-review', { id, analysis_id: analysisId, draft_id, resolution: '已核对「在两周内完成上线」，依据客户书面确认。' });
+  assert.equal(current().reviewStale, null);
+  call('opportunity-send', { id, draft_id });
+  assert.equal(current().sent, 1);
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'approved').detail).evidence, 'human_review');
+});
+
 test('changing the initial source identity invalidates the stored verification', async () => {
   const { call, current, state } = fixture(initialSourceDouble, {
     title: '来源改判', source: '客户线程', evidence: '客户已签约。', evidence_kind: 'unconfirmed',

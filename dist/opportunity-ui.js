@@ -19,6 +19,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     source_added: '来源已保存', claims_checked: '声明核查完成', claims_failed: '声明核查失败',
     review_source_viewed: '展开来源原文',
     evidence_kind_changed: '初始来源身份已改',
+    archived: '发送档案已冻结',
   };
 
   const sourceKindLabels = { evidence: '证据原文', customer: '客户记录', founder: '创始人提供' };
@@ -33,11 +34,13 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   const checkReasonLabels = {
     unknown_source: '引用了不存在的来源', quote_not_found: '引文未在来源原文中逐字找到',
     field_conflict: '模型输出字段不一致', claim_not_in_draft: '声明未在草稿正文中逐字出现',
-    request_failed: '模型请求失败',
+    request_failed: '模型请求失败', empty_claim_text: '声明原文为空',
+    truncated_negation: '声明截断了否定词，语义可能反转',
   };
   const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
     claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过', claims_no_claims: '未提取到声明',
-    claims_founder_only: '声明仅由创始人提供', claims_unconfirmed: '声明来源未确认' };
+    claims_founder_only: '声明仅由创始人提供', claims_unconfirmed: '声明来源未确认',
+    claims_placeholders: '占位符未处理', claims_uncovered: '高风险句未被覆盖', claims_pending: '仍有待处理项' };
   // 该机会最近一条活动记录：发送被拦截后在草稿区当场显示拦截原因（活动记录同步刷新）。
   function latestBlocked(audit, itemId) {
     const rows = (audit ?? []).filter(row => row.opportunity === itemId);
@@ -233,6 +236,134 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return article;
   }
 
+  // 待处理项：核查完成后、发送前仍必须落实的内容——
+  // 1. 草稿正文里遗留的方括号占位符（[待确认：…] 等，draftChecks.placeholders）；
+  // 2. 未被任何已抽取声明覆盖的高风险句（一句里有两项承诺、模型只抽到一项，draftChecks.unextracted）；
+  // 3. 解析告警（如重复声明 ID，warnings）。
+  // 展示上三者都列为待处理项；但「当前状态」只按会被窗口 1 门槛拦截的前两类判定
+  // （重复声明已保留第一条核查，不影响该声明的判定，不阻断发送），与 /api/opportunity-send 一致。
+  const pendingCheckLabels = { duplicate_claim_id: '重复声明已忽略' };
+  function pendingItems(review) {
+    const items = [];
+    for (const placeholder of review?.draftChecks?.placeholders ?? []) {
+      items.push({ label: '占位符未处理', text: placeholder });
+    }
+    for (const clause of review?.draftChecks?.unextracted ?? []) {
+      items.push({ label: '未被抽取的高风险句', text: clause });
+    }
+    return items;
+  }
+  function pendingChecks(review) {
+    const checks = pendingItems(review);
+    for (const warning of review?.warnings ?? []) {
+      checks.push({ label: pendingCheckLabels[warning.reason] ?? warning.reason, text: warning.id ?? '' });
+    }
+    return checks;
+  }
+  function pendingChecksBlock(review) {
+    const checks = pendingChecks(review);
+    if (!checks.length) return null;
+    const wrap = element('div', '');
+    wrap.append(element('p', t('仍有待处理项') + ' · ' + checks.length, 'attention'));
+    for (const check of checks) {
+      wrap.append(element('small', t(check.label) + (check.text ? ' · ' + check.text : ''), 'attention'));
+    }
+    return wrap;
+  }
+
+  // 发送档案（send-archive 窗口）：一次（模拟）发送的不可变快照——当时的草稿、
+  // 来源全文、逐条声明判定与引文、查看记录、核查模型/提示版本、批准依据与批准时间
+  // 都内嵌在档案里；发送后来源再怎么改，档案仍能还原「当时基于什么批准了什么」。
+  // 发送时刻的自动写入由窗口 1 在 /api/opportunity-send 内接入（共用同一构建器）；
+  // 这里提供手动冻结入口（opportunity-archive）与导出链接（/api/opportunity-archive/:id）。
+  const archiveBasisLabels = { human_review: '人工复核', human_guarantee: '创始人逐条担保', model_supported: '声明核查通过', pending: '未达发送门槛' };
+  function archiveTier(title, entries, empty) {
+    const block = element('details', '');
+    block.append(element('summary', t(title) + ' · ' + (entries.length ? entries.length : t(empty))));
+    for (const entry of entries) {
+      const label = entry.id + (entry.name ? ' · ' + entry.name : '') +
+        (entry.kind ? ' · ' + t(sourceKindLabels[entry.kind] ?? entry.kind) : '') +
+        (entry.date ? ' · ' + entry.date : '');
+      if (entry.text) block.append(details(label, entry.text));
+      else if (entry.quote) block.append(details(label, entry.quote + (entry.note ? '（' + entry.note + '）' : '')));
+      else block.append(element('small', label));
+    }
+    return block;
+  }
+  function archiveEntry(archive) {
+    const entry = element('details', '');
+    const approval = archive.approval ?? {};
+    const basis = t(archiveBasisLabels[approval.basis] ?? approval.basis ?? 'pending');
+    entry.append(element('summary', new Date(archive.sentAt).toLocaleString(language()) + ' · ' + basis +
+      (archive.sent ? ' · ' + t('已发送') : '')));
+    entry.append(element('p',
+      (approval.recipient ? t('收件人') + ' · ' + approval.recipient + ' · ' : '') + t('批准依据') + ' · ' + basis));
+    if (approval.body) entry.append(details(t('草稿正文'), approval.body));
+    const verification = archive.verification ?? {};
+    entry.append(element('small', t('核查模型') + ' · ' + (verification.model ?? t('未记录')) +
+      ' · ' + t('提示版本') + ' · ' + (verification.prompts?.claims ?? '—') + ' / ' + (verification.prompts?.analysis ?? '—')));
+    // 三档来源（都读档案内嵌快照，与活动来源无关）：
+    // 1. 提供给模型的来源 = 核查输入全集（含全文）；
+    // 2. 回答引用的来源 = 分析引文所出（E1）+ 结构化回答明指的来源；
+    // 3. 核查判定支持该声明的来源 = 每条声明里 stance=supports 的有效引文所在来源。
+    const snapshot = (archive.sources ?? []).map(source => ({
+      id: source.id, name: source.source, kind: source.kind, date: source.date, text: source.text,
+    }));
+    entry.append(archiveTier('提供给模型的来源', snapshot, '无来源'));
+    entry.append(archiveTier('回答引用的来源', archive.answerCitedSources ?? [], '回答未引用来源'));
+    const supportTier = element('details', '');
+    supportTier.append(element('summary', t('核查判定支持该声明的来源')));
+    const claims = archive.claims ?? [];
+    if (!claims.length) supportTier.append(element('small', t('档案中没有声明核查记录')));
+    for (const claim of claims) {
+      const claimBlock = element('details', '');
+      claimBlock.append(element('summary',
+        (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文')) +
+        ' · ' + t(claimStatusLabels[claim.status] ?? claim.status)));
+      const sources = claim.supportingSources ?? [];
+      for (const source of sources) {
+        claimBlock.append(details(source.id + ' · ' + source.name + ' · ' + source.quote,
+          source.note ? '（' + source.note + '）' : ''));
+      }
+      if (!sources.length) claimBlock.append(element('small', t('该声明没有来自来源的支持性引文')));
+      const items = claim.items ?? [];
+      if (items.length) {
+        claimBlock.append(element('small', t('逐条担保理由')));
+        for (const item of items) {
+          const note = item.note ? '（' + item.note + '）' : '';
+          const invalid = item.valid ? '' :
+            (item.reasons?.length ? ' · ' + item.reasons.map(reason => t(checkReasonLabels[reason] ?? reason)).join('、') : '');
+          claimBlock.append(details(
+            t(stanceLabels[item.stance] ?? item.stance ?? '') + ' · ' + item.evidenceId + invalid,
+            (item.quote ?? '') + note));
+        }
+      }
+      supportTier.append(claimBlock);
+    }
+    entry.append(supportTier);
+    const viewing = archive.viewing ?? null;
+    if (viewing) {
+      entry.append(element('small', t('查看记录') + ' · ' +
+        ((viewing.viewedNames ?? []).length ? t('已展开来源') + ' · ' + viewing.viewedNames.join('、') : t('尚未展开来源'))));
+    }
+    const link = element('a', t('导出发送档案'));
+    link.href = '/api/opportunity-archive/' + archive.archiveId;
+    link.download = 'daymark-send-archive-' + archive.archiveId + '.json';
+    entry.append(link);
+    return entry;
+  }
+  function archivesBlock(item) {
+    const block = element('details', '');
+    const archives = item.archives ?? [];
+    block.append(element('summary', t('发送档案') + (archives.length ? ' · ' + archives.length : '')));
+    if (!archives.length) {
+      block.append(element('p', t('还没有发送档案。冻结会把当前草稿、来源、核查与批准状态存为不可变快照；发送后来源再怎么改，档案里仍是当时批准的原文。')));
+    }
+    for (const archive of archives) block.append(archiveEntry(archive));
+    block.append(action(t('冻结当前状态为发送档案'), () => request('opportunity-archive', { id: item.id })));
+    return block;
+  }
+
   function claimsBlock(item) {
     const review = item.claims;
     const block = element('details', '');
@@ -244,6 +375,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         t(item.kind === 'lead' ? '分析后自动核查，或在保存草稿后点「核查关键声明」。' : '分析后自动核查。')));
       return block;
     }
+    // 待处理项置顶：先于过期/错误提示，保证一眼看到「还有事没做完」。
+    const pending = pendingChecksBlock(review);
+    if (pending) block.append(pending);
     if (item.claimsStale) block.append(element('p', t('核查已过期：来源或草稿已变更，请重新核查。'), 'attention'));
     if (review.error) block.append(element('p', t('模型请求失败') + ' · ' + review.error, 'attention'));
     // 实际核查范围：列出本次真正核查过的声明；为空时明确提示范围是空的，避免被当成"核查通过"。
@@ -279,11 +413,17 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   // 与发送门槛一致的本地镜像：可批准 = 绑定当前草稿与来源的人工复核，
   // 或草稿核查新鲜、范围非空、每条被标记声明都有逐条担保（或全部获支持）。
   function sendable(item) {
+    if (item.draftPlaceholders?.length) return false;
     const review = item.claims;
+    if (!item.claimsStale && review?.target === 'draft' &&
+        review.warnings?.some(warning => warning.reason === 'duplicate_claim_id')) return false;
     if (review?.target !== 'draft' || review.error || item.claimsStale || !review.claims?.length) {
       return Boolean(item.review && !item.reviewStale);
     }
     const claims = review.claims;
+    const currentReview = item.review && item.review_draft === item.draft_id && !item.reviewStale;
+    if (review.draftChecks?.placeholders?.length ||
+        review.draftChecks?.unextracted?.some(clause => !currentReview || !item.review.includes(clause))) return false;
     return claims.every(claim => claim.status === 'supported' || isGuaranteed(item, claim));
   }
   // 一条被标记声明的逐条复核条目：原句、判定、依据（复用 claimSection 的展示），
@@ -421,6 +561,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   function approvalStatus(item) {
     if (!item.draft_id) return { label: '尚未保存草稿', tone: 'muted' };
     if (sendable(item)) return { label: '待批准', tone: 'muted' };
+    if (item.draftPlaceholders?.length) return { label: '仍有待处理项', tone: 'attention', count: item.draftPlaceholders.length };
     if (item.reviewStale && !flaggedClaims(item).length) {
       return { label: t('复核已过期') + ' · ' + reviewStaleText(item), tone: 'attention' };
     }
@@ -432,6 +573,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     // 逐条人工复核：被标记声明全部有逐条担保时即为待批准（与发送门槛一致）。
     const unhandled = claims.filter(claim => claim.status !== 'supported' && !isGuaranteed(item, claim));
     if (unhandled.length) return { label: '待处理 ' + unhandled.length + ' 条', tone: 'attention' };
+    const pending = pendingChecks(review).length;
+    if (pending) return { label: '仍有待处理项', tone: 'attention', count: pending };
     return { label: '待批准', tone: 'muted' };
   }
 
@@ -519,6 +662,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(reviewForm);
     }
     card.append(claimsBlock(item));
+    // 发送档案：不可变快照（三档来源 + 批准上下文 + 导出），与活动来源无关。
+    card.append(archivesBlock(item));
     const analysisForm = element('form', '');
     const question = element('input', '');
     question.required = true;
@@ -562,13 +707,18 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         item.reviewStale || (!item.review && result?.status !== 'supported') ? 'attention' : 'muted'));
       if (!item.sent) {
         const status = approvalStatus(item);
-        card.append(element('p', t('当前状态') + ' · ' + t(status.label), status.tone));
+        card.append(element('p', t('当前状态') + ' · ' + t(status.label) +
+          (status.count ? ' · ' + status.count : ''), status.tone));
       }
       if (item.review) card.append(element('p', t('核实记录') +
         (item.reviewStale ? ' · ' + t('复核已过期') + ' · ' + reviewStaleText(item) : '') + ' · ' + item.review,
         item.reviewStale ? 'attention' : 'muted'), reviewViewLine(item));
       if (item.draft_id) {
         editor.open = true;
+        // 待处理项置顶到草稿区：优先于已保存版本正文与「有问题的声明」。
+        // 只针对针对草稿的核查结果；已发送的机会不再展示。
+        const pending = !item.sent && item.claims?.target === 'draft' ? pendingChecksBlock(item.claims) : null;
+        if (pending) editor.append(pending);
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
         if (item.sent) {
           editor.append(element('p', t('模拟发送成功')));

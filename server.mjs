@@ -1,3 +1,4 @@
+import { loadArchive } from './src/opportunity/archive.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
@@ -743,6 +744,16 @@ createServer(async (req, res) => {
       if (!report) fail(404, '页面不存在。');
       res.setHeader('Content-Disposition', 'attachment; filename="daymark-model-evaluation.json"');
       return res.end(JSON.stringify(report, null, 2));
+    }
+    // 发送档案导出（send-archive 窗口）：返回存储的档案 JSON（自包含快照，不重算）。
+    // 手动冻结的写入在 opportunities.mjs 的 /api/opportunity-archive 变更接口；
+    // 发送时刻的自动写入由窗口 1 在同一 schema 上接入。
+    const archiveMatch = /^\/api\/opportunity-archive\/([^/]+)$/.exec(route);
+    if (req.method === 'GET' && archiveMatch) {
+      const archive = loadArchive(db, archiveMatch[1]);
+      if (!archive) fail(404, '页面不存在。');
+      res.setHeader('Content-Disposition', 'attachment; filename="daymark-send-archive-' + archive.archiveId + '.json"');
+      return res.end(JSON.stringify(archive, null, 2));
     }
     if (req.method === 'GET' && route === '/api/state') return res.end(JSON.stringify(state()));
     if (req.method !== 'POST' || !Object.hasOwn(mutations, route)) fail(404, '页面不存在。');
