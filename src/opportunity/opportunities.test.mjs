@@ -836,7 +836,7 @@ test('acceptance: an unresolved placeholder blocks the send until the draft reso
   const blocked = state().audit.filter(event => event.action === 'blocked')[0];
   assert.equal(JSON.parse(blocked.detail).reason, 'claims_placeholders');
   assert.deepEqual(JSON.parse(blocked.detail).placeholders, ['[TBD]']);
-  call('opportunity-review', { id, draft_id, resolution: '已人工核对。' });
+  call('opportunity-review', { id, analysis_id: JSON.parse(current().analysis).analysisId, draft_id, resolution: '已人工核对。' });
   assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
   assert.equal(state().audit.some(event => event.action === 'simulated_send'), false);
   // 落实占位符：新草稿版本使旧核查过期。
