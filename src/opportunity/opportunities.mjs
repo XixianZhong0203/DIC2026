@@ -6,6 +6,12 @@ import { evidenceAnswer } from '../evidence/answer.mjs';
 // reviewSourceIndex/currentViewed、human_reviewed 审计中的 viewed/viewedNames 与 state().reviewViewed。
 // 发送门槛由窗口 1 负责：/api/opportunity-send 只读取 review/review_draft/review_evidence/claims_review，
 // 不读 review_viewed——来源查看记录是审计凭证，不是放行条件。
+// 逐条人工复核窗口（codex/per-claim-review）负责：claim_resolutions 列、
+// /api/opportunity-claim-resolution、state().claimResolutions 与发送端校验。
+// 与窗口 1 对齐改动位置：被标记声明的逐条核对写在 /api/opportunity-send 内
+// !humanOverride 的声明门禁块（不新增并列发送路由）；当草稿目标核查存在时，
+// 该门禁先于分析层面不确定性门槛执行（逐条结论更具体），逐条担保是放行路径之一，
+// 只增补 approved 审计（guaranteedClaims），不改变 humanOverride 读取的列集合。
 
 const modes = ['auto', 'draft', 'approval', 'human'];
 const scenarios = [
@@ -55,6 +61,13 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   // 人工复核的查看状态（JSON：{draftId, evidence, viewed: [来源 ID]}），绑定当前草稿 + 当前来源集合。
   if (!opportunityColumns.some(column => column.name === 'review_viewed')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review_viewed TEXT');
+  }
+  // 逐条声明的人工复核（JSON 数组）：被标记声明的担保结论，每条绑定具体声明
+  // （claimId + 原句）、草稿版本（draftId）与来源版本（evidence 指纹）。
+  // 正文或收件人变化产生新草稿、来源集合变化改变指纹后，旧条目读取时自动过滤失效，
+  // 历史条目留在审计里。
+  if (!opportunityColumns.some(column => column.name === 'claim_resolutions')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN claim_resolutions TEXT');
   }
   // 「当前回答」结构化回答（evidence-answer 窗口）：分析目标核查的专用副本 + 持久化的回答。
   if (!opportunityColumns.some(column => column.name === 'analysis_claims')) {
@@ -131,6 +144,28 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     if (item.review_evidence == null) reasons.push('review_unbound');
     else if (item.review_evidence !== evidenceHash(item, sourceRows)) reasons.push('source_changed');
     return reasons.length ? reasons : null;
+  };
+  // 当前仍有效的逐条担保：只认同时绑定到当前草稿版本（draftId）与当前来源版本
+  // （evidence 指纹）的条目。正文或收件人变化 → 新草稿 → 旧条目失效；来源变化 →
+  // 指纹变化 → 旧条目失效。旧条目留在 claim_resolutions 里供审计，不参与放行。
+  const currentGuarantees = (item, sourceRows) => {
+    const stored = item.claim_resolutions ? safeParse(item.claim_resolutions) : null;
+    if (!Array.isArray(stored)) return [];
+    const evidence = evidenceHash(item, sourceRows);
+    return stored.filter(row => row && row.action === 'guarantee' &&
+      typeof row.claimId === 'string' && row.claimId &&
+      typeof row.claimText === 'string' &&
+      row.draftId === (item.draft_id ?? null) && row.evidence === evidence);
+  };
+  // 当前草稿目标核查中被标记（未获客户来源支持）的声明。
+  // 核查不存在、不是草稿目标、失败、过期或实际核查范围为空时返回 null（不能逐条处理）；
+  // 核查有效但全部获支持时返回 []。
+  const flaggedOf = (item, review, sourceRows) => {
+    if (!review || review.target !== 'draft' || review.error) return null;
+    if (claimsStale(item, review, sourceRows)) return null;
+    const claims = review.claims ?? [];
+    if (!claims.length) return null;
+    return claims.filter(claim => claim.status !== 'supported');
   };
   // 人工复核的查看状态：创始人在核查区展开过哪些来源原文。E1 = 线索证据原文，S<id> = 逐条添加的来源。
   // 与复核结论共用同一套绑定检查：查看状态绑定 (draft_id, 来源集合哈希)，草稿或来源集合变化后
@@ -252,7 +287,8 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           // 当前回答：结构化回答（已确认/缺少/下一步/指向来源）的解析结果；未分析时为 null。
           const answer = item.answer ? safeParse(item.answer) : null;
           return { ...item, sources, claims, claimsStale: claimsStale(item, claims, sources),
-            reviewStale: reviewStale(item, sources), reviewViewed: currentViewed(item, sources), answer };
+            reviewStale: reviewStale(item, sources), reviewViewed: currentViewed(item, sources),
+            claimResolutions: currentGuarantees(item, sources), answer };
         });
       return {
         opportunities,
@@ -393,6 +429,39 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
             draftId: viewed.draftId, evidence: viewed.evidence });
         });
       },
+      // 逐条人工复核：对当前草稿核查中被标记的声明，创始人选择改写、删除，
+      // 或保留并明确记录「我已核实并愿意承担这条说法」+ 理由。
+      // 改写/删除走 /api/opportunity-draft + /api/opportunity-claims（新草稿版本 + 重新核查）；
+      // 保留（担保）写入 claim_resolutions，结论绑定具体声明（claimId + 原句）、
+      // 草稿版本与来源版本——草稿、收件人或来源变化后该结论自动失效。
+      // 发送端核对每条被标记声明都有对应处理（见 /api/opportunity-send）。
+      '/api/opportunity-claim-resolution': ({ id, draft_id, claim_id, text, reason }) => {
+        const item = get(id);
+        if (!item.draft_id) fail(409, '还没有已保存的草稿。');
+        if (draft_id != null && draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
+        const sourceRows = sourcesFor(id);
+        const review = item.claims_review ? safeParse(item.claims_review) : null;
+        if (!review || review.target !== 'draft') fail(409, '草稿声明尚未核查，请先核查关键声明。');
+        if (claimsStale(item, review, sourceRows)) fail(409, '核查已过期（草稿或来源已变更），请重新核查后确认。');
+        if (review.error) fail(409, '声明核查未完成，请重新核查后确认。');
+        const flagged = flaggedOf(item, review, sourceRows) ?? [];
+        const claim = flagged.find(row => row.id === claim_id && row.text === text) ?? null;
+        if (!claim) fail(409, '这条声明不在当前核查的被标记声明中，请刷新后重试。');
+        const note = required(reason, 2000);
+        const evidence = evidenceHash(item, sourceRows);
+        const entry = { claimId: claim.id, claimText: claim.text, action: 'guarantee',
+          statement: '我已核实并愿意承担这条说法', reason: note,
+          draftId: item.draft_id, evidence, at: new Date().toISOString() };
+        const stored = item.claim_resolutions ? (safeParse(item.claim_resolutions) ?? []) : [];
+        // 同一声明在同一绑定下只保留最新一次担保；跨绑定的旧条目留在历史里，发送时自然失效。
+        const next = [...stored.filter(row => !(row && row.claimId === claim.id &&
+          row.draftId === item.draft_id && row.evidence === evidence)), entry];
+        transaction(() => {
+          db.prepare('UPDATE opportunities SET claim_resolutions=? WHERE id=?').run(JSON.stringify(next), id);
+          audit(id, 'claim_guaranteed', { claimId: claim.id, claimText: claim.text, reason: note,
+            draftId: item.draft_id, evidence });
+        });
+      },
       '/api/opportunity-review': ({ id, analysis_id, draft_id, resolution }) => {
         const item = get(id);
         const result = item.analysis && JSON.parse(item.analysis);
@@ -448,73 +517,85 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         } catch {
           analysis = null;
         }
-        if (!analysis && !item.review) {
-          audit(id, 'blocked', { action: 'send', reason: 'no_evidence_review' });
-          fail(409, '还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。');
-        }
-        if (analysis && analysis.status !== 'supported' && !item.review) {
-          audit(id, 'blocked', { action: 'send', reason: 'unresolved_evidence', analysisId: analysis.analysisId });
-          fail(409, '请先记录如何处理不确定性，再批准发送。');
-        }
-        // 当前草稿的声明核查门槛：有反驳、证据不足、来源冲突、核查未完成或结果过期时先处理；
-        // 可改写后重新核查，或针对当前草稿记录人工复核结论后再批准发送。
         const sourceRows = sourcesFor(id);
         // 人工复核放行同时校验两个绑定：当前草稿版本 + 当前来源集合。
         // 旧记录缺少来源版本（review_evidence 为空）时不放行，需重新复核。
         const humanOverride = Boolean(item.review) && item.review_draft === item.draft_id &&
           item.review_evidence === evidenceHash(item, sourceRows);
+        let guaranteedClaims = [];
         if (!humanOverride) {
           const review = item.claims_review ? safeParse(item.claims_review) : null;
-          if (!review || review.target !== 'draft') {
+          if (review && review.target === 'draft') {
+            // 草稿目标核查存在时，声明门禁先于分析层面门槛执行：逐条声明的核查结论
+            // （含逐条担保）是更具体、更可操作的拦截依据，且逐条担保放行路径
+            // 不要求先有分析或整体人工复核——每条被标记声明都已被逐条处理即可。
+            if (claimsStale(item, review, sourceRows)) {
+              audit(id, 'blocked', { action: 'send', reason: 'claims_stale' });
+              fail(409, '草稿声明核查已过期（草稿或来源已变更）。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
+            }
+            if (review.error) {
+              audit(id, 'blocked', { action: 'send', reason: 'claims_incomplete', error: review.error });
+              fail(409, '声明核查未完成。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
+            }
+            // 覆盖边界：针对草稿的核查若没有提取到任何声明，实际核查范围为空，
+            // 不能视为核查通过（正文里可能仍有未覆盖的关键说法）：重新核查或人工复核。
+            if (!(review.claims ?? []).length) {
+              audit(id, 'blocked', { action: 'send', reason: 'claims_no_claims' });
+              fail(409, '草稿声明核查未提取到任何声明，实际核查范围为空。请重新核查，或针对当前草稿记录人工复核结论。');
+            }
+            // 逐条核对：被标记声明中已有创始人逐条担保（绑定当前草稿与当前来源版本）的
+            // 不计为未处理；仍有条目未处理时按原分类拦截（改写/删除后重新核查，或逐条记录担保）。
+            const guarantees = currentGuarantees(item, sourceRows);
+            const guaranteed = claim => guarantees.some(row => row.claimId === claim.id && row.claimText === claim.text);
+            const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
+            const unhandled = unresolved.filter(claim => !guaranteed(claim));
+            guaranteedClaims = unresolved.filter(guaranteed).map(claim => ({
+              claimId: claim.id, text: claim.text, dimension: claim.dimension, status: claim.status }));
+            const founderOnly = unhandled.filter(claim => claim.status === 'founder_only');
+            const unconfirmed = unhandled.filter(claim => claim.status === 'unconfirmed');
+            if (unhandled.length) {
+              audit(id, 'blocked', { action: 'send',
+                reason: founderOnly.length ? 'claims_founder_only'
+                  : unconfirmed.length ? 'claims_unconfirmed' : 'claims_unresolved',
+                claims: unhandled.map(claim => ({ id: claim.id, status: claim.status })),
+                handled: guaranteedClaims.map(claim => claim.claimId) });
+              if (founderOnly.length) {
+                fail(409, '以下声明仅由创始人提供，待独立核实：' +
+                  founderOnly.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+                  '。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，' +
+                  '或针对当前草稿与来源记录人工复核结论，再批准发送。');
+              }
+              if (unconfirmed.length) {
+                fail(409, '以下声明的来源未确认：' +
+                  unconfirmed.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+                  '。请补入可核实的来源，或确认初始来源身份后重新核查，或改写为有依据的说法，' +
+                  '或针对当前草稿与来源记录人工复核结论，再批准发送。');
+              }
+              fail(409, '以下声明核查未通过：' +
+                unhandled.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
+                '。请改写后重新核查，或对该声明逐条记录担保，或针对当前草稿记录人工复核结论。');
+            }
+          } else {
+            // 尚无草稿目标核查：先按分析层面门槛提示（保持原顺序），再提示核查草稿声明。
+            if (!analysis && !item.review) {
+              audit(id, 'blocked', { action: 'send', reason: 'no_evidence_review' });
+              fail(409, '还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。');
+            }
+            if (analysis && analysis.status !== 'supported' && !item.review) {
+              audit(id, 'blocked', { action: 'send', reason: 'unresolved_evidence', analysisId: analysis.analysisId });
+              fail(409, '请先记录如何处理不确定性，再批准发送。');
+            }
             audit(id, 'blocked', { action: 'send', reason: 'claims_not_verified' });
             fail(409, '草稿声明尚未核查。请先核查关键声明，或针对当前草稿记录人工复核结论。');
           }
-          if (claimsStale(item, review, sourceRows)) {
-            audit(id, 'blocked', { action: 'send', reason: 'claims_stale' });
-            fail(409, '草稿声明核查已过期（草稿或来源已变更）。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
-          }
-          if (review.error) {
-            audit(id, 'blocked', { action: 'send', reason: 'claims_incomplete', error: review.error });
-            fail(409, '声明核查未完成。请重新核查关键声明，或针对当前草稿记录人工复核结论。');
-          }
-          // 覆盖边界：针对草稿的核查若没有提取到任何声明，实际核查范围为空，
-          // 不能视为核查通过（正文里可能仍有未覆盖的关键说法）：重新核查或人工复核。
-          if (!(review.claims ?? []).length) {
-            audit(id, 'blocked', { action: 'send', reason: 'claims_no_claims' });
-            fail(409, '草稿声明核查未提取到任何声明，实际核查范围为空。请重新核查，或针对当前草稿记录人工复核结论。');
-          }
-          // 未自动核实的声明分两类拦截，都不计为自动核查通过，出路都是：
-          // 补入可核实的来源后重新核查、改写为有依据的说法，
-          // 或针对当前草稿与当前来源记录人工复核结论，再批准发送。
-          const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
-          const founderOnly = unresolved.filter(claim => claim.status === 'founder_only');
-          const unconfirmed = unresolved.filter(claim => claim.status === 'unconfirmed');
-          if (unresolved.length) {
-            audit(id, 'blocked', { action: 'send',
-              reason: founderOnly.length ? 'claims_founder_only'
-                : unconfirmed.length ? 'claims_unconfirmed' : 'claims_unresolved',
-              claims: unresolved.map(claim => ({ id: claim.id, status: claim.status })) });
-            if (founderOnly.length) {
-              fail(409, '以下声明仅由创始人提供，待独立核实：' +
-                founderOnly.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
-                '。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，' +
-                '或针对当前草稿与来源记录人工复核结论，再批准发送。');
-            }
-            if (unconfirmed.length) {
-              fail(409, '以下声明的来源未确认：' +
-                unconfirmed.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
-                '。请补入可核实的来源，或确认初始来源身份后重新核查，或改写为有依据的说法，' +
-                '或针对当前草稿与来源记录人工复核结论，再批准发送。');
-            }
-            fail(409, '以下声明核查未通过：' +
-              unresolved.map(claim => claim.dimension || claim.id).filter(Boolean).join('、') +
-              '。请改写后重新核查，或针对当前草稿记录人工复核结论。');
-          }
         }
+        // 批准发送时记录放行依据：人工复核 / 逐条担保 / 模型核查通过。
+        // 走逐条担保放行时，同时记录最终批准发送时哪些声明由创始人担保。
         transaction(() => {
           db.prepare('UPDATE opportunities SET sent=1 WHERE id=?').run(id);
           audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: mode('send'),
-            evidence: humanOverride ? 'human_review' : 'model_supported' });
+            evidence: humanOverride ? 'human_review' : (guaranteedClaims.length ? 'human_guarantee' : 'model_supported'),
+            ...(guaranteedClaims.length ? { guaranteedClaims } : {}) });
           audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
         });
       },

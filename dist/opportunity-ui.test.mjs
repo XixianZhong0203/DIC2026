@@ -251,7 +251,7 @@ test('a blocked send shows the block reason in the draft editor while the draft 
   assert.ok(draftBody, 'the draft content is still present for editing');
 });
 
-// 人工复核来源记录：复核区显示「已展开哪些来源 / 尚未展开来源」，展开来源原文时
+// 人工复核来源记录：复核区显示「已打开哪些来源 / 尚未打开来源」，展开来源原文时
 // 记录来源 ID（服务端权威），草稿或来源变化后新复核从空的查看状态开始。
 
 test('the review area shows that no source has been opened yet', () => {
@@ -260,7 +260,7 @@ test('the review area shows that no source has been opened yet', () => {
     sources: [sourceRow(1, '客户邮件')],
   }));
   const text = fullText(card);
-  assert.ok(text.includes('尚未展开来源'), 'the review area names the empty viewing state');
+  assert.ok(text.includes('尚未打开来源'), 'the review area names the empty viewing state');
   assert.ok(text.includes('展开来源原文会记录下来，保存复核时随结论写入审计。'),
     'the form explains that opened sources are recorded with the conclusion');
 });
@@ -275,8 +275,8 @@ test('expanding a source records its ID and updates the review area live', () =>
   assert.ok(s1, 'the source details are expandable');
   s1.openToggle(true);
   assert.deepEqual(views, [{ id: 'o1', sourceId: 'S1' }], 'the view action is sent with the source ID');
-  assert.ok(fullText(card).includes('已展开来源 · 客户邮件'), 'the review area lists the opened source');
-  assert.ok(!fullText(card).includes('尚未展开来源'), 'the empty-state label goes away once a source is opened');
+  assert.ok(fullText(card).includes('已打开 · 客户邮件'), 'the review area lists the opened source');
+  assert.ok(!fullText(card).includes('尚未打开来源'), 'the empty-state label goes away once a source is opened');
   // 引文摘录（不展示来源原文）不计为展开来源；重复展开不重复发送。
   s1.openToggle(true);
   assert.equal(views.length, 1);
@@ -316,7 +316,7 @@ test('a viewing state from the server is restored after a re-render', () => {
   const first = detailsWith('客户记录 · 客户邮件');
   assert.equal(first?.open, true, 'an already-opened source stays open across renders');
   const card = renderOne(entry());
-  assert.ok(fullText(card).includes('已展开来源 · 客户邮件'), 'the opened source is still listed after a re-render');
+  assert.ok(fullText(card).includes('已打开 · 客户邮件'), 'the opened source is still listed after a re-render');
 });
 
 test('a new draft starts a fresh viewing state; the old record stays in the audit', () => {
@@ -330,7 +330,7 @@ test('a new draft starts a fresh viewing state; the old record stays in the audi
       detail: JSON.stringify({ analysisId: null, draftId: 'd1', evidence: 'e1', viewed: ['S1'],
         viewedNames: ['客户邮件'], resolution: '已核对。' }) }],
   });
-  assert.ok(auditText().includes('已展开来源 · 客户邮件'), 'the audit names the sources the review had opened');
+  assert.ok(auditText().includes('已打开 · 客户邮件'), 'the audit names the sources the review had opened');
   render({
     opportunities: [item({
       draft_id: 'd2', sources: [sourceRow(1, '客户邮件')],
@@ -340,8 +340,8 @@ test('a new draft starts a fresh viewing state; the old record stays in the audi
       detail: JSON.stringify({ analysisId: null, draftId: 'd2', evidence: 'e2', viewed: [],
         viewedNames: [], resolution: '重新核对新草稿。' }) }],
   });
-  assert.ok(auditText().includes('尚未展开来源'), 'the fresh review is shown without the stale viewing record');
-  assert.ok(!auditText().includes('已展开来源 · 客户邮件'), 'old opened sources are not carried into the new review');
+  assert.ok(auditText().includes('尚未打开来源'), 'the fresh review is shown without the stale viewing record');
+  assert.ok(!auditText().includes('已打开 · 客户邮件'), 'old opened sources are not carried into the new review');
 });
 
 test('the audit lists each opened-source action and a review with no opened sources', () => {
@@ -362,13 +362,13 @@ test('the audit lists each opened-source action and a review with no opened sour
     ],
   });
   const text = auditText();
-  assert.ok(text.includes('尚未展开来源'), 'a review without opened sources says so');
-  assert.ok(text.includes('已展开来源 · 客户邮件、客户邮件'), 'a review lists the sources it had opened');
+  assert.ok(text.includes('尚未打开来源'), 'a review without opened sources says so');
+  assert.ok(text.includes('已打开 · 客户邮件、客户邮件'), 'a review lists the sources it had opened');
   assert.ok(text.includes('展开来源原文 · 客户邮件'), 'each opened-source action is auditable');
-  // 功能上线前的旧记录没有 viewed 字段：只有一条（id 5）被标注「尚未展开来源」。
+  // 功能上线前的旧记录没有 viewed 字段：只有一条（id 5）被标注「尚未打开来源」。
   const emptyNotes = [];
   const walk = node => {
-    if (node.tag === 'p' && node.text === '尚未展开来源') emptyNotes.push(node);
+    if (node.tag === 'p' && node.text === '尚未打开来源') emptyNotes.push(node);
     (node.children ?? []).forEach(walk);
   };
   (auditPanel().children ?? []).forEach(walk);

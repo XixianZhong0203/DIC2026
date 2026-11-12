@@ -568,7 +568,28 @@ const english = {
   "采用澄清问题": "Use the clarification question",
   // 回答卡把 founder_only / unconfirmed 声明列入待核实项（evidence-answer follow-up 窗口）新增键。
   // 只追加在 english 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
-  "待核实": "Pending verification"
+  "待核实": "Pending verification",
+  // 逐条人工复核（per-claim-review 窗口）新增键。只追加在 english 对象末尾；
+  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  "已打开": "Opened",
+  "尚未打开来源": "No sources opened yet",
+  "模型核查失败": "Model verification failed",
+  "查看证据": "View evidence",
+  "改写后的说法": "Rewritten statement",
+  "改写并重新核查": "Rewrite and re-verify",
+  "删除此句并重新核查": "Delete this sentence and re-verify",
+  "我已核实并愿意承担这条说法": "I have verified this statement and stand behind it",
+  "记录担保理由": "Record why you stand behind it",
+  "已记录担保": "Guarantee recorded",
+  "逐条处理：改写或删除后重新核查，或保留并记录担保理由。": "Handle each claim: rewrite or delete and re-verify, or keep it and record why you stand behind it.",
+  "处理方式：改写或删除后保存新草稿并重新核查；保留这条声明时，明确记录「我已核实并愿意承担这条说法」并附理由。": "How to handle: rewriting or deleting saves a new draft and re-verifies; keeping the claim requires the explicit statement that you verified it and stand behind it, with a reason.",
+  "实际核查范围：0 条声明（核查未完成）。请重新核查，或在下方记录人工复核结论。": "Actual verification scope: 0 claims (verification incomplete). Re-run it, or record a manual review conclusion below.",
+  "实际核查范围：0 条声明（核查未完成）。请重新核查，或记录人工复核结论，再批准发送。": "Actual verification scope: 0 claims (verification incomplete). Re-run it or record a manual review before approving the send.",
+  "核查已过期：来源或草稿已变更，请重新核查，或在下方记录人工复核结论。": "Verification is stale: sources or the draft changed. Re-run it, or record a manual review conclusion below.",
+  "本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。请在下方记录人工复核结论。": "No claims were extracted; the verification scope is empty and does not count as passing. Record a manual review conclusion below.",
+  "批准发送将记录由创始人担保的声明": "Approving the send records which claims the founder stands behind",
+  "请先核查关键声明，或针对当前草稿记录人工复核结论，再批准发送。": "Verify the key claims or record a manual review for this draft before approving the send.",
+  "逐条改写、删除或记录担保后，再批准发送。": "Rewrite, delete, or stand behind each flagged claim before approving the send."
 };
 
 export function translate(language, phrase) {

@@ -933,3 +933,199 @@ test('a mixed draft verification (one supported claim, one refuted) blocks the s
   assert.equal(current().sent, 0);
   assert.equal(state().audit.some(event => event.action === 'simulated_send'), false);
 });
+
+// —— 逐条人工复核（per-claim review）：验收场景 ——
+// 一份草稿含两条问题声明（一条仅创始人陈述、一条证据不足）：
+// 只处理一条时继续拦截（审计区分已处理/未处理）；两条都处理并明确批准后模拟发送，
+// 批准审计记录哪些声明由创始人担保。改写或删除后保存新草稿并重新核查，
+// 修改正文、收件人或来源后，旧的逐条复核结论失效。
+
+// 草稿目标核查按正文内容提取声明：「合同已签署」仅由创始人来源支持（founder_only），
+// 「业绩翻番」证据不足（unknown）。引文逐字出自来源原文。
+const twoProblemClaims = user => {
+  if (!user.mode) return JSON.stringify({ status: 'unknown', quote: EVIDENCE, reason: 'Unconfirmed.' });
+  if (!user.draft) {
+    return JSON.stringify({ claims: user.dimensions.map(dimension => ({
+      id: dimension, dimension, text: dimension, status: 'unknown', items: [],
+      missing: '缺少确认信息', rewrite: '尚未确认',
+    })) });
+  }
+  const body = user.draft.body;
+  const claims = [];
+  if (body.includes('合同已签署')) {
+    claims.push({ id: '签约状态', dimension: '签约状态', text: '合同已签署',
+      items: [{ evidenceId: 'S1', stance: 'supports', quote: '已签约', note: '创始人陈述已完成事实' }],
+      missing: '', rewrite: '' });
+  }
+  if (body.includes('业绩翻番')) {
+    claims.push({ id: '公司业绩', dimension: '公司业绩', text: '业绩翻番',
+      items: [], missing: '缺少业绩数据', rewrite: '业绩稳步增长' });
+  }
+  return JSON.stringify({ claims });
+};
+
+test('acceptance: two problem claims — handling one keeps the send blocked; handling both unlocks it', async () => {
+  const { call, current, state } = fixture(twoProblemClaims);
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户签约了吗？', language: 'zh-CN' });
+  await call('opportunity-source', { id, name: '创始人记录', kind: 'founder', text: '客户已签约。', language: 'zh-CN' });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '合同已签署，业绩翻番。' });
+  const draft_id = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', draft_id, language: 'zh-CN' });
+  assert.equal(current().claims.claims.length, 2);
+  assert.deepEqual(current().claims.claims.map(claim => claim.status), ['founder_only', 'unknown']);
+  // 两条都没有处理：直接请求发送被拦，审计列出全部未处理声明。
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  let blocked = JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail);
+  assert.equal(blocked.reason, 'claims_founder_only');
+  assert.deepEqual(blocked.claims.map(claim => claim.id), ['签约状态', '公司业绩']);
+  assert.deepEqual(blocked.handled, []);
+  // 只处理一条（逐条担保）：另一条仍未处理 → 继续拦截。
+  call('opportunity-claim-resolution', {
+    id, draft_id, claim_id: '签约状态', text: '合同已签署', reason: '已核对客户邮件，愿意承担这条说法。' });
+  assert.equal(current().claimResolutions.length, 1);
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  blocked = JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail);
+  assert.equal(blocked.reason, 'claims_unresolved');
+  assert.deepEqual(blocked.claims.map(claim => claim.id), ['公司业绩']);
+  assert.deepEqual(blocked.handled, ['签约状态']);
+  // 另一条改写：保存新草稿并重新核查（旧担保因草稿变化自动失效）。
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '合同已签署，业绩稳步增长。' });
+  const newDraft = current().draft_id;
+  assert.notEqual(newDraft, draft_id);
+  assert.equal(current().claimResolutions.length, 0, 'the old guarantee no longer binds to the new draft');
+  assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_stale');
+  await call('opportunity-claims', { id, target: 'draft', draft_id: newDraft, language: 'zh-CN' });
+  assert.equal(current().claims.claims.length, 1, 'the rewritten claim is gone from the new verification');
+  assert.equal(current().claims.claims[0].status, 'founder_only');
+  // 仍被拦：新草稿下的担保需要重新记录。
+  assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  // 两条都已处理（一条改写删除、一条重新担保）→ 明确批准并模拟发送。
+  call('opportunity-claim-resolution', {
+    id, draft_id: newDraft, claim_id: '签约状态', text: '合同已签署', reason: '已核对客户邮件，愿意承担这条说法。' });
+  call('opportunity-send', { id, draft_id: newDraft });
+  assert.equal(current().sent, 1);
+  const approved = JSON.parse(state().audit.find(event => event.action === 'approved').detail);
+  assert.equal(approved.evidence, 'human_guarantee');
+  assert.deepEqual(approved.guaranteedClaims, [{
+    claimId: '签约状态', text: '合同已签署', dimension: '签约状态', status: 'founder_only' }]);
+  assert.ok(state().audit.some(event => event.action === 'claim_guaranteed'));
+});
+
+test('changing the recipient expires per-claim guarantees; the body and sources still bind them', async () => {
+  const { call, current, state } = fixture(twoProblemClaims);
+  const { id } = current();
+  await call('opportunity-source', { id, name: '创始人记录', kind: 'founder', text: '客户已签约。', language: 'zh-CN' });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '合同已签署。' });
+  const oldDraft = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', draft_id: oldDraft, language: 'zh-CN' });
+  assert.equal(current().claims.claims[0].status, 'founder_only');
+  call('opportunity-claim-resolution', { id, draft_id: oldDraft, claim_id: '签约状态', text: '合同已签署', reason: '已核实。' });
+  assert.equal(current().claimResolutions.length, 1);
+  // 收件人变化 → 新草稿版本 → 旧担保失效；核查也过期。
+  call('opportunity-draft', { id, recipient: 'other@example.test', body: '合同已签署。' });
+  const newDraft = current().draft_id;
+  assert.equal(current().claimResolutions.length, 0);
+  assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_stale');
+  await call('opportunity-claims', { id, target: 'draft', draft_id: newDraft, language: 'zh-CN' });
+  assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_founder_only');
+  // 针对新草稿重新担保后放行。
+  call('opportunity-claim-resolution', { id, draft_id: newDraft, claim_id: '签约状态', text: '合同已签署', reason: '换收件人后重新核实。' });
+  call('opportunity-send', { id, draft_id: newDraft });
+  assert.equal(current().sent, 1);
+});
+
+test('adding a source expires per-claim guarantees; re-guaranteeing on the new source set unlocks the send', async () => {
+  const { call, current, state } = fixture(twoProblemClaims);
+  const { id } = current();
+  await call('opportunity-source', { id, name: '创始人记录', kind: 'founder', text: '客户已签约。', language: 'zh-CN' });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '合同已签署。' });
+  const draft_id = current().draft_id;
+  await call('opportunity-claims', { id, target: 'draft', draft_id, language: 'zh-CN' });
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: '签约状态', text: '合同已签署', reason: '已核实。' });
+  assert.equal(current().claimResolutions.length, 1);
+  // 来源集合变化：核查自动按新来源重跑，但旧担保绑定旧来源版本 → 失效。
+  await call('opportunity-source', { id, name: '客户补充', date: '2026-07-10', kind: 'customer',
+    text: '客户表示会考虑合作。', language: 'zh-CN' });
+  assert.equal(current().claimsStale, false, 'the re-run is bound to the new source set');
+  assert.equal(current().claimResolutions.length, 0);
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_founder_only');
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: '签约状态', text: '合同已签署', reason: '新来源后重新核实。' });
+  call('opportunity-send', { id, draft_id });
+  assert.equal(current().sent, 1);
+});
+
+test('claim resolutions are validated against the current draft review; supported claims cannot be guaranteed', async () => {
+  const claimsDouble = user => {
+    if (!user.mode) return JSON.stringify({ status: 'unknown' });
+    if (!user.draft) {
+      return JSON.stringify({ claims: user.dimensions.map(dimension => ({
+        id: dimension, dimension, text: dimension, status: 'unknown', items: [],
+        missing: '缺少确认信息', rewrite: '尚未确认',
+      })) });
+    }
+    const claims = [];
+    if (user.draft.body.includes('客户已签约')) {
+      claims.push({ id: '签约状态', dimension: '签约状态', text: '客户已签约',
+        items: [], missing: '缺少合同记录', rewrite: '尚未确认签约' });
+    }
+    if (user.draft.body.includes('业绩翻番')) {
+      claims.push({ id: '公司业绩', dimension: '公司业绩', text: '业绩翻番',
+        items: [], missing: '缺少业绩数据', rewrite: '业绩稳步增长' });
+    }
+    if (user.draft.body.includes('交付日期')) {
+      claims.push({ id: '对外承诺', dimension: '对外承诺', text: '交付日期待确认',
+        items: [{ evidenceId: 'E1', stance: 'supports', quote: EVIDENCE, note: '原文即证据' }],
+        missing: '', rewrite: '' });
+    }
+    return JSON.stringify({ claims });
+  };
+  const { call, current, state } = fixture(claimsDouble);
+  const { id } = current();
+  // 还没有草稿。
+  assert.throws(() => call('opportunity-claim-resolution',
+    { id, claim_id: 'x', text: 'x', reason: 'y' }), { status: 409, message: '还没有已保存的草稿。' });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: '客户已签约，业绩翻番，交付日期待确认。' });
+  const draft_id = current().draft_id;
+  // 草稿声明尚未核查。
+  assert.throws(() => call('opportunity-claim-resolution',
+    { id, draft_id, claim_id: '签约状态', text: '客户已签约', reason: 'x' }),
+    { status: 409, message: '草稿声明尚未核查，请先核查关键声明。' });
+  await call('opportunity-claims', { id, target: 'draft', draft_id, language: 'en' });
+  const byStatus = new Map(current().claims.claims.map(claim => [claim.id, claim.status]));
+  assert.equal(byStatus.get('签约状态'), 'unknown');
+  assert.equal(byStatus.get('公司业绩'), 'unknown');
+  assert.equal(byStatus.get('对外承诺'), 'supported');
+  // 过期草稿版本。
+  assert.throws(() => call('opportunity-claim-resolution',
+    { id, draft_id: 'stale', claim_id: '签约状态', text: '客户已签约', reason: 'x' }), { status: 409 });
+  // 声明不在当前核查的被标记声明中（原句对不上）。
+  assert.throws(() => call('opportunity-claim-resolution',
+    { id, draft_id, claim_id: '公司业绩', text: '不存在的说法', reason: 'x' }),
+    { status: 409, message: '这条声明不在当前核查的被标记声明中，请刷新后重试。' });
+  // 核查已通过的声明不需要担保。
+  assert.throws(() => call('opportunity-claim-resolution',
+    { id, draft_id, claim_id: '对外承诺', text: '交付日期待确认', reason: 'x' }),
+    { status: 409, message: '这条声明不在当前核查的被标记声明中，请刷新后重试。' });
+  // 理由必填。
+  assert.throws(() => call('opportunity-claim-resolution',
+    { id, draft_id, claim_id: '公司业绩', text: '业绩翻番', reason: '' }), { status: 400 });
+  // 两条被标记声明都担保后，即使没有分析、没有整体人工复核，也可批准发送。
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: '签约状态', text: '客户已签约', reason: '已核实。' });
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: '公司业绩', text: '业绩翻番', reason: '已核实。' });
+  assert.equal(current().claimResolutions.length, 2);
+  call('opportunity-send', { id, draft_id });
+  assert.equal(current().sent, 1);
+  const approved = JSON.parse(state().audit.find(event => event.action === 'approved').detail);
+  assert.equal(approved.evidence, 'human_guarantee');
+  assert.deepEqual(approved.guaranteedClaims.map(claim => claim.claimId), ['签约状态', '公司业绩']);
+  // 草稿再变化：旧绑定自然失效，空范围按 claims_no_claims 处理（此处只验证担保清空）。
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: 'x' });
+  await call('opportunity-claims', { id, target: 'draft', draft_id: current().draft_id, language: 'en' });
+  assert.equal(current().claims.claims.length, 0, 'empty scope after rewrite');
+  assert.equal(current().claimResolutions.length, 0, 'old binding expired with the new draft');
+});
