@@ -22,6 +22,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -254,6 +255,38 @@ record('the Beta reply sees the imported rule and its original workspace/source'
   'has rule=' + systemOf(req2).includes('八折') + ' provenance=' + systemOf(req2).includes('来自「' + ALPHA + '」的记录'));
 record('still no Alpha chat history in the Beta request',
   !restOf(req2).includes('客户承诺过什么') && !restOf(req2).includes('赠送三个月') ? 'PASS' : 'FAIL');
+
+console.log('\n8) Reserved project names and Chinese delivery retrieval');
+const beforeRejected = modelRequests.length;
+const invalidCreate = await api('/api/conversation', { project: ' * ' });
+const invalidMove = await api('/api/conversation-edit', { id: convB, project: '*' });
+const invalidChat = await api('/api/chat', { project: '*', text: '交付安排', language: 'zh-CN' });
+record('the wildcard cannot create, move or start a conversation',
+  [invalidCreate, invalidMove, invalidChat].every(result => result.status === 400) &&
+    modelRequests.length === beforeRejected ? 'PASS' : 'FAIL');
+const legacy = (await api('/api/conversation', { project: ALPHA })).data.conversation;
+const database = new DatabaseSync(path.join(dataDir, 'daymark.sqlite'));
+database.prepare('UPDATE conversations SET project = ? WHERE id = ?').run('*', legacy);
+database.close();
+const legacyChat = await api('/api/chat', { conversation_id: legacy, text: '交付安排', language: 'zh-CN' });
+const legacyIntent = await api('/api/chat-intent', { conversation_id: legacy, text: '交付安排', language: 'zh-CN' });
+const legacyCandidates = await api('/api/memory-candidates', { conversation_id: legacy, language: 'zh-CN' });
+const legacyState = (await api('/api/state')).data;
+record('legacy wildcard chats cannot send stored context to a model',
+  [legacyChat, legacyIntent, legacyCandidates].every(result => result.status === 409) &&
+    !legacyState.workspaces.includes('*') && modelRequests.length === beforeRejected ? 'PASS' : 'FAIL');
+
+const alphaDelivery = '交付安排：客户周三收货，地址在松园。';
+const betaDelivery = '交付安排：客户周五收货，地址在竹园。';
+const alphaSaved = await api('/api/memory', { kind: 'fact', scope: ALPHA, body: alphaDelivery, source: '客户甲邮件' });
+const betaSaved = await api('/api/memory', { kind: 'fact', scope: BETA, body: betaDelivery, source: '客户乙邮件' });
+const deliveryChat = await api('/api/chat', {
+  conversation_id: convB, text: '客户的交付安排是什么？', language: 'zh-CN',
+});
+const deliveryPrompt = systemOf(modelRequests.at(-1));
+record('Chinese retrieval includes Beta delivery and excludes the similar Alpha record',
+  alphaSaved.ok && betaSaved.ok && deliveryChat.ok &&
+    deliveryPrompt.includes(betaDelivery) && !deliveryPrompt.includes(alphaDelivery) ? 'PASS' : 'FAIL');
 
 const summary = {
   at: new Date().toISOString(), modelLive: true,

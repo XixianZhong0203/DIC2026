@@ -640,7 +640,9 @@ const english = {
   "完整性": "Integrity",
   "校验通过": "Verified",
   "无完整性记录": "No integrity record",
-  "档案内容与批准记录不一致": "Archive content does not match the approval record"
+  "档案内容与批准记录不一致": "Archive content does not match the approval record",
+  "「*」用于全局记忆，不能用作项目名称。": "The name * is reserved for global memory.",
+  "这个旧会话使用了保留的项目名称。请在正确的项目中开启新会话。": "This older conversation uses a reserved project name. Start a new conversation in the correct project."
 };
 
 export function translate(language, phrase) {

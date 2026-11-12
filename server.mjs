@@ -113,13 +113,27 @@ const log = (type, version, id = null) =>
 const latestAlignment = () => JSON.parse(db.prepare('SELECT report FROM alignment_runs ORDER BY id DESC LIMIT 1').get()?.report ?? 'null');
 const memoryDecisions = () => db.prepare('SELECT * FROM memory_decisions ORDER BY id DESC LIMIT 100').all();
 // Conversations without an explicit project belong to the default project.
-const projectOf = conversation => (conversation?.project ?? '').trim() || 'DIC2026';
+const isReservedProject = project => typeof project === 'string' && project.trim() === GLOBAL_SCOPE;
+const projectOf = conversation => {
+  const project = (conversation?.project ?? '').trim();
+  return project && !isReservedProject(project) ? project : 'DIC2026';
+};
+function checkProjectName(project) {
+  if (isReservedProject(project)) fail(400, '「*」用于全局记忆，不能用作项目名称。');
+}
+function checkConversationScope(conversation) {
+  if (isReservedProject(conversation?.project)) {
+    fail(409, '这个旧会话使用了保留的项目名称。请在正确的项目中开启新会话。');
+  }
+}
 // Known workspaces: every named conversation project plus every non-global
 // memory scope, so a workspace that only has memory so far is still a valid
 // switch target.
 const workspaces = () => {
   const names = new Set();
-  for (const row of db.prepare("SELECT DISTINCT project FROM conversations WHERE project != ''").all()) names.add(row.project);
+  for (const row of db.prepare("SELECT DISTINCT project FROM conversations WHERE project != ''").all()) {
+    if (!isReservedProject(row.project)) names.add(row.project);
+  }
   for (const row of db.prepare('SELECT DISTINCT scope FROM memory WHERE scope != ? AND scope != \'\'').all(GLOBAL_SCOPE)) names.add(row.scope);
   return [...names].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
 };
@@ -235,6 +249,7 @@ ${decisions ? '用户在决策卡中的选择及其状态（状态决定效力�
 async function reply(question, language, temporary, conversationId, projectName, requestModel = null, requestEffort = null) {
   let conversation;
   if (conversationId == null) {
+    checkProjectName(projectName);
     // A new conversation inherits the workspace named by the caller (an
     // empty/absent project stays ungrouped and reads the default scope). Its
     // model/thinking level comes from the composer selector; values outside
@@ -251,6 +266,7 @@ async function reply(question, language, temporary, conversationId, projectName,
     conversation = conversationId;
   }
   const conv = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversation);
+  checkConversationScope(conv);
   // 该会话配置的模型与思考档位决定本轮调用（未配置时用默认模型和端点默认档位）。
   const { entry, effort } = conversationModel(conv, defaultEntry);
   if (!modelConfigured(entry)) fail(503, '未配置模型，无法使用对话。');
@@ -365,6 +381,7 @@ const mutations = {
     if (!Number.isSafeInteger(conversation_id) ||
         !db.prepare('SELECT id FROM conversations WHERE id = ?').get(conversation_id)) fail(404, '找不到这个对话。');
     const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversation_id);
+    checkConversationScope(conversation);
     const scope = projectOf(conversation);
     const history = conversationHistory(conversation.id)
       .filter((message, index, list) => !(message.review?.temporary ||
@@ -540,6 +557,7 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
     const known = workspaces();
     const conv = conversation_id == null ? null : db.prepare('SELECT * FROM conversations WHERE id = ?').get(conversation_id);
     if (conversation_id != null && !conv) fail(404, '找不到这个对话。');
+    checkConversationScope(conv);
     const current = (conv?.project ?? '').trim();
     const base = { current, workspaces: known };
     const rule = ruleIntent(input, known, current);
@@ -593,6 +611,7 @@ compare — 跨工作区比较/对照，或同时涉及多个工作区的资料
   '/api/conversation': ({ title, project, model: chatModel, effort }) => {
     if (title != null && typeof title !== 'string') fail(400, '请检查输入内容。');
     if (project != null && (typeof project !== 'string' || project.length > 60)) fail(400, '请检查输入内容。');
+    checkProjectName(project);
     const entry = modelById(chatModel) ?? defaultEntry;
     if (entry.codex && effort && !Object.hasOwn(entry.efforts, effort)) fail(400, '此模型不支持该思考强度。');
     const { effort: initialEffort } = conversationModel({ model: entry.id, effort }, entry);
@@ -614,11 +633,12 @@ compare — 跨工作区比较/对照，或同时涉及多个工作区的资料
     }
     if (project != null) {
       if (typeof project !== 'string' || project.length > 60) fail(400, '请检查输入内容。');
+      checkProjectName(project);
       // 跨工作区隔离（workspace-isolation 窗口）：带历史消息的会话跨工作区
       // 移动，会把旧报价、承诺和决策卡带进新工作区的后续上下文，因此拒绝；
       // 没有消息的会话只是换个归属，可以移动。
       const conversation = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
-      if (projectOf(conversation) !== projectOf({ project }) &&
+      if ((isReservedProject(conversation.project) || projectOf(conversation) !== projectOf({ project })) &&
           db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? LIMIT 1').get(id)) {
         fail(409, '带消息的会话不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡进入新工作区。请在目标工作区开新对话，或明确带入需要的记录。');
       }
@@ -638,6 +658,8 @@ compare — 跨工作区比较/对照，或同时涉及多个工作区的资料
     const source = db.prepare('SELECT * FROM conversations WHERE id = ?').get(id);
     const goal = db.prepare('SELECT * FROM conversations WHERE id = ?').get(target);
     if (!source || !goal) fail(404, '找不到这个对话。');
+    checkConversationScope(source);
+    checkConversationScope(goal);
     if (projectOf(source) !== projectOf(goal)) {
       fail(409, '跨工作区不能直接并入：旧对话的报价、承诺和决策卡不会跟着历史一起移动。请在目标工作区开新对话，或明确带入需要的记录。');
     }

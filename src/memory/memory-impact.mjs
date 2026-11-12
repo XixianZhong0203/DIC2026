@@ -59,10 +59,11 @@ export function normalizeCandidates(raw, { messageIds = [], project = '' }) {
   for (const item of items.slice(0, 6)) {
     if (typeof item?.content !== 'string' || !item.content.trim() || item.content.length > 1000) continue;
     if (!MEMORY_KINDS.includes(item.kind) || !MEMORY_STATUSES.includes(item.status)) continue;
-    let scope = typeof item.scope === 'string' ? item.scope.trim() : '';
-    if (!scope) scope = project;
+    const requestedScope = typeof item.scope === 'string' ? item.scope.trim().toLowerCase() : '';
+    const globalPreference = item.kind === 'preference' && item.status === 'confirmed' &&
+      (requestedScope === GLOBAL_SCOPE || requestedScope === 'global');
+    const scope = globalPreference ? GLOBAL_SCOPE : project;
     if (!scope || scope.length > 100) continue;
-    if (scope === 'global' || scope.toLowerCase() === 'global') scope = GLOBAL_SCOPE;
     const messageId = item.message_id == null ? null
       : (Number.isSafeInteger(item.message_id) && ids.has(item.message_id) ? item.message_id : null);
     out.push({ content: item.content.trim(), kind: item.kind, scope,
