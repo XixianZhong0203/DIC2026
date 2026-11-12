@@ -510,7 +510,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           audit(id, 'blocked', { action: 'send', reason: 'draft_changed' });
           fail(409, '草稿已变更，请重新核对后确认。');
         }
-        if (item.sent) return;
+        // 重复批准同一版本：不再静默吞掉——回 409 并留 duplicate_send 审计。
+        if (item.sent) {
+          audit(id, 'duplicate_send', { draftId: draft_id });
+          fail(409, '这版草稿已批准发送，重复批准不会产生新的发送。');
+        }
         let analysis = null;
         try {
           analysis = item.analysis ? JSON.parse(item.analysis) : null;
@@ -593,13 +597,22 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         }
         // 批准发送时记录放行依据：人工复核 / 逐条担保 / 模型核查通过。
         // 走逐条担保放行时，同时记录最终批准发送时哪些声明由创始人担保。
+        // 原子占位：只有 sent 仍为 0 时占位成功；并发重复批准里只有一个请求
+        // 能占到并写 approved/simulated_send，其余落 duplicate_send + 409。
+        let claimed = false;
         transaction(() => {
-          db.prepare('UPDATE opportunities SET sent=1 WHERE id=?').run(id);
-          audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: mode('send'),
-            evidence: humanOverride ? 'human_review' : (guaranteedClaims.length ? 'human_guarantee' : 'model_supported'),
-            ...(guaranteedClaims.length ? { guaranteedClaims } : {}) });
-          audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
+          claimed = db.prepare('UPDATE opportunities SET sent=1 WHERE id=? AND sent=0').run(id).changes > 0;
+          if (claimed) {
+            audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: mode('send'),
+              evidence: humanOverride ? 'human_review' : (guaranteedClaims.length ? 'human_guarantee' : 'model_supported'),
+              ...(guaranteedClaims.length ? { guaranteedClaims } : {}) });
+            audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
+          }
         });
+        if (!claimed) {
+          audit(id, 'duplicate_send', { draftId: draft_id });
+          fail(409, '这版草稿已批准发送，重复批准不会产生新的发送。');
+        }
       },
       '/api/opportunity-benchmark': async ({ language }) => {
         const results = [];

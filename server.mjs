@@ -193,7 +193,7 @@ async function modelReply(question, language, active, recent, decisions = null, 
 用户明确接受对已有规则或偏好的变更（如「同意改期」）时，也填写 conflict（被修订的旧记录），让用户在决策卡中确认是替换还是并存。
 对方（如客户）提出变更（如要求改交付日期）时，那是未确认提议，不是冲突也不是已确认事实：填写 proposal（body 为提议的一句话摘要，message_id 为来源消息编号），并在答复中说明此前已确认的规则在你明确接受前仍然有效。
 缺少当前版本证据时说无法确认。区分准备和执行。你没有任何发布或修改记忆的权限。
-当前结构化发布状态：${JSON.stringify({ version: release, verified: events().some(event => event.type === 'verified' && event.version === release) })}。该状态优先于旧聊天或旧记忆中的测试结论。
+当前结构化发布状态：${JSON.stringify({ version: release, verified: (() => { const current = draft(); return Boolean(current) && releaseStatus(current, events()) === 'ready'; })() })}。该状态优先于旧聊天或旧记忆中的测试结论。
 ${decisions ? '用户在决策卡中的选择及其状态（状态决定效力："已应用"＝变更已在本地实际生效，"那个时段""刚确认的偏好"等后续指代只可解析到这些已应用的选择及其回执；"已选待确认"＝尚未写入，实际安排未变；"确认失败"与"暂缓未生效"＝本地数据未变更，回答必须以卡片中"当前实际生效"的安排和现有记录为准，不得当作已确认的变更）：\n' + decisions.lines.join('\n') +
  (decisions.temporary ? '\n仅本次例外（只适用于这轮答复）：' + decisions.temporary : '') : ''}
 引用编号只从以下记录中选择。记录：${JSON.stringify(active)}` },
@@ -669,7 +669,12 @@ compare — 跨工作区比较/对照，或同时涉及多个工作区的资料
   '/api/draft': ({ body }) => {
     db.prepare('INSERT INTO drafts VALUES (?,?,?)').run(randomUUID(), release, required(body, 12000));
   },
-  '/api/verify': () => log('verified', release),
+  '/api/verify': () => {
+    // 测试通过记录绑定当前草稿（修订）：之后编辑草稿产生新版本时，
+    // 该记录不再放行，须对新版本重新验证。
+    const current = draft();
+    log('verified', release, current ? current.id : null);
+  },
   '/api/publish': ({ id }) => {
     const current = draft();
     if (!current || current.id !== id) {
@@ -677,7 +682,11 @@ compare — 跨工作区比较/对照，或同时涉及多个工作区的资料
       fail(409, '草稿已变更，请重新核对后确认。');
     }
     const status = releaseStatus(current, events());
-    if (status === 'published') return;
+    if (status === 'published') {
+      // 重复发布：不产生第二条 published，但尝试本身留审计记录。
+      log('duplicate_publish', release, current.id);
+      return;
+    }
     const target = { kind: 'publish', scope: current.version, revision: current.id };
     // This route is the local user's explicit action. Chat has no access to it.
     const authority = { ...target, principal: 'owner', state: 'accepted' };

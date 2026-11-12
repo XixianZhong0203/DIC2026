@@ -50,6 +50,7 @@ const english = {
   "调用模型": "Model requested",
   "blocked_revision": "Blocked because the draft changed",
   "blocked_evidence": "Blocked because verification was missing",
+  "duplicate_publish": "Duplicate release attempt (already released)",
   "处理记录": "Processing trace",
   "替换": "Replace",
   "核查候选": "Reviewed candidates",

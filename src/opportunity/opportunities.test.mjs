@@ -45,9 +45,10 @@ test('uncertainty blocks sending until a human records how to resolve it', async
   assert.throws(() => call('opportunity-review', { id, analysis_id: 'old', resolution: 'Clarify the date.' }), { status: 409 });
   call('opportunity-review', { id, analysis_id: analysis.analysisId, draft_id, resolution: 'The draft asks for clarification.' });
   call('opportunity-send', { id, draft_id });
-  call('opportunity-send', { id, draft_id });
-  assert.deepEqual(state().audit.slice(0, 3).map(event => event.action),
-    ['simulated_send', 'approved', 'human_reviewed']);
+  // 重复批准同一版本：可见的 409 + duplicate_send 审计，不再静默吞掉。
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  assert.deepEqual(state().audit.slice(0, 4).map(event => event.action),
+    ['duplicate_send', 'simulated_send', 'approved', 'human_reviewed']);
 });
 
 test('sending with no analysis and no review is blocked, then allowed after human review', async () => {
