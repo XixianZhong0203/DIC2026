@@ -70,7 +70,7 @@ const versionedFiles = ['src/opportunity/claims.mjs', 'src/opportunity/opportuni
   'src/alignment/alignment.mjs', 'server.mjs',
   'evaluation/draft-verification/run.mjs', 'evaluation/draft-verification/models.json'];
 function codeVersion() {
-  const hash = p => createHash('sha256').update(readFileSync(join(repoRoot, p))).digest('hex').slice(0, 16);
+  const hash = p => createHash('sha256').update(readFileSync(resolvePath(repoRoot, p))).digest('hex').slice(0, 16);
   let gitHead = 'unknown';
   let dirtyFiles = [];
   try {
