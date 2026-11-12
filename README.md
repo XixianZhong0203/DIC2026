@@ -101,7 +101,7 @@ Use Node.js 24 or later. Start the server with `npm start` and open [Daymark](ht
 
 Copy [.env.example](.env.example) to `.env` and configure a model. The [catalog](src/models.mjs) includes Qwen 3.8 27B through LiteLLM and OpenCode models. You can also set `OPENAI_BASE_URL` and `MODEL_ID` for a custom OpenAI-compatible endpoint such as Ollama. Use the composer menu to choose a model and the available thinking level for each conversation. The conversation selection applies only to chat replies. Topic detection, memory extraction and review, lead analysis, claim verification, and evaluations use the configured default model. Hosted model requests can include relevant records and recent conversation.
 
-For the optional GPT models, sign in to the Codex CLI, run `node scripts/codex-bridge.mjs` in a separate terminal, then set `DAYMARK_CODEX_PICKER=1` in Daymark's `.env` and restart. GPT‑6.1 Sol offers **Low**. GPT‑5.6 Sol, Terra, and Luna offer **Low** or **Medium**. The local bridge uses standard processing. Availability depends on the signed-in Codex account. The workspace database lives in `data/`.
+For the optional GPT models, sign in to the Codex CLI, run `node scripts/local-gpt-bridge.mjs` in a separate terminal, then set `DAYMARK_CODEX_PICKER=1` in Daymark's `.env` and restart. GPT‑6.1 Sol offers **Low**. GPT‑5.6 Sol, Terra, and Luna offer **Low** or **Medium**. The local bridge uses standard processing. Availability depends on the signed-in Codex account. The workspace database lives in `data/`.
 
 ## Appendix · Memory ranking
 

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { codexSelection } from '../src/chat/codex-models.mjs';
+import { codexSelection } from '../src/chat/local-gpt-models.mjs';
 const cli = process.argv[2] || 'codex';
 const port = Number(process.env.DAYMARK_CODEX_BRIDGE_PORT ?? 4334);
 const host = '127.0.0.1';

@@ -14,7 +14,7 @@
 //      在响应与审计中可见）、草稿编辑与批准同时提交（旧版本被拒、最终状态一致）。
 //   发布闸门 —— 旧版本发布被拒；「测试通过」记录必须绑定当前草稿版本（编辑后旧
 //      记录不再放行）；并行重复发布恰一条 published，重复尝试留审计。
-//   Codex bridge —— scripts/codex-bridge.mjs 的本地入口边界：错误 Host / 任意 Origin
+//   Codex bridge —— scripts/local-gpt-bridge.mjs 的本地入口边界：错误 Host / 任意 Origin
 //      / 非 JSON / 目录外模型一律被拒；合法本地请求经确定性 stub CLI 完成完整响应
 //      （不触真实 Codex CLI，不产生模型费用）。
 //
@@ -194,7 +194,7 @@ await writeFile(stubPath, '#!/usr/bin/env node\n' +
   'if (i >= 0 && i + 1 < args.length) writeFileSync(args[i + 1], "（模拟 Codex）stub 回复：按请求格式回答。");\n');
 await chmod(stubPath, 0o755);
 
-const bridge = spawn(process.execPath, ['scripts/codex-bridge.mjs', stubPath], {
+const bridge = spawn(process.execPath, ['scripts/local-gpt-bridge.mjs', stubPath], {
   cwd: root, env: { ...process.env, DAYMARK_CODEX_BRIDGE_PORT: String(bridgePort) },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
