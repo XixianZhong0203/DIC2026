@@ -1,4 +1,4 @@
-import { codexModels } from './chat/codex-models.mjs';
+import { codexModels } from './chat/local-gpt-models.mjs';
 
 // Daymark 模型目录（multi-model 窗口）：聊天界面上可按会话切换的全部模型。
 //

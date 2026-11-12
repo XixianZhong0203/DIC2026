@@ -887,6 +887,235 @@ test('an occurrence at the very start of the body has no prefix and is not a tru
   assert.deepEqual(claim.failedChecks, []);
 });
 
+// —— 引文上下文检查：逐字存在还不够，片段必须自带完整语义（验收线）——
+// 「The contract is not signed」里的「signed」、「approved pending board review」里的「approved」、
+// 「合同尚未签署」里的「签署」、「需经董事会批准后生效」里的「生效」——截掉否定词/条件/限定的
+// 片段不能采信：不能凭它判 supported（也不能凭它判 refuted），结构化失败原因带原文子句与原因。
+
+test('acceptance: a fragment stripped of its negation (not signed) is missing key context, never supported', () => {
+  const sources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: 'The contract is not signed.' }];
+  const [claim] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: 'The contract is signed', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: 'signed', note: '只引了 signed' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(claim.status, 'incomplete', 'a truncated fragment cannot establish support');
+  const check = claim.failedChecks.find(entry => entry.reason === 'quote_missing_context');
+  assert.ok(check, 'the structured failure reason is recorded');
+  assert.equal(check.clause, 'The contract is not signed.');
+  assert.ok(check.detail.includes('not') && check.detail.includes('The contract is not signed.'), 'the reason names the cut negation and the original clause');
+  const item = claim.items[0];
+  assert.equal(item.valid, false);
+  assert.ok(item.reasons.includes('quote_missing_context'));
+  assert.equal(item.quoteContext.clause, 'The contract is not signed.');
+  assert.equal(item.quoteContext.occurrences, 1);
+  assert.equal(item.quoteContext.issue.reason, 'quote_missing_context');
+});
+
+test('acceptance: a fragment stripped of a trailing condition (approved pending board review) is missing key context', () => {
+  const sources = [{ id: 'S1', source: '董事会记录', date: null, kind: 'customer', text: 'The proposal was approved pending board review.' }];
+  for (const quote of ['approved', 'was approved']) {
+    const [claim] = verifyClaims([{
+      id: '签约状态', dimension: '签约状态', text: 'The proposal is approved', status: 'supported',
+      items: [{ evidenceId: 'S1', stance: 'supports', quote, note: '只引了片段' }],
+      missing: '', rewrite: '',
+    }], sources);
+    assert.equal(claim.status, 'incomplete', `quote ${JSON.stringify(quote)} must be flagged`);
+    const check = claim.failedChecks.find(entry => entry.reason === 'quote_missing_context');
+    assert.ok(check, `structured reason for ${JSON.stringify(quote)}`);
+    assert.equal(check.clause, 'The proposal was approved pending board review.');
+    assert.ok(check.detail.includes('pending board review'), 'the reason names the cut qualifier');
+  }
+});
+
+test('acceptance: Chinese fragments cut from 尚未签署 / 需经董事会批准后生效 are flagged; quoting the full clause is admissible', () => {
+  const cases = [
+    { text: '合同尚未签署。', cut: '签署', full: '尚未签署' },
+    { text: '合同需经董事会批准后生效。', cut: '生效', full: '需经董事会批准后生效' },
+  ];
+  for (const { text, cut, full } of cases) {
+    const sources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer', text }];
+    const [cutClaim] = verifyClaims([{
+      id: '签约状态', dimension: '签约状态', text: cut, status: 'supported',
+      items: [{ evidenceId: 'S1', stance: 'supports', quote: cut, note: '只引了片段' }],
+      missing: '', rewrite: '',
+    }], sources);
+    assert.equal(cutClaim.status, 'incomplete', `${cut} alone must be flagged in ${text}`);
+    const check = cutClaim.failedChecks.find(entry => entry.reason === 'quote_missing_context');
+    assert.ok(check, `structured reason for ${cut}`);
+    assert.equal(check.clause, text);
+    // 引完整子句（否定/条件都在引文内）即可采信：同一来源判 supported。
+    const [fullClaim] = verifyClaims([{
+      id: '签约状态', dimension: '签约状态', text: full, status: 'supported',
+      items: [{ evidenceId: 'S1', stance: 'supports', quote: full, note: '引完整子句' }],
+      missing: '', rewrite: '',
+    }], sources);
+    assert.equal(fullClaim.status, 'supported', `quoting ${full} is admissible`);
+    assert.deepEqual(fullClaim.failedChecks, []);
+  }
+});
+
+test('acceptance: complete, unambiguous quotes stating the fact still support the claim', () => {
+  const positives = [
+    { text: 'The contract is signed.', quote: 'signed' },
+    { text: '客户已于 7 月 5 日签署合同。', quote: '签署合同' },
+    { text: '合同已签署。', quote: '已签署' },
+  ];
+  for (const { text, quote } of positives) {
+    const sources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer', text }];
+    const [claim] = verifyClaims([{
+      id: '签约状态', dimension: '签约状态', text: quote, status: 'supported',
+      items: [{ evidenceId: 'S1', stance: 'supports', quote, note: '完整且明确的引文' }],
+      missing: '', rewrite: '',
+    }], sources);
+    assert.equal(claim.status, 'supported', `quote ${JSON.stringify(quote)} in ${text} is a clean support`);
+    assert.deepEqual(claim.failedChecks, []);
+    assert.equal(claim.items[0].quoteContext.issue, null);
+  }
+});
+
+test('a truncated fragment is inadmissible for refutation as well, and a parallel clean quote from another source cannot rescue the flagged item', () => {
+  const sources = [
+    { id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: 'The contract is not signed.' },
+    { id: 'S2', source: '合同记录', date: '2026-07-05', kind: 'customer', text: '客户已于 7 月 5 日签署合同。' },
+  ];
+  // 截断片段作 refutes 同样不可采信。
+  const [refuted] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: 'The contract is signed', status: 'refuted',
+    items: [{ evidenceId: 'S1', stance: 'refutes', quote: 'signed', note: '只引了 signed' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(refuted.status, 'incomplete');
+  assert.ok(refuted.failedChecks.some(check => check.reason === 'quote_missing_context'));
+  // 即使同一条声明里另有干净的支持引文，被标记的引文仍使核查未完成（确定性校验不放过坏引文）。
+  const [mixed] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: 'The contract is signed', status: 'supported',
+    items: [
+      { evidenceId: 'S1', stance: 'supports', quote: 'signed', note: '被截断的片段' },
+      { evidenceId: 'S2', stance: 'supports', quote: '签署合同', note: '完整引文' },
+    ],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(mixed.status, 'incomplete');
+  assert.ok(mixed.failedChecks.some(check => check.reason === 'quote_missing_context' && check.clause === 'The contract is not signed.'));
+  assert.equal(mixed.items[1].valid, true, 'the clean parallel quote stays admissible');
+});
+
+test('acceptance: the same fragment in different clauses needs the negated occurrence flagged first, then a longer quote to disambiguate', () => {
+  const mixedSources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: '客户表示合同已签署。客户表示合同尚未签署。' }];
+  const [mixed] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '签署', note: '两处出现' }],
+    missing: '', rewrite: '',
+  }], mixedSources);
+  // 多处出现且其中一处被截掉否定词：按缺少关键上下文标记，指出问题子句。
+  assert.equal(mixed.status, 'incomplete');
+  const check = mixed.failedChecks.find(entry => entry.reason === 'quote_missing_context');
+  assert.ok(check);
+  assert.equal(check.clause, '客户表示合同尚未签署。');
+  assert.equal(mixed.items[0].quoteContext.occurrences, 2);
+
+  const ambiguousSources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: '客户希望下月签约。客户希望下季度签约。' }];
+  const [ambiguous] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户希望下月签约', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望', note: '短片段多处出现' }],
+    missing: '', rewrite: '',
+  }], ambiguousSources);
+  // 两处都干净但子句不同（含义不同）：要求更完整的引文消除歧义。
+  assert.equal(ambiguous.status, 'incomplete');
+  const ambiguousCheck = ambiguous.failedChecks.find(entry => entry.reason === 'quote_ambiguous');
+  assert.ok(ambiguousCheck, 'ambiguity is a structured failure reason');
+  assert.ok(ambiguousCheck.detail.includes('2'));
+  // 更长、唯一出现的片段消除歧义后即可采信。
+  const [longer] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: '客户希望下月签约', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望下月签约', note: '唯一出现的更长片段' }],
+    missing: '', rewrite: '',
+  }], ambiguousSources);
+  assert.equal(longer.status, 'supported');
+  assert.deepEqual(longer.failedChecks, []);
+  assert.equal(longer.items[0].quoteContext.occurrences, 1);
+});
+
+test('english periods delimit clauses: repeated fragments in different sentences are ambiguous, decimals do not split', () => {
+  const sources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer',
+    text: 'The terms were revised. The revised terms apply.' }];
+  const [ambiguous] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: 'The terms were revised', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: 'revised', note: '两处出现' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(ambiguous.status, 'incomplete');
+  const check = ambiguous.failedChecks.find(entry => entry.reason === 'quote_ambiguous');
+  assert.ok(check, 'cross-sentence repetition is ambiguous');
+  assert.equal(ambiguous.items[0].quoteContext.occurrences, 2);
+  assert.equal(ambiguous.items[0].quoteContext.clause, 'The terms were revised.');
+  // 引完整子句后唯一出现即可采信。
+  const [clean] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: 'The terms were revised', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: 'The terms were revised', note: '唯一出现' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(clean.status, 'supported');
+  assert.deepEqual(clean.failedChecks, []);
+
+  // 小数里的句点不划界：「3.5」不切开句子，其后的否定仍作用于片段。
+  const decSources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer',
+    text: 'The discount of 3.5 is not final.' }];
+  const [dec] = verifyClaims([{
+    id: '签约状态', dimension: '签约状态', text: 'The discount is final', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: 'final', note: '被截断片段' }],
+    missing: '', rewrite: '',
+  }], decSources);
+  assert.equal(dec.status, 'incomplete');
+  assert.ok(dec.failedChecks.some(entry => entry.reason === 'quote_missing_context'
+    && entry.clause === 'The discount of 3.5 is not final.'));
+});
+
+test('a condition phrase separated by a comma still counts as cut-off context; a plain temporal adverb does not', () => {
+  const sources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer',
+    text: '合同需经董事会批准后，生效。' }];
+  const [cut] = verifyClaims([{
+    id: '生效条件', dimension: '生效条件', text: '合同生效', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '生效', note: '只引了片段' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(cut.status, 'incomplete');
+  const check = cut.failedChecks.find(entry => entry.reason === 'quote_missing_context');
+  assert.equal(check.clause, '合同需经董事会批准后，生效。');
+  // 引文把条件短语与逗号都带上即可采信。
+  const [full] = verifyClaims([{
+    id: '生效条件', dimension: '生效条件', text: '合同需经董事会批准后生效', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '需经董事会批准后，生效', note: '引完整条件句' }],
+    missing: '', rewrite: '',
+  }], sources);
+  assert.equal(full.status, 'supported');
+  assert.deepEqual(full.failedChecks, []);
+
+  // 简单时间状语（无条件标记）不算截掉的关键上下文，不误报。
+  const plainSources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer',
+    text: '合同生效后付款。' }];
+  const [plain] = verifyClaims([{
+    id: '付款条件', dimension: '付款条件', text: '合同生效后付款', status: 'supported',
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '付款', note: '时间状语非关键条件' }],
+    missing: '', rewrite: '',
+  }], plainSources);
+  assert.equal(plain.status, 'supported');
+  assert.deepEqual(plain.failedChecks, []);
+});
+
+test('the prompt tells the model to quote the whole clause and to disambiguate repeated fragments', () => {
+  const sources = [{ id: 'E1', source: '客户线程', date: null, kind: 'evidence', text: EVIDENCE }];
+  const zh = claimMessages({ mode: 'draft', draft: { recipient: 'a@b.c', body: '合同已签署。' },
+    dimensions: DRAFT_DIMENSIONS, sources, language: 'zh-CN' })[0].content;
+  assert.ok(zh.includes('引完整子句') && zh.includes('合同尚未签署') && zh.includes('需经董事会批准后生效')
+    && zh.includes('只出现一次'), 'the zh prompt covers clause-internal cuts and disambiguation');
+  const en = claimMessages({ mode: 'draft', draft: { recipient: 'a@b.c', body: '合同已签署。' },
+    dimensions: DRAFT_DIMENSIONS, sources, language: 'en' })[0].content;
+  assert.ok(en.includes('quote the whole clause') && en.includes('"The contract is not signed"')
+    && en.includes('occurs exactly once'), 'the en prompt covers clause-internal cuts and disambiguation');
+});
+
 // —— draftChecks：占位符与未被抽取的高风险句（独立于模型输出的确定性检查） ——
 
 test('a second commitment in one sentence that was not extracted surfaces as unextracted', () => {

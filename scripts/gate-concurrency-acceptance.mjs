@@ -14,7 +14,7 @@
 //      在响应与审计中可见）、草稿编辑与批准同时提交（旧版本被拒、最终状态一致）。
 //   发布闸门 —— 旧版本发布被拒；「测试通过」记录必须绑定当前草稿版本（编辑后旧
 //      记录不再放行）；并行重复发布恰一条 published，重复尝试留审计。
-//   Codex bridge —— scripts/codex-bridge.mjs 的本地入口边界：错误 Host / 任意 Origin
+//   Codex bridge —— scripts/local-gpt-bridge.mjs 的本地入口边界：错误 Host / 任意 Origin
 //      / 非 JSON / 目录外模型一律被拒；合法本地请求经确定性 stub CLI 完成完整响应
 //      （不触真实 Codex CLI，不产生模型费用）。
 //
@@ -194,7 +194,7 @@ await writeFile(stubPath, '#!/usr/bin/env node\n' +
   'if (i >= 0 && i + 1 < args.length) writeFileSync(args[i + 1], "（模拟 Codex）stub 回复：按请求格式回答。");\n');
 await chmod(stubPath, 0o755);
 
-const bridge = spawn(process.execPath, ['scripts/codex-bridge.mjs', stubPath], {
+const bridge = spawn(process.execPath, ['scripts/local-gpt-bridge.mjs', stubPath], {
   cwd: root, env: { ...process.env, DAYMARK_CODEX_BRIDGE_PORT: String(bridgePort) },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -260,7 +260,7 @@ async function finish(code) {
   cleanup();
   mock.close();
   await rm(dataDir, { recursive: true, force: true });
-  process.exit(code);
+  process.exit(code || (fail ? 1 : 0));
 }
 if (!up) {
   console.log('FAIL 服务未就绪\n' + serverLog + '\n' + bridgeLog);
@@ -568,8 +568,41 @@ async function stateTable() {
     await saveDraft(id, '客户已签约。（v2）');
     const r = await sendDraft(id, (await opById(id)).draft_id);
     const reason = lastBlocked(await auditOf(id))?.detail?.reason;
-    expect(r.status === 409 && reason === 'claims_stale' && (await opById(id)).claimResolutions.length === 0,
+    expect(r.status === 409 && reason === 'claims_previous_unresolved' && (await opById(id)).claimResolutions.length === 0,
       'G-4 草稿换版 → 逐条担保与核查同时过期，旧担保不放行（当前有效担保为空）', reason);
+  }
+  {
+    const id = await createLead({ evidence: '客户表示愿意签约。' });
+    const flaggedText = '合同已签署';
+    const accurateText = '客户已表达签约意向';
+    const intentClaim = { id: '客户意向', dimension: '客户意向', text: accurateText,
+      match: [{ contains: '愿意签约', kind: 'customer', stance: 'supports', note: '客户只确认意向。' }] };
+    await saveDraft(id, flaggedText + '。' + accurateText + '。');
+    qClaims([unknownSpec('签约状态', flaggedText)]);
+    await runClaims(id);
+    await saveDraft(id, '您好。' + flaggedText + '。' + accurateText + '。');
+    await api('/api/opportunity-draft', { id, recipient: 'second@example.test', body: (await opById(id)).body });
+    const draftId = (await opById(id)).draft_id;
+    const reviewed = await reviewDraft(id, { draft_id: draftId, resolution: '整体复核了当前草稿。' });
+    const before = await sendDraft(id, draftId);
+    expect(reviewed.ok && before.status === 409 && sendEvents(await auditOf(id)).length === 0 &&
+      lastBlocked(await auditOf(id))?.detail?.reason === 'claims_previous_unresolved',
+    'G-4a 两次编辑后，整体复核不能批准仍保留风险原句的草稿', before.error);
+    qClaims([intentClaim]);
+    await runClaims(id);
+    const partial = await sendDraft(id, draftId);
+    expect(partial.status === 409 && sendEvents(await auditOf(id)).length === 0 &&
+      (await opById(id)).previousUnresolvedClaims.some(claim => claim.text === flaggedText),
+    'G-4b 新核查漏抽旧风险句时仍然拦截', partial.error);
+
+    await saveDraft(id, accurateText + '。');
+    qClaims([intentClaim]);
+    await runClaims(id);
+    const rewritten = (await opById(id)).draft_id;
+    const sent = await sendDraft(id, rewritten);
+    const duplicate = await sendDraft(id, rewritten);
+    expect(sent.ok && duplicate.status === 409 && sendEvents(await auditOf(id)).length === 1,
+      'G-4c 改写并重查后只能产生一次模拟发送', sent.error);
   }
   {
     const id = await createLead();

@@ -631,7 +631,18 @@ const english = {
   "导出发送档案": "Export send archive",
   // 核查与草稿覆盖（claim-verification 窗口，窗口 1 发送门槛）新增键。
   // 只追加在 english 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
-  "高风险句未被覆盖": "Uncovered high-risk clauses"
+  "高风险句未被覆盖": "Uncovered high-risk clauses",
+  "上一版仍有未处理声明": "Unresolved claim from an earlier draft",
+  "已复核上一版保留声明": "Reviewed claims carried over from an earlier draft",
+  "风险声明改写后需重新核查": "Recheck the draft after rewriting or removing a flagged claim",
+  "思考档位": "Thinking tier",
+  "端点默认": "Endpoint default",
+  "完整性": "Integrity",
+  "校验通过": "Verified",
+  "无完整性记录": "No integrity record",
+  "档案内容与批准记录不一致": "Archive content does not match the approval record",
+  "「*」用于全局记忆，不能用作项目名称。": "The name * is reserved for global memory.",
+  "这个旧会话使用了保留的项目名称。请在正确的项目中开启新会话。": "This older conversation uses a reserved project name. Start a new conversation in the correct project."
 };
 
 export function translate(language, phrase) {

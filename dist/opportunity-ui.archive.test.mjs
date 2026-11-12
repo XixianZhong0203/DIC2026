@@ -62,8 +62,11 @@ function makeArchive(overrides = {}) {
       evidence: '客户表示希望周五交付。', evidence_kind: 'customer', recipient: 'client@example.test',
       body: '我们确认周五交付。', draft_id: 'd1', sent: 1 },
     sourceRows: [{ id: 1, name: '客户确认邮件', date: '2026-07-10', kind: 'customer', text: '客户确认周五交付。' }],
+    // 核查配置记录在核查记录里（核查时刻落库的真实配置），构建器不再从 ctx 接收。
     claims: { target: 'draft', at: '2026-07-11T00:00:00Z', error: null, draftId: 'd1',
       recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
+      model: 'test double', effort: null,
+      prompts: { claims: 'claims-v1', analysis: 'analysis-v1' },
       claims: [{ id: '对外承诺', dimension: '对外承诺', text: '我们确认周五交付', status: 'supported',
         items: [{ evidenceId: 'S1', stance: 'supports', quote: '客户确认周五交付', note: '客户确认',
           revises: [], valid: true, reasons: [],
@@ -75,8 +78,6 @@ function makeArchive(overrides = {}) {
     reviewViewed: { draftId: 'd1', evidence: 'e1', viewed: ['S1'] },
     viewingTrail: [{ sourceId: 'S1', name: '客户确认邮件', kind: 'customer', draftId: 'd1', evidence: 'e1',
       time: '2026-07-11T09:00:00.000Z' }],
-    model: 'test double', effort: null,
-    prompts: { claims: 'claims-v1', analysis: 'analysis-v1' },
     approval: { draftId: 'd1', recipient: 'client@example.test', body: '我们确认周五交付。', bodyHash: 'h',
       mode: 'approval', basis: 'model_supported', resolution: null,
       sentAt: '2026-07-11T10:00:00.000Z', sent: true },
@@ -123,6 +124,7 @@ test('the archive entry shows the approval context, the viewing record, and the 
   assert.ok(text.includes('草稿正文'), 'the draft body is embedded');
   assert.ok(text.includes('已发送'), 'the sent state is named');
   assert.ok(text.includes('核查模型 · test double'), 'the verification model is recorded');
+  assert.ok(text.includes('思考档位 · 端点默认'), 'the recorded endpoint-default tier is named');
   assert.ok(text.includes('提示版本 · claims-v1 / analysis-v1'), 'the prompt versions are recorded');
   assert.ok(text.includes('查看记录 · 已展开来源 · 客户确认邮件'), 'the viewing record is named');
   const link = find(card, node => node.tag === 'a');
@@ -161,4 +163,23 @@ test('each frozen archive renders separately with its own basis and export link'
   const hrefs = new Set(links.map(link => link.href));
   assert.ok(hrefs.has('/api/opportunity-archive/' + pending.archiveId));
   assert.ok(hrefs.has('/api/opportunity-archive/' + sent.archiveId));
+});
+
+test('an archive from a check record without config fields shows 未记录, and integrity lines render by status', () => {
+  const { renderOne, fullText } = harness();
+  const legacy = makeArchive({
+    // 旧核查记录缺配置字段：构建器无从补写，verification 全为 null。
+    claims: { target: 'draft', at: '2026-07-11T00:00:00Z', error: null, draftId: 'd1',
+      recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y', claims: [] },
+  });
+  assert.equal(legacy.verification.model, null, 'the builder sources config from the check record, not ctx');
+  const text = fullText(renderOne(item({ archives: [legacy] })));
+  assert.ok(text.includes('未记录'), 'a check record without config fields shows 未记录');
+  assert.ok(!text.includes('完整性'), 'an archive without an integrity record renders no integrity line');
+  const verified = fullText(renderOne(item({ archives: [{ ...legacy, integrity: { status: 'verified' } }] })));
+  assert.ok(verified.includes('完整性 · 校验通过'), 'a verified archive is named');
+  const mismatched = fullText(renderOne(item({ archives: [{ ...legacy, integrity: { status: 'mismatch' } }] })));
+  assert.ok(mismatched.includes('完整性 · 档案内容与批准记录不一致'), 'a mismatching archive is named');
+  const unrecorded = fullText(renderOne(item({ archives: [{ ...legacy, integrity: { status: 'unrecorded' } }] })));
+  assert.ok(unrecorded.includes('完整性 · 无完整性记录'), 'an unrecorded archive is named');
 });

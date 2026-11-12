@@ -2,7 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaimReport, verifyClaims, draftChecks,
   evidenceHash, sha256, CLAIMS_PROMPT_VERSION } from './claims.mjs';
 import { evidenceAnswer } from '../evidence/answer.mjs';
-import { buildSendArchive, createArchiveTable, storeArchive } from './archive.mjs';
+import { buildSendArchive, createArchiveTable, storeArchive, archiveIntegrity } from './archive.mjs';
 
 // 代码归属（窗口对齐）：人工复核来源记录窗口负责 review_viewed 列、/api/opportunity-review-view、
 // reviewSourceIndex/currentViewed、human_reviewed 审计中的 viewed/viewedNames 与 state().reviewViewed。
@@ -64,11 +64,59 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   if (!opportunityColumns.some(column => column.name === 'claims_review')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN claims_review TEXT');
   }
+  if (!opportunityColumns.some(column => column.name === 'draft_claim_flags')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN draft_claim_flags TEXT');
+  }
   if (!opportunityColumns.some(column => column.name === 'review_draft')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review_draft TEXT');
   }
   if (!opportunityColumns.some(column => column.name === 'review_evidence')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review_evidence TEXT');
+  }
+  // Keep the last flagged verdict for each exact statement independently of the latest check.
+  const draftFlags = item => {
+    const stored = safeParse(item.draft_claim_flags);
+    if (Array.isArray(stored)) return stored.flatMap(flag => {
+      const text = (flag?.text ?? flag?.claimText)?.trim();
+      const id = flag?.id ?? flag?.claimId;
+      return text && id ? [{ ...flag.claim, ...flag, id, text, flaggedDraftId: flag.flaggedDraftId ?? flag.draftId }] : [];
+    });
+    const legacy = safeParse(item.claims_review);
+    return legacy?.target === 'draft' && !legacy.error
+      ? (legacy.claims ?? []).filter(claim => claim.status !== 'supported' && claim.text?.trim())
+        .map(claim => ({ ...claim, text: claim.text.trim(), flaggedDraftId: legacy.draftId }))
+      : [];
+  };
+  const duplicateClaimIds = review => review?.warnings?.some(warning => warning.reason === 'duplicate_claim_id');
+  const verifiedDraft = (item, review, sources) => review?.target === 'draft' &&
+    !review.error && !duplicateClaimIds(review) && !claimsStale(item, review, sources) &&
+    Boolean(review.claims?.length);
+  const previousClaimFlags = (item, review, sources) => {
+    const fresh = verifiedDraft(item, review, sources);
+    return draftFlags(item).filter(flag => (item.body ?? '').includes(flag.text) &&
+      (!fresh || !review.claims.some(claim => claim.text?.trim() === flag.text)));
+  };
+  const requiresCheckAfterRemoval = (item, review, sources) =>
+    !(review?.target === 'draft' && !review.error && !claimsStale(item, review, sources)) &&
+    draftFlags(item).some(flag => !(item.body ?? '').includes(flag.text));
+  const carriedGuarantee = (guarantees, flag) => guarantees.find(row => row.claimText === flag.text);
+  function nextDraftFlags(item, review, sources) {
+    const flags = new Map(draftFlags(item).map(flag => [flag.text, flag]));
+    if (!verifiedDraft(item, review, sources)) return [...flags.values()];
+    for (const text of flags.keys()) {
+      if (!(item.body ?? '').includes(text) ||
+          review.claims.some(claim => claim.status === 'supported' && claim.text?.trim() === text) &&
+          !review.claims.some(claim => claim.status !== 'supported' && claim.text?.trim() === text)) {
+        flags.delete(text);
+      }
+    }
+    for (const claim of review.claims) {
+      const text = claim.text?.trim();
+      if (text && claim.status !== 'supported' && (item.body ?? '').includes(text)) {
+        flags.set(text, { ...claim, text, flaggedDraftId: item.draft_id });
+      }
+    }
+    return [...flags.values()];
   }
   // 人工复核的查看状态（JSON：{draftId, evidence, viewed: [来源 ID]}），绑定当前草稿 + 当前来源集合。
   if (!opportunityColumns.some(column => column.name === 'review_viewed')) {
@@ -279,18 +327,26 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     const draftChecksResult = target === 'draft'
       ? draftChecks(item.body ?? '', claims.map(claim => claim.text))
       : null;
-    const review = { ...binding, model, promptVersion: CLAIMS_PROMPT_VERSION, effort: null, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
+    const review = { ...binding, model, effort: null, prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION }, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
     transaction(() => {
-      db.prepare('UPDATE opportunities SET claims_review=? WHERE id=?').run(JSON.stringify(review), id);
+      const current = get(id);
+      const currentSources = sourcesFor(id);
+      const currentAnalysis = safeParse(current.analysis);
+      if (review.target === 'draft' ? claimsStale(current, review, currentSources)
+        : (currentAnalysis?.analysisId ?? null) !== review.analysisId ||
+          evidenceHash(current, currentSources) !== review.evidenceHash) return;
+      const flags = nextDraftFlags(current, review, currentSources);
+      db.prepare('UPDATE opportunities SET claims_review=?, draft_claim_flags=? WHERE id=?')
+        .run(JSON.stringify(review), JSON.stringify(flags), id);
       audit(id, error ? 'claims_failed' : 'claims_checked', {
         target, error: error ?? null,
         claims: claims.map(claim => ({ id: claim.id, status: claim.status })),
       });
+      // Lead answers use their own analysis check, even after the draft is checked.
+      if (target === 'analysis') {
+        db.prepare('UPDATE opportunities SET analysis_claims=? WHERE id=?').run(JSON.stringify(review), id);
+      }
     });
-    // 针对分析的核查结果另存专用副本（analysis_claims），供「当前回答」读取。
-    if (target === 'analysis') {
-      db.prepare('UPDATE opportunities SET analysis_claims=? WHERE id=?').run(JSON.stringify(review), id);
-    }
     recomputeAnswer(id);
     return review;
   }
@@ -310,13 +366,18 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     }
     // 发送档案：每条机会的不可变快照（新→旧）。界面从档案展示三档来源与批准上下文；
     // 活动来源被修改后，这里仍是发送时刻的原文。
-    const archiveRows = db.prepare('SELECT opportunity, archive FROM opportunity_archives ORDER BY created DESC, rowid DESC').all();
+    const archiveRows = db.prepare('SELECT id, opportunity, archive FROM opportunity_archives ORDER BY created DESC, rowid DESC').all();
     const archivesByOpportunity = new Map();
     for (const row of archiveRows) {
+      // 完整性：对存储字节重算 SHA-256 与审计记录的 digest 比对（列的原始字节在手，无需另查）。
+      // 字节被改成非法 JSON（篡改）时不跳过整行：archiveId 就是表主键，无需解析也能定位审计记录。
+      const integrity = archiveIntegrity(db, row.opportunity, row.id, row.archive);
+      if (!archivesByOpportunity.has(row.opportunity)) archivesByOpportunity.set(row.opportunity, []);
       try {
-        if (!archivesByOpportunity.has(row.opportunity)) archivesByOpportunity.set(row.opportunity, []);
-        archivesByOpportunity.get(row.opportunity).push(JSON.parse(row.archive));
-      } catch {}
+        archivesByOpportunity.get(row.opportunity).push({ ...JSON.parse(row.archive), archiveId: row.id, integrity });
+      } catch {
+        archivesByOpportunity.get(row.opportunity).push({ archiveId: row.id, integrity });
+      }
     }
     const opportunities = db.prepare('SELECT * FROM opportunities ORDER BY rowid DESC').all()
       .map(item => {
@@ -324,9 +385,16 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const claims = item.claims_review ? safeParse(item.claims_review) : null;
         // 当前回答：结构化回答（已确认/缺少/下一步/指向来源）的解析结果；未分析时为 null。
         const answer = item.answer ? safeParse(item.answer) : null;
-        return { ...item, sources, claims, claimsStale: claimsStale(item, claims, sources),
+        const guarantees = currentGuarantees(item, sources);
+        const previous = previousClaimFlags(item, claims, sources);
+        const covered = verifiedDraft(item, claims, sources) ? claims.claims.map(claim => claim.text) : [];
+        const carryoverChecks = previous.length ? draftChecks(item.body ?? '',
+          [...covered, ...previous.filter(flag => carriedGuarantee(guarantees, flag)).map(flag => flag.text)]) : null;
+        return { ...item, sources, claims, previousUnresolvedClaims: previous, carryoverChecks,
+          claimEvidenceHash: previous.length ? evidenceHash(item, sources) : null,
+          needsClaimRecheck: requiresCheckAfterRemoval(item, claims, sources), claimsStale: claimsStale(item, claims, sources),
           reviewStale: reviewStale(item, sources), reviewViewed: currentViewed(item, sources), answer,
-          claimResolutions: currentGuarantees(item, sources),
+          claimResolutions: guarantees,
           draftPlaceholders: item.draft_id ? draftChecks(item.body ?? '', []).placeholders : [],
           archives: archivesByOpportunity.get(item.id) ?? [] };
       });
@@ -478,20 +546,24 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
       // 保留（担保）写入 claim_resolutions，结论绑定具体声明（claimId + 原句）、
       // 草稿版本与来源版本——草稿、收件人或来源变化后该结论自动失效。
       // 发送端核对每条被标记声明都有对应处理（见 /api/opportunity-send）。
-      '/api/opportunity-claim-resolution': ({ id, draft_id, claim_id, text, reason }) => {
+      '/api/opportunity-claim-resolution': ({ id, draft_id, claim_id, text, reason, evidence_hash }) => {
         const item = get(id);
         if (!item.draft_id) fail(409, '还没有已保存的草稿。');
-        if (draft_id != null && draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
+        if (draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
         const sourceRows = sourcesFor(id);
-        const review = item.claims_review ? safeParse(item.claims_review) : null;
-        if (!review || review.target !== 'draft') fail(409, '草稿声明尚未核查，请先核查关键声明。');
-        if (claimsStale(item, review, sourceRows)) fail(409, '核查已过期（草稿或来源已变更），请重新核查后确认。');
-        if (review.error) fail(409, '声明核查未完成，请重新核查后确认。');
+        const review = safeParse(item.claims_review);
         const flagged = flaggedOf(item, review, sourceRows) ?? [];
-        const claim = flagged.find(row => row.id === claim_id && row.text === text) ?? null;
-        if (!claim) fail(409, '这条声明不在当前核查的被标记声明中，请刷新后重试。');
+        const previous = previousClaimFlags(item, review, sourceRows);
+        const claim = [...flagged, ...previous].find(row => row.id === claim_id && row.text === text);
+        if (!claim) {
+          if (review?.target !== 'draft') fail(409, '草稿声明尚未核查，请先核查关键声明。');
+          if (claimsStale(item, review, sourceRows)) fail(409, '核查已过期（草稿或来源已变更），请重新核查后确认。');
+          if (review.error) fail(409, '声明核查未完成，请重新核查后确认。');
+          fail(409, '这条声明不在当前核查的被标记声明中，请刷新后重试。');
+        }
         const note = required(reason, 2000);
         const evidence = evidenceHash(item, sourceRows);
+        if (evidence_hash != null && evidence_hash !== evidence) fail(409, '来源已变更，请重新核对后确认。');
         const entry = { claimId: claim.id, claimText: claim.text, action: 'guarantee',
           statement: '我已核实并愿意承担这条说法', reason: note,
           draftId: item.draft_id, evidence, at: new Date().toISOString() };
@@ -568,14 +640,27 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         // 人工复核放行同时校验两个绑定：当前草稿版本 + 当前来源集合。
         // 旧记录缺少来源版本（review_evidence 为空）时不放行，需重新复核。
         const review = item.claims_review ? safeParse(item.claims_review) : null;
-        const verifiedScope = review?.target === 'draft' && !review.error &&
-          !claimsStale(item, review, sourceRows) && Boolean(review.claims?.length);
+        const verifiedScope = verifiedDraft(item, review, sourceRows);
         const currentReview = Boolean(item.review) && item.review_draft === draft_id &&
           item.review_evidence === evidenceHash(item, sourceRows);
+        const guarantees = currentGuarantees(item, sourceRows);
+        const previous = previousClaimFlags(item, review, sourceRows);
+        const unhandledPrevious = previous.filter(flag => !carriedGuarantee(guarantees, flag));
+        if (unhandledPrevious.length) {
+          audit(id, 'blocked', { action: 'send', reason: 'claims_previous_unresolved',
+            previousClaims: unhandledPrevious.map(flag => ({ claimId: flag.id, text: flag.text, draftId: flag.flaggedDraftId })) });
+          fail(409, '上一版仍有未处理声明：' + unhandledPrevious.map(flag => flag.text).join('、'));
+        }
+        if (currentReview && requiresCheckAfterRemoval(item, review, sourceRows)) {
+          audit(id, 'blocked', { action: 'send', reason: 'claims_recheck_after_edit' });
+          fail(409, '风险声明已改写或删除，请重新核查当前草稿后再批准。');
+        }
         const humanOverride = !verifiedScope && currentReview;
-        const draftCoverage = draftChecks(item.body ?? '', verifiedScope ? review.claims.map(claim => claim.text) : []);
+        const guaranteeOverride = !verifiedScope && previous.length > 0;
+        const covered = verifiedScope ? review.claims.map(claim => claim.text) : [];
+        const draftCoverage = draftChecks(item.body ?? '', [...covered, ...previous.map(flag => flag.text)]);
         const placeholders = draftCoverage.placeholders;
-        const uncovered = verifiedScope ? draftCoverage.unextracted : [];
+        const uncovered = verifiedScope || previous.length ? draftCoverage.unextracted : [];
         const unresolvedCoverage = uncovered.filter(clause => !currentReview || !item.review.includes(clause));
         if (placeholders.length || unresolvedCoverage.length) {
           const reason = placeholders.length
@@ -590,8 +675,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           audit(id, 'blocked', { action: 'send', reason: 'claims_incomplete' });
           fail(409, '声明核查包含重复声明 ID，请重新核查。');
         }
-        let guaranteedClaims = [];
-        if (!humanOverride) {
+        const guaranteedClaims = previous.map(flag => ({
+          claimId: carriedGuarantee(guarantees, flag).claimId, text: flag.text,
+          dimension: flag.dimension, status: flag.status,
+        }));
+        if (!humanOverride && !guaranteeOverride) {
           if (review && review.target === 'draft') {
             // 草稿目标核查存在时，声明门禁先于分析层面门槛执行：逐条声明的核查结论
             // （含逐条担保）是更具体、更可操作的拦截依据，且逐条担保放行路径
@@ -612,12 +700,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
             }
             // 逐条核对：被标记声明中已有创始人逐条担保（绑定当前草稿与当前来源版本）的
             // 不计为未处理；仍有条目未处理时按原分类拦截（改写/删除后重新核查，或逐条记录担保）。
-            const guarantees = currentGuarantees(item, sourceRows);
             const guaranteed = claim => guarantees.some(row => row.claimId === claim.id && row.claimText === claim.text);
             const unresolved = (review.claims ?? []).filter(claim => claim.status !== 'supported');
             const unhandled = unresolved.filter(claim => !guaranteed(claim));
-            guaranteedClaims = unresolved.filter(guaranteed).map(claim => ({
-              claimId: claim.id, text: claim.text, dimension: claim.dimension, status: claim.status }));
+            guaranteedClaims.push(...unresolved.filter(guaranteed).map(claim => ({
+              claimId: claim.id, text: claim.text, dimension: claim.dimension, status: claim.status })));
             const founderOnly = unhandled.filter(claim => claim.status === 'founder_only');
             const unconfirmed = unhandled.filter(claim => claim.status === 'unconfirmed');
             if (unhandled.length) {
@@ -675,11 +762,10 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
               reviewedCoverage: uncovered };
             const archive = buildSendArchive({ opportunity: item, sourceRows, claims: review, analysis,
               answer: safeParse(item.answer), reviewViewed: currentViewed(item, sourceRows), viewingTrail: viewingTrail(id),
-              model: review?.model ?? null, effort: review?.effort ?? null,
-              prompts: { claims: review?.promptVersion, analysis: analysis?.promptVersion }, approval });
-            storeArchive(db, archive);
+              approval });
+            const { digest } = storeArchive(db, archive);
             audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: approval.mode,
-              evidence: basis, archiveId: archive.archiveId,
+              evidence: basis, archiveId: archive.archiveId, digest,
               ...(guaranteedClaims.length ? { guaranteedClaims } : {}) }, sentAt);
             audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
           }
@@ -735,13 +821,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const archive = buildSendArchive({
           opportunity: item, sourceRows, claims, analysis, answer,
           reviewViewed: viewed, viewingTrail: viewingTrail(id),
-          model, effort: null,
-          prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION },
           approval,
         });
         transaction(() => {
-          storeArchive(db, archive);
-          audit(id, 'archived', { archiveId: archive.archiveId, basis: approval.basis, sent: approval.sent });
+          const { digest } = storeArchive(db, archive);
+          audit(id, 'archived', { archiveId: archive.archiveId, digest, basis: approval.basis, sent: approval.sent });
         });
         return { ...state(), archive: archive.archiveId };
       },

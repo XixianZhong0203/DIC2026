@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { opportunityWorkflow } from './opportunities.mjs';
-import { loadArchive, archivesForOpportunity, SCHEMA_VERSION } from './archive.mjs';
-import { sha256 } from './claims.mjs';
+import { opportunityWorkflow, ANALYSIS_PROMPT_VERSION } from './opportunities.mjs';
+import { loadArchive, archivesForOpportunity, buildSendArchive, storeArchive, SCHEMA_VERSION } from './archive.mjs';
+import { sha256, CLAIMS_PROMPT_VERSION } from './claims.mjs';
 
 const EVIDENCE = 'Friday was proposed only.';
 
@@ -69,7 +69,7 @@ test('an old archive still reconstructs the approval after the sources change', 
   assert.equal(archive.approval.bodyHash, sha256('We will deliver on Friday.'));
   assert.equal(archive.sentAt, approved.time);
   assert.equal(archive.verification.model, 'test double');
-  assert.equal(archive.verification.prompts.claims, 'claims-v1');
+  assert.equal(archive.verification.prompts.claims, CLAIMS_PROMPT_VERSION);
   // 三档来源：
   assert.deepEqual(archive.sourcesProvidedToModel, ['E1', 'S1']);
   assert.equal(archive.sources[0].text, EVIDENCE);
@@ -131,4 +131,63 @@ test('freezing before sending labels the approval basis by the current gate stat
   // 档案只插入：两次冻结留下两份档案，审计各留一条。
   assert.equal(archivesForOpportunity(db, id).length, 2);
   assert.equal(state().audit.filter(event => event.action === 'archived').length, 2);
+});
+
+test('the archive digest verifies stored bytes, detects tampering, and reports unrecorded for old archives', async () => {
+  const { call, current, state, db } = fixture(supportedClaimsReply);
+  const { id } = current();
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: 'We will deliver on Friday.' });
+  await call('opportunity-claims', { id, target: 'draft', draft_id: current().draft_id, language: 'en' });
+  const archiveId = call('opportunity-archive', { id }).archive;
+  const stored = db.prepare('SELECT archive FROM opportunity_archives WHERE id=?').get(archiveId).archive;
+  // 存档 digest = 存储字节的 SHA-256，且未写进档案 JSON（写进去就改变了被摘要的字节）。
+  const archivedDetail = JSON.parse(state().audit.find(event => event.action === 'archived').detail);
+  assert.equal(archivedDetail.archiveId, archiveId);
+  assert.equal(archivedDetail.digest, sha256(stored));
+  assert.ok(!stored.includes(archivedDetail.digest), 'the digest is not part of the archived JSON');
+  assert.equal(state().opportunities[0].archives[0].integrity.status, 'verified');
+  // 篡改档案体：按存储字节重算与记录不一致 → mismatch。
+  db.prepare('UPDATE opportunity_archives SET archive=? WHERE id=?').run(stored + '（篡改）', archiveId);
+  assert.equal(state().opportunities[0].archives[0].integrity.status, 'mismatch');
+  // 恢复原字节 → verified（digest 绑定的是字节口径，不是内容）。
+  db.prepare('UPDATE opportunity_archives SET archive=? WHERE id=?').run(stored, archiveId);
+  assert.equal(state().opportunities[0].archives[0].integrity.status, 'verified');
+  // 旧档案（审计里没有 digest 记录）→ unrecorded。
+  const old = buildSendArchive({
+    opportunity: current(), sourceRows: [], claims: null, analysis: null, answer: null,
+    reviewViewed: null, viewingTrail: [], approval: {},
+  });
+  storeArchive(db, old);
+  const unrecorded = state().opportunities[0].archives.find(archive => archive.archiveId === old.archiveId);
+  assert.equal(unrecorded.integrity.status, 'unrecorded');
+});
+
+// 档案的 verification 字段取核查记录在核查时刻写下的实际值：核查记录缺配置字段
+// （升级前的旧记录）时记 null（界面显示「未记录」），不用工作流的当前模型补写历史。
+test('the archive records the model from the check record, without backfilling old records', async () => {
+  const { call, current, db } = fixture(supportedClaimsReply);
+  const { id } = current();
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: 'We will deliver on Friday.' });
+  await call('opportunity-claims', { id, target: 'draft', draft_id: current().draft_id, language: 'en' });
+  // 核查记录在核查时刻把实际配置落库：
+  const fresh = JSON.parse(current().claims_review);
+  assert.equal(fresh.model, 'test double');
+  assert.equal(fresh.effort, null);
+  assert.deepEqual(fresh.prompts, { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION });
+  // 档案的 verification 字段取自记录：
+  const archiveId = call('opportunity-archive', { id }).archive;
+  const archive = loadArchive(db, archiveId);
+  assert.equal(archive.verification.model, 'test double');
+  assert.equal(archive.verification.effort, null);
+  assert.deepEqual(archive.verification.prompts, { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION });
+  // 缺配置字段的旧核查记录：档案记 null，不用工作流当前模型补写。
+  const stripped = JSON.parse(current().claims_review);
+  delete stripped.model; delete stripped.effort; delete stripped.prompts;
+  db.prepare('UPDATE opportunities SET claims_review=? WHERE id=?').run(JSON.stringify(stripped), id);
+  const second = call('opportunity-archive', { id }).archive;
+  assert.notEqual(second, archiveId);
+  const old = loadArchive(db, second);
+  assert.equal(old.verification.model, null);
+  assert.equal(old.verification.effort, null);
+  assert.equal(old.verification.prompts, null);
 });

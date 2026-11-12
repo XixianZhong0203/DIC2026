@@ -63,3 +63,14 @@ test('normalizeCandidates keeps only complete candidates with valid references',
     { content: '来源未定', kind: 'fact', scope: 'DIC2026', status: 'confirmed', message_id: null },
   ]);
 });
+
+
+test('extracted customer records stay in the current project despite model scope suggestions', () => {
+  const candidates = normalizeCandidates([
+    { content: '客户报价为十万元', kind: 'fact', scope: '*', status: 'confirmed' },
+    { content: '客户请求改期', kind: 'proposal', scope: '另一个项目', status: 'pending' },
+    { content: '可能改用英文', kind: 'preference', scope: 'global', status: 'pending' },
+    { content: '所有项目采用中文', kind: 'preference', scope: '*', status: 'confirmed' },
+  ], { project: '本项目' });
+  assert.deepEqual(candidates.map(candidate => candidate.scope), ['本项目', '本项目', '本项目', GLOBAL_SCOPE]);
+});
