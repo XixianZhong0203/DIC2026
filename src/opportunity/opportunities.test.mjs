@@ -140,12 +140,16 @@ test('a human review recorded for the current draft allows sending; a newer draf
   call('opportunity-draft', { id, recipient: 'client@example.test', body: 'We will deliver on Friday. (v2)' });
   const newDraft = current().draft_id;
   assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
-  assert.equal(JSON.parse(state().audit.find(event => event.action === 'blocked').detail).reason, 'claims_stale');
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'blocked').detail).reason, 'claims_previous_unresolved');
   call('opportunity-review', { id, analysis_id: analysisId, draft_id: newDraft, resolution: 'Re-reviewed the new draft.' });
+  assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  const previous = current().previousUnresolvedClaims[0];
+  call('opportunity-claim-resolution', { id, draft_id: newDraft, claim_id: previous.id,
+    text: previous.text, reason: 'Reviewed the Friday delivery promise on the new draft.' });
   call('opportunity-send', { id, draft_id: newDraft });
   assert.equal(current().sent, 1);
   const approved = state().audit.find(event => event.action === 'approved');
-  assert.equal(JSON.parse(approved.detail).evidence, 'human_review');
+  assert.equal(JSON.parse(approved.detail).evidence, 'human_guarantee');
 });
 
 test('a human review expires when a source is added; the send is blocked until re-review', async () => {
@@ -1098,7 +1102,7 @@ test('acceptance: two problem claims — handling one keeps the send blocked; ha
   assert.notEqual(newDraft, draft_id);
   assert.equal(current().claimResolutions.length, 0, 'the old guarantee no longer binds to the new draft');
   assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
-  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_stale');
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_previous_unresolved');
   await call('opportunity-claims', { id, target: 'draft', draft_id: newDraft, language: 'zh-CN' });
   assert.equal(current().claims.claims.length, 1, 'the rewritten claim is gone from the new verification');
   assert.equal(current().claims.claims[0].status, 'founder_only');
@@ -1131,7 +1135,7 @@ test('changing the recipient expires per-claim guarantees; the body and sources 
   const newDraft = current().draft_id;
   assert.equal(current().claimResolutions.length, 0);
   assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
-  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_stale');
+  assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_previous_unresolved');
   await call('opportunity-claims', { id, target: 'draft', draft_id: newDraft, language: 'zh-CN' });
   assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
   assert.equal(JSON.parse(state().audit.filter(event => event.action === 'blocked')[0].detail).reason, 'claims_founder_only');
@@ -1231,4 +1235,88 @@ test('claim resolutions are validated against the current draft review; supporte
   await call('opportunity-claims', { id, target: 'draft', draft_id: current().draft_id, language: 'en' });
   assert.equal(current().claims.claims.length, 0, 'empty scope after rewrite');
   assert.equal(current().claimResolutions.length, 0, 'old binding expired with the new draft');
+});
+
+test('retained signing claim survives two edits and failed, empty, and partial rechecks', async () => {
+  const original = '合同已签署';
+  const grounded = '客户已表达签约意向';
+  const evidence = '我们愿意签约。';
+  const support = { id: 'intent', dimension: '客户意向', text: grounded,
+    items: [{ evidenceId: 'E1', stance: 'supports', quote: evidence, note: '原文明确表示愿意签约' }] };
+  let response = { claims: [{ id: 'signing', dimension: '签约状态', text: original,
+    items: [], missing: '缺少已签合同', rewrite: grounded }] };
+  const { call, current, state, db } = fixture(() => JSON.stringify(response), { evidence });
+  const { id } = current();
+  const save = (body, recipient = 'client@example.test') => {
+    call('opportunity-draft', { id, recipient, body });
+    return current().draft_id;
+  };
+  const check = draft_id => call('opportunity-claims', { id, target: 'draft', draft_id });
+  const review = draft_id => call('opportunity-review', { id, draft_id, resolution: '创始人已复核本版。' });
+  const sends = () => state().audit.filter(event => event.action === 'simulated_send').length;
+  const blocked = draft_id => {
+    assert.throws(() => call('opportunity-send', { id, draft_id }),
+      error => error.status === 409 && error.message.includes(original));
+    assert.equal(sends(), 0);
+    assert.equal(JSON.parse(state().audit[0].detail).reason, 'claims_previous_unresolved');
+  };
+
+  const first = save('您好。' + original + '。' + grounded + '。');
+  await check(first);
+  assert.equal(current().claims.claims[0].status, 'unknown');
+  // Simulate an existing database whose last review predates the retained flags column.
+  db.prepare('UPDATE opportunities SET draft_claim_flags=NULL WHERE id=?').run(id);
+  const second = save('王女士您好。' + original + '。' + grounded + '。');
+  review(second);
+  blocked(second);
+  const third = save(current().body, 'other@example.test');
+  review(third);
+  blocked(third);
+
+  for (const report of [{ invalid: true }, { claims: [] }, { claims: [support] }]) {
+    response = report;
+    await check(third);
+    assert.deepEqual(current().previousUnresolvedClaims.map(claim => claim.text), [original]);
+    blocked(third);
+  }
+
+  const rewritten = save('王女士您好。' + grounded + '。');
+  review(rewritten);
+  assert.throws(() => call('opportunity-send', { id, draft_id: rewritten }), { status: 409 });
+  assert.equal(sends(), 0);
+  await check(rewritten);
+  assert.deepEqual(current().previousUnresolvedClaims, []);
+  call('opportunity-send', { id, draft_id: rewritten });
+  assert.throws(() => call('opportunity-send', { id, draft_id: rewritten }), { status: 409 });
+  assert.equal(sends(), 1);
+});
+
+test('a late verification from an older draft cannot clear a retained flag', async () => {
+  const original = '合同已签署';
+  const source = '合同已签署。';
+  const supported = JSON.stringify({ claims: [{ id: 'signing', text: original,
+    items: [{ evidenceId: 'E1', stance: 'supports', quote: source, note: '有签约原文' }] }] });
+  let complete = () => JSON.stringify({ claims: [{ id: 'signing', text: original, items: [],
+    missing: '缺少核实', rewrite: '尚待确认' }] });
+  const { call, current } = fixture(() => complete(), { evidence: source });
+  const { id } = current();
+  const save = body => call('opportunity-draft', { id, recipient: 'client@example.test', body });
+  save(original);
+  await call('opportunity-claims', { id, target: 'draft', draft_id: current().draft_id });
+  let finish;
+  complete = () => new Promise(resolve => { finish = resolve; });
+  const outdated = call('opportunity-claims', { id, target: 'draft', draft_id: current().draft_id });
+  save('您好。' + original);
+  const currentId = current().draft_id;
+  finish(supported);
+  await outdated;
+  assert.deepEqual(current().previousUnresolvedClaims.map(claim => claim.text), [original]);
+  assert.throws(() => call('opportunity-send', { id, draft_id: currentId }), { status: 409 });
+
+  complete = () => supported;
+  await call('opportunity-claims', { id, target: 'draft', draft_id: currentId });
+  assert.deepEqual(current().previousUnresolvedClaims, []);
+  assert.equal(current().claims.claims[0].status, 'supported');
+  call('opportunity-send', { id, draft_id: currentId });
+  assert.equal(current().sent, 1);
 });

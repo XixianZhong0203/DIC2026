@@ -577,3 +577,22 @@ test('a clean draft review without pending items stays awaiting approval', () =>
   assert.ok(text.includes('当前状态 · 待批准'), 'no pending items means awaiting approval');
   assert.ok(!text.includes('仍有待处理项'), 'the pending label does not appear');
 });
+
+test('an earlier flagged statement remains visible and can be guaranteed on the current draft', async () => {
+  const { renderOne, fullText, requests } = harness();
+  const card = renderOne(item({
+    draft_id: 'd2', recipient: 'client@example.test', body: '您好。合同已签署。',
+    review: '整体复核结论', review_draft: 'd2', claimEvidenceHash: 'current-evidence',
+    previousUnresolvedClaims: [{ id: 'signing', text: '合同已签署', status: 'unknown', dimension: '签约状态' }],
+  }));
+  assert.match(fullText(card), /上一版仍有未处理声明/);
+  assert.match(fullText(card), /合同已签署/);
+  assert.equal(find([card], node => node.text === '批准已保存版本并模拟发送'), null);
+  const reason = find([card], node => node.placeholder === '记录担保理由');
+  reason.value = '已核对新草稿和当前来源。';
+  await find([card], node => node.text === '我已核实并愿意承担这条说法').click();
+  assert.deepEqual(requests.at(-1), { name: 'opportunity-claim-resolution', payload: {
+    id: 'o1', draft_id: 'd2', claim_id: 'signing', text: '合同已签署',
+    reason: reason.value, evidence_hash: 'current-evidence',
+  } });
+});

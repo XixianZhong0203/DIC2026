@@ -631,7 +631,10 @@ const english = {
   "导出发送档案": "Export send archive",
   // 核查与草稿覆盖（claim-verification 窗口，窗口 1 发送门槛）新增键。
   // 只追加在 english 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
-  "高风险句未被覆盖": "Uncovered high-risk clauses"
+  "高风险句未被覆盖": "Uncovered high-risk clauses",
+  "上一版仍有未处理声明": "Unresolved claim from an earlier draft",
+  "已复核上一版保留声明": "Reviewed claims carried over from an earlier draft",
+  "风险声明改写后需重新核查": "Recheck the draft after rewriting or removing a flagged claim"
 };
 
 export function translate(language, phrase) {
