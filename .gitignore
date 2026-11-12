@@ -20,3 +20,4 @@ data/
 /evaluation/draft-verification/output/
 /server.log
 /server.pid
+/evaluation/draft-verification/cases.mjs

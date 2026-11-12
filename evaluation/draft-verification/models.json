@@ -1,0 +1,10 @@
+{
+  "note": "模型列表。primary 是本次评测要对比的两个模型；supplementary 是接口就绪时顺带跑的补充对照。端点从 OPENAI_BASE_URL / OPENAI_API_KEY 环境变量或 --base-url / --api-key-file 参数读取，凭证不入库。",
+  "primary": [
+    "Qwen3.8-27B-FP8",
+    "minimax-h3"
+  ],
+  "supplementary": [
+    "Qwen3.8-27B-FP8-reasoning"
+  ]
+}
