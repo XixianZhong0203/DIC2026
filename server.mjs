@@ -1,3 +1,5 @@
+import { parseClaimReport, verifyClaims } from './src/opportunity/claims.mjs';
+import { CHAT_CLAIM_DIMENSIONS, CHAT_CLAIMS_PROMPT_VERSION, chatClaimSources, chatClaimMessages } from './src/chat/chat-claims.mjs';
 import { loadArchiveRow, archiveIntegrity } from './src/opportunity/archive.mjs';
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
@@ -253,6 +255,27 @@ ${decisions ? '用户在决策卡中的选择及其状态（状态决定效力�
     understood: typeof review.understood === 'string' ? review.understood : '', proposal };
 }
 
+async function chatClaimCheck(review, retrieved, language) {
+  // 核查用默认工作流模型；实际用哪个模型记在
+  // claimCheck.model，供证据面板与追溯。
+  const checkEntry = defaultEntry;
+  const at = new Date().toISOString();
+  try {
+    const raw = await complete(
+      chatClaimMessages({ answer: review.answer, sources: chatClaimSources(retrieved), language }),
+      90000, checkEntry, null);
+    const { claims } = parseClaimReport(raw, { mode: 'chat' });
+    const verified = verifyClaims(
+      claims.filter(claim => CHAT_CLAIM_DIMENSIONS.includes(claim.dimension)),
+      chatClaimSources(retrieved),
+      { body: review.answer, identity: 'workspace' });
+    return { prompt: CHAT_CLAIMS_PROMPT_VERSION, model: checkEntry.id, at, claims: verified };
+  } catch (error) {
+    return { prompt: CHAT_CLAIMS_PROMPT_VERSION, model: checkEntry.id, at,
+      error: error?.status ? error.message : (error?.reason ?? 'unknown'), claims: [] };
+  }
+}
+
 async function reply(question, language, temporary, conversationId, projectName, requestModel = null, requestEffort = null) {
   let conversation;
   if (conversationId == null) {
@@ -328,6 +351,7 @@ async function reply(question, language, temporary, conversationId, projectName,
   // Only this conversation's scope (project + global) may anchor the card.
   review.decision = detectDecision({ question, review, tasks: tasks(),
     memories: recordsInScope(memories(), project), retrieved, scope: project });
+  review.claimCheck = await chatClaimCheck(review, retrieved, language);
   const insert = db.prepare('INSERT INTO messages(role,body,review,conversation_id,time) VALUES (?,?,?,?,?)');
   const firstMessage = !db.prepare('SELECT 1 FROM messages WHERE conversation_id = ? LIMIT 1').get(conversation);
   const sentAt = new Date().toISOString();

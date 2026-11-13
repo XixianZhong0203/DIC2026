@@ -1,3 +1,5 @@
+import { MATCH_VERSION, matchClaimRewrite } from './claim-match.mjs';
+import { coverageScan } from './coverage.mjs';
 import { disclosureDecisions, containsRestrictedExcerpt } from './disclosure.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaimReport, verifyClaims, draftChecks,
@@ -76,6 +78,9 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   if (!opportunityColumns.some(column => column.name === 'draft_claim_flags')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN draft_claim_flags TEXT');
   }
+  if (!opportunityColumns.some(column => column.name === 'claim_rewrite_reviews')) {
+    db.exec('ALTER TABLE opportunities ADD COLUMN claim_rewrite_reviews TEXT');
+  }
   if (!opportunityColumns.some(column => column.name === 'review_draft')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review_draft TEXT');
   }
@@ -100,20 +105,51 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   const verifiedDraft = (item, review, sources) => review?.target === 'draft' &&
     !review.error && !duplicateClaimIds(review) && !claimsStale(item, review, sources) &&
     Boolean(review.claims?.length);
+  const flagText = flag => flag.text;
   const previousClaimFlags = (item, review, sources) => {
     const fresh = verifiedDraft(item, review, sources);
-    return draftFlags(item).filter(flag => (item.body ?? '').includes(flag.text) &&
-      (!fresh || !review.claims.some(claim => claim.text?.trim() === flag.text)));
+    return draftFlags(item).filter(flag => !fresh ||
+      !review.claims.some(claim => claim.text?.trim() === flag.text)).map(flag => ({
+      ...flag, claimId: flag.id, claimText: flag.text, claim: flag, draftId: flag.flaggedDraftId,
+      match: { version: MATCH_VERSION, ...matchClaimRewrite(flag.text, item.body ?? '') },
+    }));
   };
+  const currentRewriteReviews = (item, sourceRows) => {
+    const stored = item.claim_rewrite_reviews ? safeParse(item.claim_rewrite_reviews) : null;
+    if (!Array.isArray(stored)) return [];
+    const evidence = evidenceHash(item, sourceRows);
+    return stored.filter(entry => entry &&
+      typeof entry.claimText === 'string' && entry.claimText &&
+      entry.draftId === (item.draft_id ?? null) && entry.evidence === evidence &&
+      entry.matchVersion === MATCH_VERSION);
+  };
+  const rewriteReviewFor = (item, sourceRows, row) => currentRewriteReviews(item, sourceRows)
+    .find(entry => entry.claimId === row.claimId && entry.claimText === flagText(row)) ?? null;
+  // 生效改写结论：已记录的核对结论优先于匹配器结论（同绑定时）；无记录 → 匹配器结论。
+  const effectiveRewriteVerdict = (item, sourceRows, row) =>
+    rewriteReviewFor(item, sourceRows, row)?.verdict ?? row.match?.verdict ?? 'absent';
+  const pendingClaimFlags = (item, review, sources) => previousClaimFlags(item, review, sources).map(flag => {
+    const rewriteReview = rewriteReviewFor(item, sources, flag);
+    const effectiveVerdict = rewriteReview?.verdict ?? flag.match.verdict;
+    const same = flag.match.candidates.filter(candidate => candidate.relation === 'same_fact');
+    const revalidated = effectiveVerdict === 'same_fact' && same.length > 0 && verifiedDraft(item, review, sources) &&
+      same.every(candidate => review.claims.some(claim => claim.status === 'supported' &&
+        claim.text?.trim().replace(/[。.!?！？]+$/, '') === candidate.sentence.trim().replace(/[。.!?！？]+$/, '')));
+    const guaranteed = carriedGuarantee(currentGuarantees(item, sources), flag);
+    const handledBy = revalidated ? 'revalidated' : guaranteed ? 'guarantee' : null;
+    return { ...flag, rewriteReview, effectiveVerdict, handledBy,
+      pending: !handledBy && ['verbatim', 'same_fact', 'ambiguous'].includes(effectiveVerdict) };
+  });
   const requiresCheckAfterRemoval = (item, review, sources) =>
     !(review?.target === 'draft' && !review.error && !claimsStale(item, review, sources)) &&
     draftFlags(item).some(flag => !(item.body ?? '').includes(flag.text));
-  const carriedGuarantee = (guarantees, flag) => guarantees.find(row => row.claimText === flag.text);
+  const carriedGuarantee = (guarantees, flag) => guarantees.find(row => row.claimText === flag.text &&
+    (!row.rewriteText || row.matchVersion === MATCH_VERSION));
   function nextDraftFlags(item, review, sources) {
     const flags = new Map(draftFlags(item).map(flag => [flag.text, flag]));
     if (!verifiedDraft(item, review, sources)) return [...flags.values()];
     for (const text of flags.keys()) {
-      if (!(item.body ?? '').includes(text) ||
+      if (['absent', 'different_fact'].includes(matchClaimRewrite(text, item.body ?? '').verdict) ||
           review.claims.some(claim => claim.status === 'supported' && claim.text?.trim() === text) &&
           !review.claims.some(claim => claim.status !== 'supported' && claim.text?.trim() === text)) {
         flags.delete(text);
@@ -336,7 +372,8 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     const draftChecksResult = target === 'draft'
       ? draftChecks(item.body ?? '', claims.map(claim => claim.text))
       : null;
-    const review = { ...binding, model, effort: null, prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION }, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
+    const coverage = target === 'draft' ? coverageScan(item.body ?? '', claims.map(claim => claim.text)) : null;
+    const review = { ...binding, coverage, model, effort: null, prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION }, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
     transaction(() => {
       const current = get(id);
       const currentSources = sourcesFor(id);
@@ -396,15 +433,16 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         // 当前回答：结构化回答（已确认/缺少/下一步/指向来源）的解析结果；未分析时为 null。
         const answer = item.answer ? safeParse(item.answer) : null;
         const guarantees = currentGuarantees(item, sources);
-        const previous = previousClaimFlags(item, claims, sources);
+        const previous = pendingClaimFlags(item, claims, sources).filter(flag => ['verbatim', 'same_fact', 'ambiguous'].includes(flag.effectiveVerdict));
         const covered = verifiedDraft(item, claims, sources) ? claims.claims.map(claim => claim.text) : [];
         const carryoverChecks = previous.length ? draftChecks(item.body ?? '',
-          [...covered, ...previous.filter(flag => carriedGuarantee(guarantees, flag)).map(flag => flag.text)]) : null;
+          [...covered, ...previous.filter(flag => carriedGuarantee(guarantees, flag)).map(flag => carriedGuarantee(guarantees, flag)?.rewriteText ?? flag.text)]) : null;
         return { ...item, sources, claims,
           disclosureRules: rules.filter(rule => rule.opportunity === item.id),
           disclosureConflicts: disclosureDecisions(item.body ?? '', item.recipient, rules)
             .filter(result => result.decision === 'blocked'),
-          previousUnresolvedClaims: previous, carryoverChecks,
+          previousUnresolvedClaims: previous, rewritePending: previous.filter(flag => flag.pending),
+          claimRewriteReviews: currentRewriteReviews(item, sources), carryoverChecks,
           claimEvidenceHash: previous.length ? evidenceHash(item, sources) : null,
           needsClaimRecheck: requiresCheckAfterRemoval(item, claims, sources), claimsStale: claimsStale(item, claims, sources),
           reviewStale: reviewStale(item, sources), reviewViewed: currentViewed(item, sources), answer,
@@ -583,15 +621,17 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
       // 保留（担保）写入 claim_resolutions，结论绑定具体声明（claimId + 原句）、
       // 草稿版本与来源版本——草稿、收件人或来源变化后该结论自动失效。
       // 发送端核对每条被标记声明都有对应处理（见 /api/opportunity-send）。
-      '/api/opportunity-claim-resolution': ({ id, draft_id, claim_id, text, reason, evidence_hash }) => {
+      '/api/opportunity-claim-resolution': ({ id, draft_id, claim_id, text, claim_text, reason, evidence_hash }) => {
         const item = get(id);
         if (!item.draft_id) fail(409, '还没有已保存的草稿。');
         if (draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
         const sourceRows = sourcesFor(id);
         const review = safeParse(item.claims_review);
         const flagged = flaggedOf(item, review, sourceRows) ?? [];
-        const previous = previousClaimFlags(item, review, sourceRows);
-        const claim = [...flagged, ...previous].find(row => row.id === claim_id && row.text === text);
+        const previous = pendingClaimFlags(item, review, sourceRows);
+        const prior = previous.find(row => row.id === claim_id && row.text === (text ?? claim_text) && row.pending);
+        if (prior?.effectiveVerdict === 'ambiguous') fail(409, '请先核对改写是否表达同一事实。');
+        const claim = [...flagged, ...previous.filter(row => row.pending && ['verbatim', 'same_fact'].includes(row.effectiveVerdict))].find(row => row.id === claim_id && row.text === (text ?? claim_text));
         if (!claim) {
           if (review?.target !== 'draft') fail(409, '草稿声明尚未核查，请先核查关键声明。');
           if (claimsStale(item, review, sourceRows)) fail(409, '核查已过期（草稿或来源已变更），请重新核查后确认。');
@@ -601,17 +641,57 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const note = required(reason, 2000);
         const evidence = evidenceHash(item, sourceRows);
         if (evidence_hash != null && evidence_hash !== evidence) fail(409, '来源已变更，请重新核对后确认。');
-        const entry = { claimId: claim.id, claimText: claim.text, action: 'guarantee',
+        const rewriteText = prior?.effectiveVerdict === 'same_fact'
+          ? (prior.match.candidates.find(candidate => candidate.relation === 'same_fact') ?? prior.match.candidates[0])?.sentence
+          : null;
+        if (rewriteText && prior.match.candidates.length !== 1) fail(409, '请先明确草稿中需要担保的改写句。');
+        const entry = { claimId: claim.id, claimText: claim.text,
+          ...(rewriteText ? { rewriteText, matchVersion: MATCH_VERSION } : {}), action: 'guarantee',
           statement: '我已核实并愿意承担这条说法', reason: note,
           draftId: item.draft_id, evidence, at: new Date().toISOString() };
         const stored = item.claim_resolutions ? (safeParse(item.claim_resolutions) ?? []) : [];
         // 同一声明在同一绑定下只保留最新一次担保；跨绑定的旧条目留在历史里，发送时自然失效。
         const next = [...stored.filter(row => !(row && row.claimId === claim.id &&
-          row.draftId === item.draft_id && row.evidence === evidence)), entry];
+          row.claimText === claim.text && row.draftId === item.draft_id && row.evidence === evidence)), entry];
         transaction(() => {
           db.prepare('UPDATE opportunities SET claim_resolutions=? WHERE id=?').run(JSON.stringify(next), id);
           audit(id, 'claim_guaranteed', { claimId: claim.id, claimText: claim.text, reason: note,
-            draftId: item.draft_id, evidence });
+            draftId: item.draft_id, evidence, ...(rewriteText ? { rewriteText } : {}) });
+        });
+      },
+      '/api/opportunity-claim-rewrite-review': ({ id, draft_id, claim_id, text, claim_text, verdict, note, evidence_hash }) => {
+        const item = get(id);
+        if (!item.draft_id) fail(409, '还没有已保存的草稿。');
+        if (draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
+        if (!['same_fact', 'different_fact'].includes(verdict)) fail(400, '请选择核对结论。');
+        const content = String(claim_text ?? text ?? '').trim();
+        if (!content) fail(400, '请选择要处理的声明。');
+        const sourceRows = sourcesFor(id);
+        if (evidence_hash != null && evidence_hash !== evidenceHash(item, sourceRows)) {
+          fail(409, '来源已变更，请重新核对后确认。');
+        }
+        const row = previousClaimFlags(item, safeParse(item.claims_review), sourceRows).find(flag =>
+          flag.claimText === content && (claim_id == null || flag.claimId === claim_id)) ?? null;
+        if (!row) fail(409, '找不到这条声明，请刷新后重试。');
+        if (effectiveRewriteVerdict(item, sourceRows, row) !== 'ambiguous') {
+          fail(409, '这条声明不需要核对结论：它仍逐字出现在正文中，或已被判定为同一事实/不同事实。请刷新后重试。');
+        }
+        const entry = {
+          claimId: row.claimId ?? claim_id ?? null,
+          claimText: content, verdict, note: required(note, 2000),
+          draftId: item.draft_id, evidence: evidenceHash(item, sourceRows), matchVersion: MATCH_VERSION,
+          candidates: (row.match?.candidates ?? []).slice(0, 5),
+          at: new Date().toISOString(),
+        };
+        const stored = item.claim_rewrite_reviews ? (safeParse(item.claim_rewrite_reviews) ?? []) : [];
+        // 同一标记在同一绑定下只保留最新一次核对；跨绑定的旧条目留在历史里，读取时自然失效。
+        const next = [...stored.filter(candidate => !(candidate && candidate.claimText === content &&
+          candidate.draftId === item.draft_id && candidate.evidence === entry.evidence)), entry];
+        transaction(() => {
+          db.prepare('UPDATE opportunities SET claim_rewrite_reviews=? WHERE id=?').run(JSON.stringify(next), id);
+          audit(id, 'claim_rewrite_reviewed', { claimId: entry.claimId, claimText: content, verdict,
+            note: entry.note, draftId: item.draft_id, evidence: entry.evidence,
+            matchVersion: MATCH_VERSION, candidates: entry.candidates });
         });
       },
       '/api/opportunity-review': ({ id, analysis_id, draft_id, resolution }) => {
@@ -688,8 +768,10 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const currentReview = Boolean(item.review) && item.review_draft === draft_id &&
           item.review_evidence === evidenceHash(item, sourceRows);
         const guarantees = currentGuarantees(item, sourceRows);
-        const previous = previousClaimFlags(item, review, sourceRows);
-        const unhandledPrevious = previous.filter(flag => !carriedGuarantee(guarantees, flag));
+        const previousFlags = pendingClaimFlags(item, review, sourceRows);
+        const previous = previousFlags.filter(flag => flag.handledBy === 'guarantee' &&
+          ['verbatim', 'same_fact'].includes(flag.effectiveVerdict));
+        const unhandledPrevious = previousFlags.filter(flag => flag.pending);
         if (unhandledPrevious.length) {
           audit(id, 'blocked', { action: 'send', reason: 'claims_previous_unresolved',
             previousClaims: unhandledPrevious.map(flag => ({ claimId: flag.id, text: flag.text, draftId: flag.flaggedDraftId })) });
@@ -702,14 +784,15 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const humanOverride = !verifiedScope && currentReview;
         const guaranteeOverride = !verifiedScope && previous.length > 0;
         const covered = verifiedScope ? review.claims.map(claim => claim.text) : [];
-        const draftCoverage = draftChecks(item.body ?? '', [...covered, ...previous.map(flag => flag.text)]);
+        const draftCoverage = draftChecks(item.body ?? '', [...covered, ...previous.map(flag => carriedGuarantee(guarantees, flag).rewriteText ?? flag.text)]);
         const placeholders = draftCoverage.placeholders;
         const uncovered = verifiedScope || previous.length ? draftCoverage.unextracted : [];
         const unresolvedCoverage = uncovered.filter(clause => !currentReview || !item.review.includes(clause));
         if (placeholders.length || unresolvedCoverage.length) {
           const reason = placeholders.length
             ? (unresolvedCoverage.length ? 'claims_pending' : 'claims_placeholders') : 'claims_uncovered';
-          audit(id, 'blocked', { action: 'send', reason, placeholders, uncovered: unresolvedCoverage });
+          audit(id, 'blocked', { action: 'send', reason, placeholders, uncovered: unresolvedCoverage,
+            uncoveredDetail: coverageScan(item.body ?? '', covered).missed.filter(row => unresolvedCoverage.includes(row.text)) });
           if (placeholders.length) fail(409, '草稿正文仍有未确认的占位符：' + placeholders.join('、') + '。请落实后再批准发送。');
           fail(409, '以下高风险句未被任何已抽取声明覆盖（模型可能漏抽）：' + unresolvedCoverage.join('、') +
             '。请重新核查或改写，确认没有遗漏后再批准发送，或针对当前草稿与来源记录人工复核结论。');

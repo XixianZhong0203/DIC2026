@@ -92,6 +92,11 @@ const mock = createServer((req, res) => {
     const parsed = JSON.parse(payload);
     const messages = parsed.messages ?? [];
     const sys = (messages.find(m => m.role === 'system')?.content ?? '');
+    if (/聊天回答的声明核查器|verifier for chat answers/.test(sys)) {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ claims: [] }) } }] }));
+      return;
+    }
     const user = (messages.find(m => m.role === 'user')?.content ?? '');
     modelRequests.push({ system: sys.slice(0, 120), user: user.slice(0, 300) });
     let raw;

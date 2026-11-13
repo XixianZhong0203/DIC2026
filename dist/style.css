@@ -719,3 +719,43 @@ summary { cursor: pointer; font-size: 13.5px; font-weight: 550; color: var(--tex
 
 .model-options fieldset:first-child { max-height: min(250px, 36dvh); overflow-y: auto; }
 .model-options { max-height: min(400px, 58dvh); overflow-y: auto; }
+
+.claim-flag { background: #fdf3e3; color: inherit; padding: 0 2px; border-radius: 3px; }
+.claim-flag.claim-flag-supported { background: #e8f5ee; }
+.claim-flag.claim-flag-conflict,
+.claim-flag.claim-flag-refuted,
+.claim-flag.claim-flag-withdrawn { background: var(--danger-bg); }
+/* 状态徽章（回答内联 + 证据行摘要共用）：绿色＝有依据，琥珀＝待确认，红棕＝冲突/反驳/撤回。 */
+.claim-chip {
+  display: inline-block; margin: 0 0 0 4px; padding: 0.5px 8px;
+  border: 1px solid var(--line-strong); border-radius: 999px; background: #fff;
+  font-size: 11.5px; font-weight: 550; line-height: 1.7; color: var(--text-soft);
+  vertical-align: baseline; white-space: nowrap;
+}
+button.claim-chip { cursor: pointer; }
+button.claim-chip:hover { background: var(--hover); }
+.claim-chip.claim-chip-supported { color: #15803d; border-color: #c9e5d4; background: #f7fcf9; }
+.claim-chip.claim-chip-unknown,
+.claim-chip.claim-chip-incomplete { color: #b45309; border-color: var(--danger-line); background: #fdfaf1; }
+.claim-chip.claim-chip-conflict,
+.claim-chip.claim-chip-refuted,
+.claim-chip.claim-chip-withdrawn { color: var(--danger-text); border-color: var(--danger-line); background: var(--danger-bg); }
+/* 证据面板：单条关键断言的展示。 */
+.claim-check-meta { display: block; margin-bottom: 8px; }
+.claim-error { margin: 8px 0; padding: 8px 11px; background: var(--danger-bg); border: 1px solid var(--danger-line); border-radius: 9px; font-size: 13px; white-space: pre-wrap; }
+.claim-entry { border-left: 3px solid var(--line-strong); }
+.claim-entry.claim-status-supported { border-left-color: #15803d; }
+.claim-entry.claim-status-unknown,
+.claim-entry.claim-status-incomplete { border-left-color: #b45309; }
+.claim-entry.claim-status-conflict,
+.claim-entry.claim-status-refuted,
+.claim-entry.claim-status-withdrawn { border-left-color: var(--danger-text); }
+.claim-entry.claim-focus { background: #f5f9ff; box-shadow: 0 0 0 1px var(--line-strong); }
+.claim-status { display: inline-block; margin-bottom: 4px; padding: 1.5px 9px; background: #f0f0ee; border-radius: 999px; font-size: 12px; font-weight: 550; color: var(--text-soft); }
+.claim-item { margin: 8px 0 0; padding: 7px 10px; background: #fafafa; border: 1px solid var(--line); border-radius: 9px; }
+.claim-item small { color: var(--muted); font-size: 12px; }
+.claim-item p { margin: 4px 0 0; font-size: 13px; line-height: 1.55; }
+.claim-original { background: #fff; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; white-space: pre-wrap; }
+.claim-missing { color: #b45309; }
+.claim-rewrite { color: var(--text-soft); }
+.claim-fail { color: var(--danger-text); }

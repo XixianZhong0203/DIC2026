@@ -282,7 +282,77 @@ get('chat-extract').onclick = () => withButton(get('chat-extract'), async () => 
   get('candidate-panel').show();
 });
 
-function openSources(review) {
+const claimStatusLabel = status => t({
+  supported: '有依据', refuted: '反驳', unknown: '证据不足 · 待确认',
+  conflict: '来源冲突 · 先比较记录', withdrawn: '撤回', incomplete: '未完成核查',
+}[status] ?? '未完成核查');
+const claimStanceLabel = stance => t({ supports: '支持', refutes: '反驳', withdraws: '撤回', neutral: '仅相关' }[stance] ?? stance);
+const claimCheckReasonLabel = check => t({
+  unknown_source: '引用了不存在的来源', quote_not_found: '引文未在来源原文中逐字找到',
+  field_conflict: '模型输出字段不一致', empty_claim_text: '声明原文为空',
+  truncated_negation: '声明截断了否定词，语义可能反转',
+  claim_not_in_draft: '声明未在回答中逐字出现',
+  quote_missing_context: '引文缺少关键上下文', quote_ambiguous: '同一片段多处出现且含义不同',
+}[check.reason] ?? check.reason);
+// 证据面板里的单条关键断言：状态 + 维度、声明原文、逐条引文（立场 + 引文 + 说明 +
+// 来源原文，来源原文优先取当前记忆行、记录已删时回退核查时保存的快照）、
+// 缺什么/能说什么、核查失败原因。focus 的条目高亮并滚动到视野内。
+function renderClaimEntry(container, claim, focus) {
+  const entry = element('article', '', 'entry claim-entry' + (focus ? ' claim-focus' : ''));
+  entry.append(element('span', claimStatusLabel(claim.status) + ' · ' + t(claim.dimension), 'claim-status claim-status-' + claim.status));
+  entry.append(element('p', claim.text));
+  const items = claim.items ?? [];
+  for (const item of items) {
+    const row = element('div', '', 'claim-item');
+    row.append(element('small', claimStanceLabel(item.stance) + ' · #' + (item.source?.id ?? '—') + ' · ' + (item.source?.source ?? '')));
+    if (item.quote) row.append(element('p', '「' + item.quote + '」' + (item.note ? ' · ' + item.note : '')));
+    // 原文优先取当前记忆行（修订过则展示最新原文）；记录已删时回退到核查时保存的快照。
+    const live = (current?.memory ?? []).find(record => String(record.id) === String(item.source?.id) && !record.superseded)
+      ?? (current?.memory ?? []).find(record => String(record.id) === String(item.source?.id));
+    row.append(element('p', live ? live.body : (item.source?.text ?? t('记录已缺失')), 'claim-original'));
+    entry.append(row);
+  }
+  if (!items.length) entry.append(element('p', t('无来源'), 'muted'));
+  if (claim.missing) entry.append(element('p', t('缺少信息') + ' · ' + claim.missing, 'claim-missing'));
+  if (claim.rewrite) entry.append(element('p', t('建议改写') + ' · ' + claim.rewrite, 'claim-rewrite'));
+  for (const check of claim.failedChecks ?? []) {
+    entry.append(element('p', claimCheckReasonLabel(check) + (check.detail ? ' · ' + check.detail : ''), 'claim-fail'));
+  }
+  container.append(entry);
+  if (focus) requestAnimationFrame(() => entry.scrollIntoView({ block: 'center' }));
+  return entry;
+}
+
+// 回答正文里逐字定位关键断言：只标注落在单个文本节点内的声明（markdown 把文本
+// 拆成多个节点时不标注，证据面板里仍会列出）；标注 = 高亮片段 + 状态小徽章，
+// 点徽章打开证据面板并定位到该断言。
+function annotateClaims(bodyEl, review) {
+  for (const claim of review?.claimCheck?.claims ?? []) {
+    const text = (claim.text ?? '').trim();
+    if (!text) continue;
+    const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT);
+    let match = null;
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.parentElement?.closest('.claim-flag, .claim-chip')) continue;
+      const at = node.nodeValue.indexOf(text);
+      if (at !== -1) { match = { node, at }; break; }
+    }
+    if (!match) continue;
+    const range = document.createRange();
+    range.setStart(match.node, match.at);
+    range.setEnd(match.node, match.at + text.length);
+    const mark = element('mark', '', 'claim-flag claim-flag-' + claim.status);
+    const chip = element('button', claimStatusLabel(claim.status), 'claim-chip claim-chip-' + claim.status);
+    chip.type = 'button';
+    chip.title = claim.text;
+    chip.onclick = () => openSources(review, claim.id);
+    range.surroundContents(mark);
+    mark.append(chip);
+  }
+}
+
+function openSources(review, focusClaimId = null) {
   visibleEvidence = review;
   const body = get('source-content');
   body.replaceChildren();
@@ -323,6 +393,14 @@ function openSources(review) {
       trace.append(element('p', '#' + record.id + ' · ' + (record.scope || t('未分组')) + ' · ' + record.source + ' · ' + record.kind));
     }
     body.append(trace);
+  }
+  const check = review.claimCheck;
+  if (check && (check.claims?.length || check.error)) {
+    body.append(element('h3', t('关键断言')));
+    body.append(element('small', t('核查模型') + ' · ' + check.model + ' · ' + check.prompt +
+      ' · ' + new Date(check.at).toLocaleString(language), 'claim-check-meta'));
+    if (check.error) body.append(element('p', t('断言核查失败') + ' · ' + check.error, 'claim-error'));
+    for (const claim of check.claims ?? []) renderClaimEntry(body, claim, claim.id === focusClaimId);
   }
   if (!get('source-panel').open) get('source-panel').show();
 }
@@ -486,6 +564,7 @@ function render() {
       const main = element('div', '', 'message-main');
       const body = element('div', '', 'message-body');
       body.innerHTML = markdown(message.body);
+      annotateClaims(body, message.review);
       main.append(body);
       const decision = message.review?.decision;
       if (message.review?.conflict && !(decision && decision.reason === message.review.conflict)) {
@@ -508,6 +587,17 @@ function render() {
         const ev = message.review.evidence ?? 'uncited';
         if (ev === 'verbatim') evidence.append(element('span', t('有引用可核对'), 'meta-note'));
         else evidence.append(element('span', t(ev === 'cited' ? '未核查项目证据 · 有来源，但引文未经逐字核对' : '未核查项目证据 · 无可核对引文'), 'meta-warn'));
+      }
+      const claimCheck = message.review?.claimCheck;
+      if (claimCheck) {
+        if (claimCheck.error) evidence.append(element('span', t('断言核查失败'), 'meta-warn'));
+        for (const claim of claimCheck.claims ?? []) {
+          const chip = element('button', t(claim.dimension) + ' · ' + claimStatusLabel(claim.status),
+            'claim-chip claim-chip-' + claim.status);
+          chip.type = 'button';
+          chip.onclick = () => openSources(message.review, claim.id);
+          evidence.append(chip);
+        }
       }
       if (evidence.childElementCount) main.append(evidence);
       const actions = element('div', '', 'message-actions');

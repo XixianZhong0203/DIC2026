@@ -19,7 +19,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     source_added: '来源已保存', claims_checked: '声明核查完成', claims_failed: '声明核查失败',
     review_source_viewed: '展开来源原文',
     evidence_kind_changed: '初始来源身份已改',
-    archived: '发送档案已冻结',
+    archived: '发送档案已冻结', claim_rewrite_reviewed: '改写核对已记录',
   };
 
   const sourceKindLabels = { evidence: '证据原文', customer: '客户记录', founder: '创始人提供' };
@@ -479,6 +479,74 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   // —— 逐条人工复核（per-claim review）——
   // 当前草稿核查中被标记（未获客户来源支持）的声明。
   // 核查不存在、失败、过期或实际核查范围为空时返回空——此时保留整体人工复核路径。
+  const coverageCategoryLabels = {
+    fact: '已完成事实', commitment: '对外承诺', date: '日期承诺（含委婉表述）',
+    conditional: '附带条件的批准或交付', figure: '数字与业绩',
+  };
+  function normalizeCoverage(review) {
+    if (!review) return null;
+    if (review.coverage) {
+      return {
+        claims: review.coverage.claims ?? [],
+        missed: review.coverage.missed ?? [],
+        placeholders: review.coverage.placeholders ?? [],
+      };
+    }
+    const checks = review.draftChecks;
+    if (!checks) return null;
+    return {
+      claims: (review.claims ?? []).map(claim => String(claim.text ?? '').trim()).filter(Boolean),
+      missed: (checks.unextracted ?? []).map(text => ({ text: String(text), sentence: '', categories: [], covered: [] })),
+      placeholders: checks.placeholders ?? [],
+    };
+  }
+  // 定位原文：在草稿正文里选中未进入核查的片段（真实浏览器 DOM 用 setSelectionRange）。
+  function focusDraftFragment(refs, item, fragment) {
+    const body = refs.draftBody;
+    if (!body) return;
+    if (refs.editorDetails) refs.editorDetails.open = true;
+    body.focus?.();
+    const at = String(item.body ?? '').indexOf(fragment);
+    if (at !== -1 && typeof body.setSelectionRange === 'function') body.setSelectionRange(at, at + String(fragment).length);
+  }
+  function coverageBlock(item, refs) {
+    const review = item.claims;
+    if (!review || review.target !== 'draft') return null;
+    const coverage = normalizeCoverage(review);
+    if (!coverage) return null;
+    const missed = coverage.missed ?? [];
+    const placeholders = coverage.placeholders ?? [];
+    const block = element('section', '', 'coverage-scan');
+    block.setAttribute('data-missed', String(missed.length));
+    const total = missed.length + placeholders.length;
+    block.append(element('strong', t('覆盖扫描') + ' · ' +
+      (total ? t('发现未进入核查的原文') + ' · ' + total : t('未发现漏抽'))));
+    // 本次核查范围：模型实际抽取的声明原文（进入核查的部分）；为空时明确提示。
+    block.append(element('small', t('本次核查范围') + ' · ' +
+      ((coverage.claims ?? []).length ? (coverage.claims).join('；') : t('未提取到声明')), 'muted'));
+    for (const entry of missed) {
+      const article = element('article', '', 'entry');
+      article.append(element('small', t('未进入本次核查的原文') + ' · ' + entry.text, 'attention'));
+      if (entry.sentence) article.append(element('small', t('所在原句') + ' · ' + entry.sentence));
+      if (entry.categories?.length) article.append(element('small',
+        t('命中形式') + ' · ' + entry.categories.map(code => t(coverageCategoryLabels[code] ?? code)).join('、')));
+      if (entry.covered?.length) article.append(element('small',
+        t('同句已核查') + ' · ' + entry.covered.join('、'), 'muted'));
+      article.append(action(t('定位原文'), () => focusDraftFragment(refs, item, entry.text)),
+        action(t('补证'), () => {
+          if (refs.sourceDetails) refs.sourceDetails.open = true;
+          refs.sourceText?.focus?.();
+        }));
+      block.append(article);
+    }
+    for (const placeholder of placeholders) {
+      block.append(element('small', t('占位符未处理') + ' · ' + placeholder, 'attention'));
+    }
+    if (missed.length) block.append(element('small',
+      t('可直接在草稿中改写或删去未进入核查的片段，保存后重新核查；或先补入能支持该说法的来源再重新核查。'), 'muted'));
+    return block;
+  }
+
   function flaggedClaims(item) {
     const review = item.claims;
     if (!review || review.target !== 'draft' || review.error || item.claimsStale) return [];
@@ -490,9 +558,30 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     row.claimId === claim.id && row.claimText === claim.text);
   // 与发送门槛一致的本地镜像：可批准 = 绑定当前草稿与来源的人工复核，
   // 或草稿核查新鲜、范围非空、每条被标记声明都有逐条担保（或全部获支持）。
-  const previousFlags = item => item.previousUnresolvedClaims ?? [];
+  function previousFlaggedClaims(item) {
+    const rows = item.previousUnresolvedClaims ?? item.previousClaims ?? item.carryoverClaims ?? [];
+    const list = Array.isArray(rows) ? rows : [];
+    if (list.some(row => row?.match)) {
+      return list.filter(row => ['verbatim', 'same_fact', 'ambiguous']
+        .includes(row?.effectiveVerdict ?? row?.match?.verdict));
+    }
+    return list.filter(row => {
+      const text = String(row?.claimText ?? row?.text ?? '').trim();
+      return text && String(item.body ?? '').includes(text);
+    });
+  }
+  function claimForFlag(row) {
+    const stored = row?.claim ?? {};
+    return { id: row?.claimId ?? row?.id ?? stored.id ?? '', dimension: row?.dimension ?? stored.dimension ?? '',
+      text: String(row?.claimText ?? row?.text ?? stored.text ?? ''),
+      status: row?.status ?? stored.status ?? 'unresolved', items: stored.items ?? [],
+      missing: stored.missing ?? '', rewrite: stored.rewrite ?? '', conflict: stored.conflict ?? null,
+      withdrawn: stored.withdrawn ?? false, failedChecks: stored.failedChecks ?? [] };
+  }
+  const previousFlags = previousFlaggedClaims;
   const previousGuarantee = (item, claim) => (item.claimResolutions ?? []).find(row => row.claimText === claim.text);
-  const unhandledPrevious = item => previousFlags(item).filter(claim => !previousGuarantee(item, claim));
+  const unhandledPrevious = item => previousFlags(item).filter(flag =>
+    flag.match ? flag.pending : !previousGuarantee(item, claimForFlag(flag)));
 
   function sendable(item) {
     if (item.disclosureConflicts?.length) return false;
@@ -506,14 +595,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     if (coverage?.placeholders?.length ||
         coverage?.unextracted?.some(clause => !currentReview || !item.review.includes(clause))) return false;
     if (review?.target !== 'draft' || review.error || item.claimsStale || !review.claims?.length) {
-      return Boolean(item.review && !item.reviewStale) || previousFlags(item).length > 0;
+      return Boolean(item.review && !item.reviewStale) || previousFlags(item).some(flag => flag.handledBy === 'guarantee');
     }
     return review.claims.every(claim => claim.status === 'supported' || isGuaranteed(item, claim));
   }
   // 一条被标记声明的逐条复核条目：原句、判定、依据（复用 claimSection 的展示），
   // 「查看证据」入口放在问题声明旁（打开对应来源原文即计入「已打开」记录），
   // 以及创始人的处理：改写 / 删除（都保存新草稿并重新核查）、或保留这条声明并记录担保理由。
-  function claimReviewSection(claim, item, refs, previous = false) {
+  function claimReviewSection(claim, item, refs, previous = null) {
     const article = claimSection(claim, item, false);
     const citedEntries = claim.conflict
       ? [...(claim.conflict.supports ?? []), ...(claim.conflict.opposes ?? [])]
@@ -530,10 +619,71 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const resolution = previous ? previousGuarantee(item, claim)
       : (item.claimResolutions ?? []).find(row => row.claimId === claim.id && row.claimText === claim.text);
     if (resolution) {
+      if (resolution.rewriteText) {
+        article.append(element('small', t('原句') + ' · ' + claim.text + ' → ' + t('新句') + ' · ' + resolution.rewriteText));
+      }
       article.append(openEvidence,
         element('p', t('已记录担保') + ' · ' + t('我已核实并愿意承担这条说法') + ' · ' + resolution.reason +
           ' · ' + new Date(resolution.at).toLocaleString(language()), 'muted'));
       return article;
+    }
+    if (previous) {
+      const inBody = (item.body ?? '').includes(claim.text);
+      const verdict = previous.effectiveVerdict ?? previous.match?.verdict;
+      const review = previous.rewriteReview ?? null;
+      if (review) {
+        article.append(element('p', t('改写核对已记录') + ' · ' +
+          t(review.verdict === 'same_fact' ? '同一事实' : '不同事实') + ' · ' + review.note +
+          ' · ' + new Date(review.at).toLocaleString(language()), 'muted'));
+      }
+      if (!inBody && verdict === 'ambiguous') {
+        // 无法确定改写后是否仍是同一事实：给出原句与候选新句，由创始人核对。
+        article.append(element('p', t('无法确定改写后是否仍是同一事实，请核对原句与新句后选择：'), 'attention'));
+        for (const candidate of (previous.match?.candidates ?? []).slice(0, 5)) {
+          article.append(element('small', t('原句') + ' · ' + claim.text + ' → ' + t('新句') + ' · ' + candidate.sentence));
+        }
+        const note = element('input', '');
+        note.maxLength = 2000;
+        note.placeholder = t('填写核对说明');
+        note.setAttribute('aria-label', note.placeholder);
+        const rows = element('div', '');
+        rows.append(note,
+          action(t('是同一事实（保留标记）'), async () => {
+            if (note.value.trim()) await request('opportunity-claim-rewrite-review', {
+              id: item.id, draft_id: item.draft_id, claim_id: previous.claimId ?? claim.id,
+              claim_text: claim.text, ...(item.claimEvidenceHash ? { evidence_hash: item.claimEvidenceHash } : {}), verdict: 'same_fact', note: note.value,
+            });
+          }),
+          action(t('不是同一事实（解除标记）'), async () => {
+            if (note.value.trim()) await request('opportunity-claim-rewrite-review', {
+              id: item.id, draft_id: item.draft_id, claim_id: previous.claimId ?? claim.id,
+              claim_text: claim.text, ...(item.claimEvidenceHash ? { evidence_hash: item.claimEvidenceHash } : {}), verdict: 'different_fact', note: note.value,
+            });
+          }));
+        article.append(rows);
+        return article;
+      }
+      if (!inBody && verdict === 'same_fact') {
+        // 近义改写仍是同一事实：原风险仍需处理——重新核查改写后的说法，或针对旧原句逐条担保。
+        article.append(element('p', t('上一版声明被近义改写，仍是同一事实，原风险仍需处理。请重新核查改写后的说法，或针对当前草稿与来源逐条担保。'), 'attention'));
+        for (const candidate of (previous.match?.candidates ?? []).slice(0, 5)) {
+          if (candidate.relation !== 'same_fact' && !review) continue;
+          article.append(element('small', t('原句') + ' · ' + claim.text + ' → ' + t('新句') + ' · ' + candidate.sentence));
+        }
+        const reason = element('input', '');
+        reason.maxLength = 2000;
+        reason.placeholder = t('记录担保理由');
+        reason.setAttribute('aria-label', reason.placeholder);
+        const guaranteeRow = element('div', '');
+        guaranteeRow.append(reason, action(t('我已核实并愿意承担这条说法'), async () => {
+          if (reason.value.trim()) await request('opportunity-claim-resolution', {
+            id: item.id, draft_id: item.draft_id, claim_id: previous.claimId ?? claim.id,
+            claim_text: claim.text, reason: reason.value, ...(item.claimEvidenceHash ? { evidence_hash: item.claimEvidenceHash } : {}),
+          });
+        }));
+        article.append(guaranteeRow);
+        return article;
+      }
     }
     const reverify = async nextBody => {
       // 改写/删除：保存新草稿版本（正文变化产生新草稿 ID），再重新核查。
@@ -726,7 +876,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         const pending = unhandledPrevious(item).length;
         reviewForm.append(element('p', t(pending ? '上一版仍有未处理声明' : '已复核上一版保留声明') +
           ' · ' + (pending || retained.length), pending ? 'attention' : 'muted'));
-        for (const claim of retained) reviewForm.append(claimReviewSection(claim, item, refs, true));
+        for (const flag of retained) reviewForm.append(claimReviewSection(claimForFlag(flag), item, refs, flag));
       }
       // 逐条人工复核：当前草稿核查中被标记的声明，逐条给出原句、判定、依据与处理入口。
       if (flagged.length) {
@@ -787,6 +937,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       body.placeholder = t('邮件正文');
       body.setAttribute('aria-label', body.placeholder);
       body.value = item.body ?? '';
+      refs.editorDetails = editor;
       refs.draftBody = body;
       const suggestion = item.analysis && JSON.parse(item.analysis).suggestedReply;
       if (suggestion) editor.append(action(t('将模型建议填入草稿'), () => { body.value = suggestion; }));
@@ -808,6 +959,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
             editor.append(element('p', t('披露范围') + ' · ' + conflict.sourceName +
               ' · ' + item.recipient + ' · ' + conflict.excerpt, 'attention'));
           }
+        }
+        if (!item.sent && !item.claimsStale) {
+          const coverage = coverageBlock(item, refs);
+          if (coverage) editor.append(coverage);
         }
         const status = approvalStatus(item);
         card.append(element('p', t('当前状态') + ' · ' + t(status.label) +
@@ -862,7 +1017,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
             }
           } else {
             const guaranteed = [...flaggedClaims(item).filter(claim => isGuaranteed(item, claim)),
-              ...previousFlags(item).filter(claim => previousGuarantee(item, claim))];
+              ...previousFlags(item).map(claimForFlag).filter(claim => previousGuarantee(item, claim))];
             editor.append(action(t('批准已保存版本并模拟发送'), () =>
               request('opportunity-send', { id: item.id, draft_id: item.draft_id }), false));
             if (guaranteed.length) {

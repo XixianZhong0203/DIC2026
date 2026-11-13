@@ -110,10 +110,13 @@ test('unresolved draft claims block sending until the draft is rewritten and re-
   assert.notEqual(newDraft, draft_id);
   assert.equal(current().claimsStale, true);
   assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
-  assert.equal(JSON.parse(state().audit.find(event => event.action === 'blocked').detail).reason, 'claims_stale');
+  assert.equal(JSON.parse(state().audit.find(event => event.action === 'blocked').detail).reason, 'claims_previous_unresolved');
   claimsReply = user => supportedClaim('客户尚未确认交付日期');
   await call('opportunity-claims', { id, target: 'draft', language: 'en' });
   assert.equal(current().claims.claims[0].status, 'supported');
+  const retained = current().rewritePending[0];
+  call('opportunity-claim-rewrite-review', { id, draft_id: newDraft,
+    claim_id: retained.claimId, text: retained.text, verdict: 'different_fact', note: '改成了尚未确认的状态。' });
   call('opportunity-send', { id, draft_id: newDraft });
   assert.equal(current().sent, 1);
 });
@@ -1108,6 +1111,9 @@ test('acceptance: two problem claims — handling one keeps the send blocked; ha
   assert.equal(current().claims.claims[0].status, 'founder_only');
   // 仍被拦：新草稿下的担保需要重新记录。
   assert.throws(() => call('opportunity-send', { id, draft_id: newDraft }), { status: 409 });
+  const changed = current().rewritePending.find(flag => flag.text === '业绩翻番');
+  call('opportunity-claim-rewrite-review', { id, draft_id: newDraft,
+    claim_id: changed.claimId, text: changed.text, verdict: 'different_fact', note: '稳步增长与业绩翻番是不同说法。' });
   // 两条都已处理（一条改写删除、一条重新担保）→ 明确批准并模拟发送。
   call('opportunity-claim-resolution', {
     id, draft_id: newDraft, claim_id: '签约状态', text: '合同已签署', reason: '已核对客户邮件，愿意承担这条说法。' });
@@ -1362,4 +1368,29 @@ test('recipient disclosure blocks a supported cross-lead excerpt despite overall
     scope: 'internal', excerpt: quote });
   assert.throws(() => call('opportunity-send', { id, draft_id: internal }), { status: 409 });
   assert.equal(sends().length, 1);
+});
+
+test('a near-synonym rewrite blocks overall review and requires a draft-bound claim guarantee', async () => {
+  const oldText = '合同已签署';
+  const newText = '双方已完成签约。';
+  const { call, current, state } = fixture(user => user.mode
+    ? JSON.stringify({ claims: [{
+      id: '签约状态', dimension: '签约状态', text: oldText,
+      items: [], missing: '缺少已签合同', rewrite: '客户已表达签约意向',
+    }] })
+    : JSON.stringify({ status: 'supported', quote: EVIDENCE, reason: 'Date discussed.' }));
+  const { id } = current();
+  await call('opportunity-assess', { id, request: '客户回复是什么？' });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: oldText + '。' });
+  await call('opportunity-claims', { id, target: 'draft', draft_id: current().draft_id });
+  call('opportunity-draft', { id, recipient: 'client@example.test', body: newText });
+  const draft_id = current().draft_id;
+  call('opportunity-review', { id, analysis_id: JSON.parse(current().analysis).analysisId, draft_id, resolution: '已复核。' });
+  assert.equal(current().rewritePending[0].effectiveVerdict, 'same_fact');
+  assert.throws(() => call('opportunity-send', { id, draft_id }), { status: 409 });
+  assert.equal(JSON.parse(state().audit[0].detail).reason, 'claims_previous_unresolved');
+  assert.equal(state().audit.filter(event => event.action === 'simulated_send').length, 0);
+  call('opportunity-claim-resolution', { id, draft_id, claim_id: '签约状态', text: oldText, reason: '逐条担保。' });
+  assert.equal(current().claimResolutions[0].rewriteText, newText);
+  assert.deepEqual(current().rewritePending, []);
 });

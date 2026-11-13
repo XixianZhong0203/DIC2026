@@ -349,6 +349,12 @@ export function quoteContext(text, quote) {
 export function resolveClaim(claim, sources, options = {}) {
   const byId = new Map(sources.map(source => [source.id, source]));
   const items = normalizeItems(claim?.items, byId);
+  // 聊天回答核查（窗口 3）的来源身份口径（identity='workspace'）：工作区记录就是
+  // 该轮回答的证据基础，任何一条有效支持引文都算「有依据」（supported），
+  // 不再区分客户／创始人／未确认。线索与草稿流程仍按用户录入的来源身份判定。
+  const stateOf = supports => (options.identity === 'workspace'
+    ? (supports.length ? 'supported' : null)
+    : supportEvidenceState(supports));
   const invalid = items.filter(item => !item.valid);
   // 失败原因结构化：引文上下文问题带上被截子句（clause）与原因（detail），
   // 供核查展示与发送流程（窗口 1）直接呈现「原文 + 原因」，不用重新推断。
@@ -390,11 +396,12 @@ export function resolveClaim(claim, sources, options = {}) {
     // 仅日期较新、无法排序或修订无法确认时，保留冲突（conflict 中的双方条目各带来源原文）。
     const decisive = decisiveSupersession(valid, supports, opposes);
     if (decisive) {
-      // 修订确认后，当前状态同样按来源身份判定：只有客户来源引文支持才算有依据，
-      // 落在创始人陈述或来源未确认引文上时沿用对应待核实状态。
+      // 修订确认后，当前状态同样按来源身份判定：线索/草稿中只有客户来源引文支持才算
+      // 有依据，落在创始人陈述或来源未确认引文上时沿用对应待核实状态；
+      // 聊天回答核查（identity='workspace'）任何有效支持引文都算有依据。
       const status =
         decisive.stance === 'supports'
-          ? supportEvidenceState(supports)
+          ? stateOf(supports)
           : 'refuted';
       return { ...base, status, decisive, withdrawn: decisive.stance === 'withdraws' };
     }
@@ -407,7 +414,7 @@ export function resolveClaim(claim, sources, options = {}) {
   if (supports.length) {
     // 支持引文按来源身份判定证据状态：只有客户来源引文支持才算有依据；
     // 仅创始人陈述、含来源未确认引文或沿用旧版通用 evidence 引文，都不得自动通过。
-    const status = supportEvidenceState(supports);
+    const status = stateOf(supports);
     return { ...base, status, decisive: supports.at(-1) };
   }
   if (missing && rewrite) return { ...base, status: 'unknown' };
@@ -419,49 +426,10 @@ export function verifyClaims(claims, sources, options = {}) {
   return claims.map(claim => resolveClaim(claim, sources, options));
 }
 
-// —— 草稿确定性检查（独立于模型输出，可复现）：核查完成后仍可能留下的两类待处理项 ——
-// 1. 占位符：正文里仍留有 [待确认：…] 一类方括号占位符（含 待核实/待定/TBD/to be confirmed）——
-//    未确认内容必须在发送前落实。全角（待确认）是模型建议改写的约定写法（标记「待确认」），
-//    不属于占位符，不在扫描范围。
-// 2. 未被抽取的高风险句：正文按句/子句拆分，子句命中高风险模式（已完成事实／对外承诺／数字）
-//    却不被任何已抽取声明原文覆盖 → 模型可能漏抽了这一句（如一句里有两项承诺只抽到一项）。
-const PLACEHOLDER = /\[(?:待确认|待核实|待定|TBD|to be confirmed|to be verified)[^\[\]]*\]/gi;
-const ZH_HIGH_RISK = [
-  /已(?:经)?(?:签署|签订|签约|签好|交付|付款|支付|到账|回款|完成|上线|验收|启动|开通|部署|投产)/,
-  /(?:承诺|保证|确保|担保)[^\n。]{0,24}?(?:完成|交付|上线|付款|签约|启动|验收|部署|开通|发出|回复|安排|做到|达成|实现)/,
-  /(?:今天|明天|后天|下周|下月|本月|月底|周[一二三四五六日天]|(?:\d+|两|几|数)\s*个?\s*(?:工作日|日|天|周|星期|月|季度|小时))\s*(?:前|内|之前|之内)?\s*(?:完成|交付|上线|付款|签约|启动|验收|部署|开通)/,
-  /(?:\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|个|名|家|份|天|日|周|小时|美元|人民币)|翻(?:倍|番))/,
-];
-const EN_HIGH_RISK = [
-  /\b(?:signed|delivered|paid|completed|shipped|launched|deployed|collected|received)\b/i,
-  /\b(?:has|have|had|was|were|being)\s+(?:been\s+)?(?:signed|delivered|paid|completed|made|launched|deployed|collected|received)\b/i,
-  /\b(?:commit(?:s|ted|ting)?|guarantee[sd]?|ensur(?:e|es|ed)|promis(?:e|es|ed)|pledge[sd]?)\b/i,
-  /\b(?:by|within|before|until)\s+(?:\d+\s*(?:days?|hours?|weeks?|business days?|working days?|months?|quarters?|years?)|(?:one|two|three|four|five|six|seven|eight|nine|ten|a few)\s*(?:days?|hours?|weeks?)|\w+days?|the\s+\w+|next\s+\w+|tomorrow|tonight|end of (?:the\s+)?\w+)/i,
-  /\b(?:\d+(?:\.\d+)?\s*(?:%|percent|billion|million|times|days?|hours?|weeks?|USD|EUR|CNY|RMB|dollars?|euros?|yen)|doubled|tripled|increased by|grew by|growth of)\b/i,
-];
-const isHighRisk = clause => ZH_HIGH_RISK.some(re => re.test(clause))
-  || EN_HIGH_RISK.some(re => re.test(clause));
-// 按中文逗号/顿号、英文逗号和连接词（and/as well as/also）拆子句，去掉开头连接词与结尾标点。
-function clauseParts(sentence) {
-  return sentence.split(/，|、|；|;|\s+and\s+|\s+as well as\s+|,\s+|\s+also\s+/i)
-    .map(part => part
-      .replace(/^[，、；;,\s]+/, '')
-      .replace(/^(?:并且|而且|同时|此外|另外|然后|接着|还|又|并)\s*/, '')
-      .replace(/^(?:and also|as well as|in addition|additionally|plus|then|also|and)\s+/i, '')
-      .replace(/[。！？.!?…]+\s*$/, '')
-      .trim());
-}
-export function draftChecks(body, claimTexts) {
-  const text = typeof body === 'string' ? body : '';
-  const texts = [...new Set((claimTexts ?? []).map(value => String(value ?? '').trim()).filter(value => value.length >= 2))];
-  const placeholders = [...new Set([...text.matchAll(PLACEHOLDER)].map(match => match[0]))];
-  const unextracted = [];
-  for (const sentence of text.split(/(?<=[。！？!?；;…\n])/)) {
-    for (const clause of clauseParts(sentence)) {
-      if (clause.length < 2 || !isHighRisk(clause)) continue;
-      if (texts.some(claim => clause.includes(claim) || claim.includes(clause))) continue;
-      unextracted.push(clause);
-    }
-  }
-  return { placeholders, unextracted: [...new Set(unextracted)] };
-}
+// —— 草稿确定性检查（窗口 2，实现在 coverage.mjs，本模块转出）——
+// 1. 占位符：正文里仍留有 [待确认：…] 一类方括号占位符——未确认内容必须在发送前落实。
+// 2. 未被抽取的高风险片段：按「同一句里的多项承诺、委婉表述的日期承诺、附带条件的批准或交付」
+//    三类形式（外加已完成事实／数字）逐句/分句扫描，报告哪段原文没有进入本次核查——
+//    片段 + 所在原句 + 命中形式 + 同句已核查的分句，供创始人定位、改写或补证。
+// draftChecks 是发送门槛（窗口 1）读取的兼容视图；coverageScan 是完整结果（独立模块）。
+export { coverageScan, draftChecks, riskCategories, COVERAGE_CATEGORIES, COVERAGE_CATEGORY_LABELS } from './coverage.mjs';

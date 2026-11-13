@@ -114,8 +114,13 @@ export function startMockModel(port, queues, record) {
         res.statusCode = 404; res.end('not found'); return;
       }
       const parsed = JSON.parse(payload);
-      modelRequests.push(parsed);
       const system = (parsed.messages ?? []).find(m => m.role === 'system')?.content ?? '';
+      if (/聊天回答的声明核查器|verifier for chat answers/.test(system)) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ claims: [] }) } }] }));
+        return;
+      }
+      modelRequests.push(parsed);
       const user = (parsed.messages ?? []).find(m => m.role === 'user')?.content ?? '';
       let userObj = null;
       try { userObj = JSON.parse(user); } catch {}

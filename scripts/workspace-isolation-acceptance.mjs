@@ -91,6 +91,11 @@ const mock = createServer((req, res) => {
   req.on('end', () => {
     if (req.method === 'POST' && req.url === '/v1/chat/completions') {
       const parsed = JSON.parse(payload);
+      if (/聊天回答的声明核查器|verifier for chat answers/.test(systemOf(parsed))) {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ claims: [] }) } }] }));
+        return;
+      }
       modelRequests.push(parsed);
       const canned = cannedQueue.length ? cannedQueue.shift() : cannedPlain;
       res.setHeader('content-type', 'application/json');
