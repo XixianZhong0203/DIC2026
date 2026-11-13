@@ -642,7 +642,8 @@ const english = {
   "无完整性记录": "No integrity record",
   "档案内容与批准记录不一致": "Archive content does not match the approval record",
   "「*」用于全局记忆，不能用作项目名称。": "The name * is reserved for global memory.",
-  "这个旧会话使用了保留的项目名称。请在正确的项目中开启新会话。": "This older conversation uses a reserved project name. Start a new conversation in the correct project."
+  "这个旧会话使用了保留的项目名称。请在正确的项目中开启新会话。": "This older conversation uses a reserved project name. Start a new conversation in the correct project.",
+  "不能将项目记录带入全局范围。": "Project records cannot be imported into global memory."
 };
 
 export function translate(language, phrase) {

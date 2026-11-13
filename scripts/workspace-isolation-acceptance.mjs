@@ -242,6 +242,13 @@ record('importing into the record\'s own workspace is refused', sameScope.status
 const globalImp = await api('/api/memory-import', { record_id: globalPrefId, scope: BETA });
 record('importing a global record is refused (visible everywhere)', globalImp.status === 400 ? 'PASS' : 'FAIL',
   globalImp.error ?? ('status ' + globalImp.status));
+const globalTarget = await api('/api/memory-import', { record_id: alphaRuleId, scope: ' * ' });
+const afterGlobalTarget = (await api('/api/state')).data;
+record('project records cannot be imported into global memory',
+  globalTarget.status === 400 && globalTarget.error === '不能将项目记录带入全局范围。' &&
+    !afterGlobalTarget.memory.some(item => item.scope === '*' && item.body === alphaRuleBody)
+    ? 'PASS' : 'FAIL', globalTarget.error ?? '');
+
 const missing = await api('/api/memory-import', { record_id: 99999, scope: BETA });
 record('importing a missing record is refused', missing.status === 404 ? 'PASS' : 'FAIL');
 
