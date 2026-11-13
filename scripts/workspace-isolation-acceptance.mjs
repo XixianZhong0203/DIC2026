@@ -242,13 +242,6 @@ record('importing into the record\'s own workspace is refused', sameScope.status
 const globalImp = await api('/api/memory-import', { record_id: globalPrefId, scope: BETA });
 record('importing a global record is refused (visible everywhere)', globalImp.status === 400 ? 'PASS' : 'FAIL',
   globalImp.error ?? ('status ' + globalImp.status));
-const globalTarget = await api('/api/memory-import', { record_id: alphaRuleId, scope: ' * ' });
-const afterGlobalTarget = (await api('/api/state')).data;
-record('project records cannot be imported into global memory',
-  globalTarget.status === 400 && globalTarget.error === '不能将项目记录带入全局范围。' &&
-    !afterGlobalTarget.memory.some(item => item.scope === '*' && item.body === alphaRuleBody)
-    ? 'PASS' : 'FAIL', globalTarget.error ?? '');
-
 const missing = await api('/api/memory-import', { record_id: 99999, scope: BETA });
 record('importing a missing record is refused', missing.status === 404 ? 'PASS' : 'FAIL');
 
@@ -294,6 +287,20 @@ const deliveryPrompt = systemOf(modelRequests.at(-1));
 record('Chinese retrieval includes Beta delivery and excludes the similar Alpha record',
   alphaSaved.ok && betaSaved.ok && deliveryChat.ok &&
     deliveryPrompt.includes(betaDelivery) && !deliveryPrompt.includes(alphaDelivery) ? 'PASS' : 'FAIL');
+
+const shared = await api('/api/memory-import', { record_id: alphaRuleId, scope: ' * ' });
+const sharedAgain = await api('/api/memory-import', { record_id: alphaRuleId, scope: '*' });
+const sharedState = (await api('/api/state')).data;
+const copy = sharedState.memory.find(row => row.id === shared.data.imported);
+const convC = (await api('/api/conversation', { project: '第三个项目' })).data.conversation;
+const sharedChat = await api('/api/chat', {
+  conversation_id: convC, text: '报价规则是什么？', language: 'zh-CN',
+});
+record('explicit global sharing preserves provenance and is visible in a third workspace',
+  shared.ok && sharedAgain.data.already && sharedAgain.data.imported === copy?.id &&
+  copy.scope === '*' && copy.source.includes(ALPHA) &&
+  sharedState.memory.some(row => row.id === alphaRuleId && row.scope === ALPHA) &&
+  sharedChat.ok && systemOf(modelRequests.at(-1)).includes(alphaRuleBody) ? 'PASS' : 'FAIL');
 
 const summary = {
   at: new Date().toISOString(), modelLive: true,

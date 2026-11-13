@@ -460,7 +460,6 @@ message_id：该候选出自的对话消息编号，从给定列表中选取；�
       fail(409, '这条记录已被修订，请带入修订后的版本。');
     }
     const target = scope.trim();
-    if (target === GLOBAL_SCOPE) fail(400, '不能将项目记录带入全局范围。');
     if (origin.scope === target) fail(400, '记录已属于该工作区。');
     if (origin.scope === GLOBAL_SCOPE) fail(400, '全局记录已对所有工作区可见，无需带入。');
     const provenance = ('来自「' + origin.scope + '」的记录 #' + origin.id + ' · ' + origin.source).slice(0, 500);

@@ -1074,17 +1074,30 @@ function openImportPanel({ source = '', target = currentProjectScope() } = {}) {
   };
   select.onchange = renderList;
   renderList();
-  content.append(label, list, action(t('带入所选记录'), async () => {
+  const destinationLabel = element('label', t('带入范围'));
+  const destination = element('select');
+  destination.setAttribute('aria-label', t('带入范围'));
+  for (const [value, name] of [[target, target], [GLOBAL_SCOPE, t('全局（所有项目）')]]) {
+    const option = element('option', name);
+    option.value = value;
+    destination.append(option);
+  }
+  destinationLabel.append(destination);
+  const globalNotice = element('p', t('全局共享后，所有工作区都可以检索所选记录。'), 'muted');
+  globalNotice.hidden = true;
+  destination.onchange = () => { globalNotice.hidden = destination.value !== GLOBAL_SCOPE; };
+  content.append(label, list, destinationLabel, globalNotice, action(t('带入所选记录'), async () => {
     const checked = [...list.querySelectorAll('input[type=checkbox]')]
       .filter(box => box.checked).map(box => Number(box.value));
     if (!checked.length) {
       showNotice(t('请先选择要带入的记录。'));
       return;
     }
+    const scope = destination.value;
     let count = 0;
     for (const recordId of checked) {
       try {
-        await request('memory-import', { record_id: recordId, scope: target });
+        await request('memory-import', { record_id: recordId, scope });
         count += 1;
         renderList();
       } catch (error) {
