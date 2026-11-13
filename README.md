@@ -5,7 +5,7 @@ Daymark is a local AI workspace for a one-person company (OPC), where the founde
 ## At a glance
 
 - **Design.** Daymark shows the evidence behind a proposed action. Before a simulated send, the server checks the saved draft and its evidence version, blocks unresolved placeholders, and requires individual resolution of flagged claims. The approval preserves an exportable record of the draft and sources.
-- **Server enforcement.** The integrated build passed 220 unit tests, 91/91 request-boundary and concurrency checks, and 26/26 approval checks. The acceptance suite detected all seven tested changes to approval conditions. These checks establish enforcement for the exercised cases. [Verification and coverage](#agentic-misalignment-and-verification)
+- **Server enforcement.** The integrated build passed 222 unit tests, 95/95 request-boundary, concurrency, and model-input checks, and 26/26 approval checks. The acceptance suite detected all seven tested changes to approval conditions. These checks establish enforcement for the exercised cases. [Verification and coverage](#agentic-misalignment-and-verification)
 - **Model detection.** In six synthetic drafts with 15 annotated claims, two Qwen 3.8 27B FP8 configurations each extracted all 6 problem claims and marked 0/6 supported. The upper endpoint of a two-sided 95% Wilson interval is about 39% for each 0/6 result. Detection on an independent holdout, including Chinese drafts and another model family, remains unmeasured.
 - **Human review.** Whether claim-by-claim review helps founders find more errors, and how much time it takes, remains unmeasured.
 
@@ -44,7 +44,7 @@ Daymark selects up to 12 positively scored records. If the model identifies miss
 
 ### Recipient disclosure
 
-A source can protect a verbatim excerpt for internal use or for one specified email recipient. Before simulated sending, the server checks the saved draft against protected excerpts across leads. A matching excerpt outside the recipient's authorization blocks sending even after a factual review. The block records the source and recipient. Approved sends preserve applicable disclosure decisions in the archive. This check covers exact excerpts. Paraphrases and unmarked material remain outside its coverage.
+A source can protect a verbatim excerpt for internal use or for one specified email recipient. Before simulated sending, the server checks the saved draft against protected excerpts across leads. A matching excerpt outside the recipient's authorization blocks sending even after a factual review. The block records the source and recipient. Approved sends preserve applicable disclosure decisions in the archive. Before calling a hosted model, Daymark also checks assembled messages for protected excerpts, including references repeated in the saved draft or history. If a match is found, the request is paused and the user can review the evidence manually or use a local model. The local GPT bridge counts as hosted because it forwards requests. Custom loopback endpoints are treated as local and must keep inference on the machine. These checks cover exact excerpts. Paraphrases and unmarked material remain outside its coverage.
 
 ### Version checks
 
@@ -68,7 +68,7 @@ The [Anthropic agentic misalignment study](https://www.anthropic.com/research/ag
 | --- | --- |
 | Seeded draft errors | Six synthetic drafts with 15 annotated claims on baseline `55927f2`. Both Qwen 3.8 27B FP8 configurations extracted **6/6** problem claims and marked **0/6** supported. The standard and reasoning configurations assigned the expected label to **5/6** and **4/6**, and incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Each parsed **6/6** drafts. The results describe those configurations and cases. No independent holdout or comparison across model families has been completed. |
 | Historical pressure baseline | Earlier Qwen 2.5 3B runs over-abstained on **6/16** eligible supported turns. The model agreed without support in **5 of 6** pressure turns overall, with one unparseable turn. These runs preceded the current draft checks. |
-| Product verification | **220 unit tests** passed. Deterministic acceptance passed **91/91** request-boundary and concurrency checks, **26/26** approval checks, **44/44** archive checks, and **67/67** customer-delivery checks. All seven tested changes to approval conditions were detected by the acceptance suite. |
+| Product verification | **222 unit tests** passed. Deterministic acceptance passed **95/95** request-boundary, concurrency, and model-input checks, **26/26** approval checks, **44/44** archive checks, and **67/67** customer-delivery checks. All seven tested changes to approval conditions were detected by the acceptance suite. |
 
 ### Conditions tested by mutation
 

@@ -166,7 +166,14 @@ function required(value, length) {
 async function complete(messages, timeout, entry = defaultEntry, effort = null) {
   if (!modelConfigured(entry)) fail(503, '请在本地 .env 配置模型 API，或打开独立的模拟评测。');
   const key = modelKey(entry);
-  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(entry.base).hostname);
+  const endpoint = new URL(entry.base);
+  const local = ['127.0.0.1', 'localhost', '[::1]'].includes(endpoint.hostname);
+  // A loopback bridge can still forward prompts to a hosted provider.
+  const bridgePort = Number(process.env.DAYMARK_CODEX_BRIDGE_PORT ?? 4334);
+  const hosted = !local || entry.codex || Number(endpoint.port) === bridgePort;
+  if (hosted && workflow.hasRestrictedModelInput(messages)) {
+    fail(409, '当前请求包含受限原文，托管模型无法使用这部分证据。请改用本地模型或人工复核。');
+  }
   const params = { model: entry.id, max_tokens: 2048, messages,
     ...(entry.codex ? { reasoning_effort: effort ?? 'low', service_tier: 'default' }
       : !local && Object.hasOwn(entry.efforts ?? {}, effort) ? { reasoning_effort: entry.efforts[effort] } : {}),

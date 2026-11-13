@@ -1,4 +1,4 @@
-import { disclosureDecisions } from './disclosure.mjs';
+import { disclosureDecisions, containsRestrictedExcerpt } from './disclosure.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaimReport, verifyClaims, draftChecks,
   evidenceHash, sha256, CLAIMS_PROMPT_VERSION } from './claims.mjs';
@@ -421,6 +421,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   };
 
   return {
+    hasRestrictedModelInput: messages => containsRestrictedExcerpt(messages, disclosureRules()),
     state,
     mutations: {
       '/api/opportunity': ({ kind, title, source, evidence, evidence_kind }) => {

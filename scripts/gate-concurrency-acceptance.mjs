@@ -24,7 +24,7 @@
 // mock（队列驱动，记录每个请求，队列外请求判 FAIL）；trace 写入 docs/evidence/。
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile, chmod, mkdir } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile, chmod, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -184,13 +184,16 @@ const unknownSpec = (id, text) => ({ id, dimension: id, text, match: [],
 const dataDir = await mkdtemp(path.join(tmpdir(), 'daymark-gate-concurrency-'));
 await mock.listen(mockPort, '127.0.0.1');
 
-const stubPath = path.join(dataDir, 'stub-codex.mjs');
+const stubPath = path.join(dataDir, 'stub-gpt.mjs');
+const bridgeCapture = path.join(dataDir, 'bridge-input.txt');
+await writeFile(bridgeCapture, '');
 await writeFile(stubPath, '#!/usr/bin/env node\n' +
-  'import { writeFileSync } from "node:fs";\n' +
+  'import { appendFileSync, writeFileSync } from "node:fs";\n' +
   'const args = process.argv.slice(2);\n' +
   'const i = args.indexOf("--output-last-message");\n' +
   'let stdin = "";\n' +
   'for await (const chunk of process.stdin) stdin += chunk;\n' +
+  'appendFileSync(' + JSON.stringify(bridgeCapture) + ', stdin);\n' +
   'if (i >= 0 && i + 1 < args.length) writeFileSync(args[i + 1], "（模拟 Codex）stub 回复：按请求格式回答。");\n');
 await chmod(stubPath, 0o755);
 
@@ -204,6 +207,7 @@ bridge.stderr.on('data', c => { bridgeLog += c; });
 const server = spawn(process.execPath, ['server.mjs'], {
   cwd: root,
   env: { ...process.env, DAYMARK_DATA_DIR: dataDir, PORT: String(port),
+    DAYMARK_CODEX_PICKER: '1', DAYMARK_CODEX_BRIDGE_PORT: String(bridgePort),
     OPENAI_BASE_URL: 'http://127.0.0.1:' + mockPort + '/v1', MODEL_ID: 'mock-model', OPENAI_API_KEY: '' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -693,14 +697,18 @@ async function stateTable() {
     const id = await createLead();
     await saveDraft(id, '请确认交付日期。');
     await reviewDraft(id, { draft_id: (await opById(id)).draft_id, resolution: '已核实。' });
+    const approvedView = (await opById(id)).draft_id;
     await setDelegation('send', 'human');
-    const r = await sendDraft(id, (await opById(id)).draft_id);
+    const r = await sendDraft(id, approvedView);
     await setDelegation('send', 'approval');
     const audit = await auditOf(id);
     const blocked = lastBlocked(audit);
     expect(r.status === 409 && r.error?.includes('当前授权不允许') && blocked?.detail?.mode === 'human',
       'E-1 委托模式 send=human → 审批端点拒绝（审计含 mode=human）', r.error);
     expect(sendEvents(audit).length === 0 && (await opById(id)).sent === 0, 'E-1 零发送事件', '');
+    const restored = await sendDraft(id, approvedView);
+    expect(restored.ok && sendEvents(await auditOf(id)).length === 1,
+      'E-1a 恢复授权后，同一版可经明确批准发送一次', restored.error);
   }
   {
     const id = await createLead();
@@ -856,5 +864,30 @@ await g2Impersonation();
 await stateTable();
 await g3Concurrency();
 await releaseGate();
+async function modelDisclosure() {
+  const secret = 'Internal quote "PRIVATE-8873"';
+  const id = await createLead({ evidence: secret });
+  const protectedSource = await api('/api/opportunity-source-disclosure', {
+    id, source_id: 'E1', scope: 'recipient', excerpt: secret, recipient: 'client@example.test',
+  });
+  const blocked = await api('/api/chat', {
+    model: 'gpt-6.1-sol', text: 'Please analyze ' + secret, language: 'en',
+  });
+  const capturedAfterBlock = await readFile(bridgeCapture, 'utf8');
+  expect(protectedSource.ok && blocked.status === 409 && blocked.error?.includes('托管模型无法使用') &&
+    capturedAfterBlock === '',
+    'P-1 受限原文不会提交给转发到托管模型的本地桥接', blocked.error);
+  qChat({ answer: 'Local review.', facts: [], citations: [], unknowns: [] });
+  const local = await api('/api/chat', { model: 'mock-model', text: 'Please analyze ' + secret, language: 'en' });
+  expect(local.ok && modelRequests.at(-1)?.user?.includes(secret),
+    'P-2 本地模型仍可核查受限资料', local.error);
+  const ordinary = await api('/api/chat', {
+    model: 'gpt-6.1-sol', text: 'Please prepare a neutral follow-up.', language: 'en',
+  });
+  const capturedOrdinary = await readFile(bridgeCapture, 'utf8');
+  expect(ordinary.ok && capturedOrdinary.includes('Please prepare a neutral follow-up.') &&
+    !capturedOrdinary.includes('PRIVATE-8873'), 'P-3 托管模型仍可处理普通内容', ordinary.error);
+}
+await modelDisclosure();
 await bridgeSection();
 await finish(0);

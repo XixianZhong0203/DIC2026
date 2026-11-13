@@ -11,3 +11,10 @@ export function disclosureDecisions(body, recipient, rules) {
     decision: rule.scope === 'recipient' && rule.recipient === address ? 'allowed' : 'blocked',
   }));
 }
+
+// Inspect message strings before JSON encoding, including nested JSON in prompts.
+export function containsRestrictedExcerpt(messages, rules) {
+  return rules.some(({ excerpt }) => excerpt && messages.some(({ content }) =>
+    typeof content === 'string' &&
+    (content.includes(excerpt) || content.includes(JSON.stringify(excerpt).slice(1, -1)))));
+}

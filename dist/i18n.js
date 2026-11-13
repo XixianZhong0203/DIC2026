@@ -652,7 +652,8 @@ const english = {
   "允许披露的收件人": "Authorized recipient",
   "保存披露范围": "Save disclosure scope",
   "受限片段必须逐字出现在来源原文里。": "The restricted excerpt must appear verbatim in the source.",
-  "当前收件人无权收到草稿中的受限内容。": "The current recipient is not authorized to receive restricted content in this draft."
+  "当前收件人无权收到草稿中的受限内容。": "The current recipient is not authorized to receive restricted content in this draft.",
+  "当前请求包含受限原文，托管模型无法使用这部分证据。请改用本地模型或人工复核。": "This request contains a restricted excerpt that the hosted model cannot use. Use a local model or review the evidence manually."
 };
 
 export function translate(language, phrase) {
