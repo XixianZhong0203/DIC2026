@@ -1320,3 +1320,46 @@ test('a late verification from an older draft cannot clear a retained flag', asy
   call('opportunity-send', { id, draft_id: currentId });
   assert.equal(current().sent, 1);
 });
+
+test('recipient disclosure blocks a supported cross-lead excerpt despite overall review', async () => {
+  const quote = '报价为人民币八万元。';
+  const { call, current, state } = fixture(() => JSON.stringify({ claims: [{
+    id: 'quote', text: quote, items: [{ evidenceId: 'E1', stance: 'supports', quote, note: '客户确认报价' }],
+  }] }), { evidence: quote, source: '客户 A 报价' });
+  const sourceLead = current().id;
+  call('opportunity-source-disclosure', { id: sourceLead, source_id: 'E1',
+    scope: 'recipient', excerpt: quote, recipient: 'a@example.test' });
+  call('opportunity', { kind: 'lead', title: '对外跟进', source: '报价确认',
+    evidence: quote, evidence_kind: 'customer' });
+  const { id } = current();
+  const save = recipient => {
+    call('opportunity-draft', { id, recipient, body: quote });
+    return current().draft_id;
+  };
+  const check = draft_id => call('opportunity-claims', { id, draft_id, target: 'draft' });
+  const sends = () => state().audit.filter(event => event.action === 'simulated_send');
+  const unauthorized = save('b@example.test');
+  await check(unauthorized);
+  assert.equal(current().claims.claims[0].status, 'supported');
+  call('opportunity-review', { id, draft_id: unauthorized, resolution: '已确认报价。' });
+  assert.throws(() => call('opportunity-send', { id, draft_id: unauthorized }), { status: 409 });
+  assert.equal(sends().length, 0);
+  const blocked = JSON.parse(state().audit[0].detail);
+  assert.equal(blocked.reason, 'disclosure_restricted');
+  assert.equal(blocked.disclosure[0].opportunityId, sourceLead);
+  assert.equal(blocked.recipient, 'b@example.test');
+
+  const authorized = save('a@example.test');
+  await check(authorized);
+  call('opportunity-send', { id, draft_id: authorized });
+  assert.equal(sends().length, 1);
+  assert.equal(current().archives[0].approval.disclosure[0].decision, 'allowed');
+  assert.equal(current().archives[0].integrity.status, 'verified');
+
+  const internal = save('a@example.test');
+  await check(internal);
+  call('opportunity-source-disclosure', { id: sourceLead, source_id: 'E1',
+    scope: 'internal', excerpt: quote });
+  assert.throws(() => call('opportunity-send', { id, draft_id: internal }), { status: 409 });
+  assert.equal(sends().length, 1);
+});

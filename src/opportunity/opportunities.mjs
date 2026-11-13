@@ -1,3 +1,4 @@
+import { disclosureDecisions } from './disclosure.mjs';
 import { randomUUID, createHash } from 'node:crypto';
 import { ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS, claimMessages, parseClaimReport, verifyClaims, draftChecks,
   evidenceHash, sha256, CLAIMS_PROMPT_VERSION } from './claims.mjs';
@@ -57,6 +58,14 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
       date TEXT, kind TEXT NOT NULL DEFAULT 'customer', text TEXT NOT NULL
     );
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS source_disclosure (
+      opportunity TEXT NOT NULL, source_id TEXT NOT NULL, source_name TEXT NOT NULL,
+      excerpt TEXT NOT NULL, scope TEXT NOT NULL, recipient TEXT,
+      PRIMARY KEY (opportunity, source_id)
+    );
+  `);
+  const disclosureRules = () => db.prepare('SELECT * FROM source_disclosure ORDER BY opportunity, source_id').all();
   const opportunityColumns = db.prepare('PRAGMA table_info(opportunities)').all();
   if (!opportunityColumns.some(column => column.name === 'review')) {
     db.exec('ALTER TABLE opportunities ADD COLUMN review TEXT');
@@ -379,6 +388,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         archivesByOpportunity.get(row.opportunity).push({ archiveId: row.id, integrity });
       }
     }
+    const rules = disclosureRules();
     const opportunities = db.prepare('SELECT * FROM opportunities ORDER BY rowid DESC').all()
       .map(item => {
         const sources = byOpportunity.get(item.id) ?? [];
@@ -390,7 +400,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const covered = verifiedDraft(item, claims, sources) ? claims.claims.map(claim => claim.text) : [];
         const carryoverChecks = previous.length ? draftChecks(item.body ?? '',
           [...covered, ...previous.filter(flag => carriedGuarantee(guarantees, flag)).map(flag => flag.text)]) : null;
-        return { ...item, sources, claims, previousUnresolvedClaims: previous, carryoverChecks,
+        return { ...item, sources, claims,
+          disclosureRules: rules.filter(rule => rule.opportunity === item.id),
+          disclosureConflicts: disclosureDecisions(item.body ?? '', item.recipient, rules)
+            .filter(result => result.decision === 'blocked'),
+          previousUnresolvedClaims: previous, carryoverChecks,
           claimEvidenceHash: previous.length ? evidenceHash(item, sources) : null,
           needsClaimRecheck: requiresCheckAfterRemoval(item, claims, sources), claimsStale: claimsStale(item, claims, sources),
           reviewStale: reviewStale(item, sources), reviewViewed: currentViewed(item, sources), answer,
@@ -456,6 +470,28 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         } catch {
           audit(id, 'claims_failed', { target: 'analysis', error: '核查过程异常，分析结果不受影响' });
         }
+      },
+      '/api/opportunity-source-disclosure': ({ id, source_id, scope, excerpt, recipient }) => {
+        const item = get(id);
+        if (!['internal', 'recipient', 'unset'].includes(scope)) fail(400, '请求内容不正确。');
+        const source = verificationSources(item, sourcesFor(id)).find(row => row.id === source_id);
+        if (!source) fail(400, '引用了不存在的来源');
+        const selected = scope === 'unset' ? null : required(excerpt, 8000);
+        if (selected && !source.text.includes(selected)) fail(400, '受限片段必须逐字出现在来源原文里。');
+        const address = scope === 'recipient' ? required(recipient, 254).toLowerCase() : null;
+        if (address && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) fail(400, '请输入有效的收件人。');
+        transaction(() => {
+          const previous = db.prepare('SELECT * FROM source_disclosure WHERE opportunity=? AND source_id=?').get(id, source_id);
+          if (scope === 'unset') {
+            db.prepare('DELETE FROM source_disclosure WHERE opportunity=? AND source_id=?').run(id, source_id);
+          } else {
+            db.prepare(`INSERT INTO source_disclosure VALUES (?,?,?,?,?,?)
+              ON CONFLICT(opportunity, source_id) DO UPDATE SET source_name=excluded.source_name,
+              excerpt=excluded.excerpt, scope=excluded.scope, recipient=excluded.recipient`)
+              .run(id, source_id, source.source, selected, scope, address);
+          }
+          audit(id, 'disclosure_policy_changed', { sourceId: source_id, previous, scope, excerpt: selected, recipient: address });
+        });
       },
       '/api/opportunity-source': async ({ id, name, date, kind, text, language }) => {
         const item = get(id);
@@ -630,6 +666,13 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
           audit(id, 'duplicate_send', { draftId: draft_id });
           fail(409, '这版草稿已批准发送，重复批准不会产生新的发送。');
         }
+        const conflicts = disclosureDecisions(item.body ?? '', item.recipient, disclosureRules())
+          .filter(result => result.decision === 'blocked');
+        if (conflicts.length) {
+          audit(id, 'blocked', { action: 'send', reason: 'disclosure_restricted',
+            draftId: draft_id, recipient: item.recipient, disclosure: conflicts });
+          fail(409, '当前收件人无权收到草稿中的受限内容。');
+        }
         let analysis = null;
         try {
           analysis = item.analysis ? JSON.parse(item.analysis) : null;
@@ -747,8 +790,17 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         // 走逐条担保放行时，同时记录最终批准发送时哪些声明由创始人担保。
         // 原子占位：只有 sent 仍为 0 时占位成功；并发重复批准里只有一个请求
         // 能占到并写 approved/simulated_send，其余落 duplicate_send + 409。
+        let disclosureBlocked = false;
         let claimed = false;
         transaction(() => {
+          const disclosure = disclosureDecisions(item.body ?? '', item.recipient, disclosureRules());
+          const conflicts = disclosure.filter(result => result.decision === 'blocked');
+          if (conflicts.length) {
+            audit(id, 'blocked', { action: 'send', reason: 'disclosure_restricted',
+              draftId: draft_id, recipient: item.recipient, disclosure: conflicts });
+            disclosureBlocked = true;
+            return;
+          }
           claimed = db.prepare('UPDATE opportunities SET sent=1 WHERE id=? AND draft_id=? AND sent=0').run(id, draft_id).changes > 0;
           if (claimed) {
             const basis = guaranteedClaims.length ? 'human_guarantee'
@@ -759,17 +811,18 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
               resolution: basis === 'human_review' ? item.review : null,
               guarantees: currentGuarantees(item, sourceRows).filter(row =>
                 guaranteedClaims.some(claim => claim.claimId === row.claimId && claim.text === row.claimText)),
-              reviewedCoverage: uncovered };
+              reviewedCoverage: uncovered, disclosure };
             const archive = buildSendArchive({ opportunity: item, sourceRows, claims: review, analysis,
               answer: safeParse(item.answer), reviewViewed: currentViewed(item, sourceRows), viewingTrail: viewingTrail(id),
               approval });
             const { digest } = storeArchive(db, archive);
             audit(id, 'approved', { draftId: draft_id, recipient: item.recipient, mode: approval.mode,
-              evidence: basis, archiveId: archive.archiveId, digest,
+              evidence: basis, archiveId: archive.archiveId, digest, disclosure,
               ...(guaranteedClaims.length ? { guaranteedClaims } : {}) }, sentAt);
             audit(id, 'simulated_send', { draftId: draft_id, recipient: item.recipient, body: item.body });
           }
         });
+        if (disclosureBlocked) fail(409, '当前收件人无权收到草稿中的受限内容。');
         if (!claimed) {
           audit(id, 'duplicate_send', { draftId: draft_id });
           fail(409, '这版草稿已批准发送，重复批准不会产生新的发送。');

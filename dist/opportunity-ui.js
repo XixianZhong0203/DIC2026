@@ -38,7 +38,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     truncated_negation: '声明截断了否定词，语义可能反转',
     quote_missing_context: '引文缺少关键上下文（截掉了原文的否定/条件/限定）', quote_ambiguous: '引文在原文中出现多次且含义不同，需更完整的引文',
   };
-  const blockedReasons = { no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
+  const blockedReasons = { disclosure_restricted: '当前收件人无权收到草稿中的受限内容。', no_evidence_review: '未分析也未复核', unresolved_evidence: '证据未核实且未复核', draft_changed: '草稿版本已过期',
     claims_not_verified: '草稿声明尚未核查', claims_stale: '草稿声明核查已过期', claims_incomplete: '声明核查未完成', claims_unresolved: '声明核查未通过', claims_no_claims: '未提取到声明',
     claims_founder_only: '声明仅由创始人提供', claims_unconfirmed: '声明来源未确认',
     claims_placeholders: '占位符未处理', claims_uncovered: '高风险句未被覆盖', claims_pending: '仍有待处理项',
@@ -115,6 +115,45 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
 
   // 初始来源：身份（客户原文／外部记录、创始人陈述、来源未确认）由用户录入，
   // 决定这段原文的引文能如何支持声明；改判身份会改变核查指纹，已有核查自动过期重跑。
+  function disclosureControls(item, sourceId, sourceText) {
+    const rule = (item.disclosureRules ?? []).find(row => row.source_id === sourceId);
+    const form = element('form', '');
+    const scope = element('select', '');
+    scope.setAttribute('aria-label', t('披露范围'));
+    for (const [value, label] of Object.entries({
+      unset: '未设置披露限制', internal: '仅内部', recipient: '仅指定收件人',
+    })) {
+      const option = element('option', t(label));
+      option.value = value;
+      option.selected = value === (rule?.scope ?? 'unset');
+      scope.append(option);
+    }
+    const excerpt = element('textarea', '');
+    excerpt.value = rule?.excerpt ?? sourceText;
+    excerpt.maxLength = 8000;
+    excerpt.setAttribute('aria-label', t('受限原文片段'));
+    const recipient = element('input', '');
+    recipient.type = 'email';
+    recipient.value = rule?.recipient ?? '';
+    recipient.setAttribute('aria-label', t('允许披露的收件人'));
+    const update = () => {
+      excerpt.hidden = scope.value === 'unset';
+      excerpt.required = !excerpt.hidden;
+      recipient.hidden = scope.value !== 'recipient';
+      recipient.required = !recipient.hidden;
+    };
+    scope.addEventListener('change', update);
+    update();
+    const save = action(t('保存披露范围'), () => {
+      if (form.reportValidity()) return request('opportunity-source-disclosure', {
+        id: item.id, source_id: sourceId, scope: scope.value, excerpt: excerpt.value, recipient: recipient.value,
+      });
+    });
+    form.onsubmit = event => { event.preventDefault(); save.click(); };
+    form.append(scope, excerpt, recipient, save);
+    return form;
+  }
+
   function originBlock(item) {
     const kind = item.evidence_kind ?? 'unconfirmed';
     const block = element('details', '');
@@ -136,7 +175,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     });
     form.onsubmit = event => { event.preventDefault(); confirm.click(); };
     form.append(select, confirm);
-    block.append(form);
+    block.append(form, disclosureControls(item, 'E1', item.evidence));
     return block;
   }
 
@@ -151,8 +190,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     block.append(remember('E1', viewableDetails(item, 'E1',
       details(t(sourceKindLabels.evidence) + ' · ' + item.source, item.evidence))));
     for (const row of sources) {
-      block.append(remember('S' + row.id, viewableDetails(item, 'S' + row.id, details(
-        t(sourceKindLabels[row.kind] ?? row.kind) + (row.date ? ' · ' + row.date : '') + ' · ' + row.name, row.text))));
+      const id = 'S' + row.id;
+      const source = details(t(sourceKindLabels[row.kind] ?? row.kind) +
+        (row.date ? ' · ' + row.date : '') + ' · ' + row.name, row.text);
+      source.append(disclosureControls(item, id, row.text));
+      block.append(remember(id, viewableDetails(item, id, source)));
     }
     // 来源类型标签由用户录入；证据状态只按实际支持声明的引文判定，与来源数量无关。
     block.append(element('small', t('来源类型（客户来源 / 创始人提供）由你录入；声明的证据状态只看实际支持该声明的引文，一条无关的客户引文不会改变它。')));
@@ -321,6 +363,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     entry.append(element('p',
       (approval.recipient ? t('收件人') + ' · ' + approval.recipient + ' · ' : '') + t('批准依据') + ' · ' + basis));
     if (approval.body) entry.append(details(t('草稿正文'), approval.body));
+    for (const disclosure of approval.disclosure ?? []) {
+      entry.append(element('small', t('披露范围') + ' · ' + disclosure.sourceName + ' · ' +
+        disclosure.allowedRecipient + ' · ' + disclosure.excerpt));
+    }
     // 核查配置取档案内嵌的 verification 块（核查时刻写下的实际值，旧档案不补写）。
     entry.append(element('small', checkConfigText(archive.verification ?? {})));
     // 完整性：存档 digest 与存储字节重算的比对结果（服务端 state 附带）；
@@ -449,6 +495,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   const unhandledPrevious = item => previousFlags(item).filter(claim => !previousGuarantee(item, claim));
 
   function sendable(item) {
+    if (item.disclosureConflicts?.length) return false;
     if (item.needsClaimRecheck || unhandledPrevious(item).length) return false;
     if (item.draftPlaceholders?.length) return false;
     const review = item.claims;
@@ -599,6 +646,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   // 人工复核结论绑定当前草稿与当前来源版本：复核过期（草稿变了或来源变了）时不再显示待批准。
   function approvalStatus(item) {
     if (!item.draft_id) return { label: '尚未保存草稿', tone: 'muted' };
+    if (item.disclosureConflicts?.length) return { label: '当前收件人无权收到草稿中的受限内容。', tone: 'attention' };
     const retained = unhandledPrevious(item).length;
     if (retained) return { label: '上一版仍有未处理声明', tone: 'attention', count: retained };
     if (item.needsClaimRecheck) return { label: '风险声明改写后需重新核查', tone: 'attention' };
@@ -755,6 +803,12 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(element('p', t('证据状态') + ' · ' + evidenceLabel,
         item.reviewStale || (!item.review && result?.status !== 'supported') ? 'attention' : 'muted'));
       if (!item.sent) {
+        if (!item.sent) {
+          for (const conflict of item.disclosureConflicts ?? []) {
+            editor.append(element('p', t('披露范围') + ' · ' + conflict.sourceName +
+              ' · ' + item.recipient + ' · ' + conflict.excerpt, 'attention'));
+          }
+        }
         const status = approvalStatus(item);
         card.append(element('p', t('当前状态') + ' · ' + t(status.label) +
           (status.count ? ' · ' + status.count : ''), status.tone));
@@ -782,7 +836,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           editor.append(action(t(item.claims?.target === 'draft' ? '重新核查' : '核查关键声明'), () => request('opportunity-claims', {
             id: item.id, target: 'draft', draft_id: item.draft_id, language: language(),
           }), false));
-          if (unhandledPrevious(item).length) {
+          if (item.disclosureConflicts?.length) {
+            editor.append(element('p', t('当前收件人无权收到草稿中的受限内容。'), 'attention'));
+          } else if (unhandledPrevious(item).length) {
             editor.append(element('p', t('上一版仍有未处理声明') + ' · ' +
               unhandledPrevious(item).map(claim => claim.text).join('、'), 'attention'));
           } else if (item.needsClaimRecheck) {

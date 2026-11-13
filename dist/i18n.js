@@ -643,7 +643,16 @@ const english = {
   "档案内容与批准记录不一致": "Archive content does not match the approval record",
   "「*」用于全局记忆，不能用作项目名称。": "The name * is reserved for global memory.",
   "这个旧会话使用了保留的项目名称。请在正确的项目中开启新会话。": "This older conversation uses a reserved project name. Start a new conversation in the correct project.",
-  "不能将项目记录带入全局范围。": "Project records cannot be imported into global memory."
+  "不能将项目记录带入全局范围。": "Project records cannot be imported into global memory.",
+  "披露范围": "Disclosure scope",
+  "未设置披露限制": "No disclosure restriction set",
+  "仅内部": "Internal only",
+  "仅指定收件人": "Specified recipient only",
+  "受限原文片段": "Restricted verbatim excerpt",
+  "允许披露的收件人": "Authorized recipient",
+  "保存披露范围": "Save disclosure scope",
+  "受限片段必须逐字出现在来源原文里。": "The restricted excerpt must appear verbatim in the source.",
+  "当前收件人无权收到草稿中的受限内容。": "The current recipient is not authorized to receive restricted content in this draft."
 };
 
 export function translate(language, phrase) {

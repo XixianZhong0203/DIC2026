@@ -596,3 +596,15 @@ test('an earlier flagged statement remains visible and can be guaranteed on the 
     reason: reason.value, evidence_hash: 'current-evidence',
   } });
 });
+
+test('the saved draft shows the restricted excerpt and hides approval for an unauthorized recipient', () => {
+  const { renderOne, fullText } = harness();
+  const card = renderOne(item({
+    draft_id: 'd2', recipient: 'b@example.test', body: '报价为人民币八万元。',
+    review: '已人工复核', review_draft: 'd2',
+    disclosureConflicts: [{ sourceName: '客户 A 报价', excerpt: '报价为人民币八万元。' }],
+  }));
+  assert.match(fullText(card), /客户 A 报价 · b@example.test · 报价为人民币八万元。/);
+  assert.match(fullText(card), /当前收件人无权收到草稿中的受限内容/);
+  assert.equal(find([card], node => node.text === '批准已保存版本并模拟发送'), null);
+});

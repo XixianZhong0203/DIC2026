@@ -106,6 +106,7 @@ export function buildSendArchive(ctx) {
       resolution: approval.resolution ?? null,
       guarantees: approval.guarantees ?? [],
       reviewedCoverage: approval.reviewedCoverage ?? [],
+      disclosure: approval.disclosure ?? [],
     },
     // 来源快照（含全文）：发送后来源被修改，这里仍是「当时的来源」。
     sources: snapshot,
