@@ -110,11 +110,19 @@ The reported model measurements apply to the tested Qwen configurations. The app
 
 Use Node.js 24 or later. Start the server with `npm start` and open [Daymark](http://127.0.0.1:4173). The interface supports English and Chinese. Run `npm test` for unit checks.
 
-Copy [.env.example](.env.example) to `.env` and configure a model. The [catalog](src/models.mjs) includes Qwen 3.8 27B through LiteLLM and OpenCode models. You can also set `OPENAI_BASE_URL` and `MODEL_ID` for a custom OpenAI-compatible endpoint such as Ollama. Use the composer menu to choose a model and the available thinking level for each conversation. The conversation selection applies only to chat replies. Topic detection, memory extraction and review, lead analysis, claim verification, and evaluations use the configured default model. Hosted model requests can include relevant records and recent conversation.
+Copy [.env.example](.env.example) to `.env` and configure a model. The workspace database is stored at `data/daymark.sqlite` by default. Set `DAYMARK_DATA_DIR` to store it in another directory.
 
-Set `GEMINI_API_KEY` in `.env` to add Gemini 3.5 Flash-Lite to the chat model picker. Gemini uses Google’s hosted endpoint and the same protected-excerpt check as other hosted models. For a Node certificate validation error on macOS, `NODE_USE_SYSTEM_CA=1` enables the system trust store.
+### Model catalog
 
-For the optional GPT models, sign in to the Codex CLI, run `node scripts/local-gpt-bridge.mjs` in a separate terminal, then set `DAYMARK_CODEX_PICKER=1` in Daymark's `.env` and restart. GPT‑6.1 Sol offers **Low**. GPT‑5.6 Sol, Terra, and Luna offer **Low** or **Medium**. The local bridge uses standard processing. Availability depends on the signed-in Codex account. The workspace database lives in `data/`.
+| Connection | Models | Setup |
+| --- | --- | --- |
+| Configured LiteLLM endpoint | Qwen 3.8 27B (`Qwen3.8-27B-FP8-reasoning`) | Set `OPENAI_API_KEY`. |
+| Google Gemini API | Gemini 3.5 Flash-Lite | Set `GEMINI_API_KEY`. |
+| GPT through the local bridge | GPT-6.1 Sol, GPT-5.6 Sol, GPT-5.6 Terra, GPT-5.6 Luna | Sign in to the Codex CLI, run `node scripts/local-gpt-bridge.mjs` separately, set `DAYMARK_CODEX_PICKER=1`, and restart Daymark. The bridge forwards requests to OpenAI. |
+| OpenCode hosted inference | Iceman Free, Inkling 2 Small Free, LongCat 2.5 Free, Flint 40B Free, MiniMax M3.1 Flash Free, DeepSeek V4.1 Flash Free, Nemotron 3.5 Super VL Free, Beam Free, MiMo-V2.6-Flash Free, GLM-5.3-Flash Free, Nemotron 3.5 Lightning Free, and Big Pickle | Uses the shared public pool by default. Set `OPENCODE_API_KEY` to use your account. |
+| Custom OpenAI-compatible endpoint | Any model served by the configured endpoint, including an Ollama model installed on this machine | Set `OPENAI_BASE_URL` and `MODEL_ID`. An Ollama endpoint at `http://127.0.0.1:11434/v1` can keep inference on this machine. |
+
+All models in the catalog use the same Daymark chat interface. Choose a model for each conversation in the composer. That selection applies only to chat replies. Topic detection, memory extraction and review, lead analysis, claim verification, and evaluations use the configured default model. Hosted calls can include relevant records and recent conversation, subject to the protected-excerpt check. For a Node certificate validation error on macOS, `NODE_USE_SYSTEM_CA=1` enables the system trust store. [Model catalog](src/models.mjs) · [GPT models and settings](src/chat/local-gpt-models.mjs)
 
 ## Appendix · Memory ranking
 
