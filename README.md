@@ -1,16 +1,16 @@
 # Daymark · DIC 2026
 
-Daymark is a local AI workspace for a one-person company. The founder often makes decisions and reviews the assistant’s work alone. Daymark makes the evidence visible, asks for clarification when an important fact is missing, and binds approval to the exact draft and evidence under review.
+Daymark is a local AI workspace for a one-person company. The founder often makes decisions and reviews the assistant’s work alone. Daymark checks claims in customer outreach before a founder approves the exact draft and evidence under review.
 
 ## At a glance
 
-- **Server enforcement.** The integrated build passed 291 unit tests, 95/95 request-boundary, concurrency, and model-input checks, and 26/26 approval checks. The acceptance suites detected all 13 tested mutations to server safeguards. [Verification and coverage](#agentic-misalignment-and-verification)
-- **Model detection.** On six synthetic drafts with 15 annotated claims, each of two Qwen 3.8 27B FP8 configurations extracted all six problem claims and marked 0/6 supported. The upper endpoint of a two-sided 95% Wilson interval is about 39%. Detection on an independent holdout and across model families remains unmeasured.
+- **Server enforcement.** The integrated build passed 291 unit tests, 95/95 request-boundary, concurrency, and model-input checks, and 26/26 approval checks. The acceptance suites detected 13 deliberate changes to the approval, disclosure, and request safeguards. [Verification and coverage](#agentic-misalignment-and-verification)
+- **Draft pilot.** Gemini and Qwen extracted **13/21** and **12/21** annotated problem claims, respectively. With either model, the simulated approval workflow blocked all **19** problem drafts and cleared **2/3** clean drafts. The synthetic drafts were model-authored. [Pilot design and limits](#pilot-findings)
 - **Human review.** Whether reviewing claims individually helps founders find more errors, and how much time it takes, remains unmeasured.
 
 ## 1. How can the founder audit the assistant’s reasoning and actions?
 
-The evidence panel separates records provided to the model, sources cited by the reply, and excerpts the verifier judged to support or oppose a claim. The decision and task logs show what changed, including calendar changes and their receipts. Each simulated send exports a snapshot of the approved draft, sources, claim verdicts, guarantees, and approval. A SHA-256 digest in the approval audit lets Daymark detect changes to the archive while that audit remains intact. [Audit and archive details](docs/PRODUCT.md#1-how-can-the-founder-audit-the-assistants-reasoning-and-actions)
+The evidence panel separates records provided to the model, sources cited by the reply, and excerpts the verifier judged to support or oppose a claim. The decision and task logs show what changed, including calendar changes and their receipts. Each simulated send exports a snapshot of the approved draft, sources, claim verdicts, guarantees, and approval. A SHA-256 digest detects partial edits to an archive when the approval audit remains intact. Both records live in the same local database. [Audit and archive details](docs/PRODUCT.md#1-how-can-the-founder-audit-the-assistants-reasoning-and-actions)
 
 ## 2. What happens when instructions conflict or the assistant is uncertain?
 
@@ -18,7 +18,7 @@ Daymark can show what the evidence establishes, what is still missing, and which
 
 ## 3. How can the founder catch unsupported agreement before relying on an answer?
 
-Chat flags unsupported or disputed assertions above the reply and links each flag to the relevant sources. When the extracted claims all have support, the status gives the count and limits its conclusion to those extracted claims. Outreach checks show which claims were extracted and use a separate scan to catch placeholders and common high-risk clauses the model may have missed. The server blocks simulated sending unless the current draft satisfies the applicable review and explicit approval requirements. An unresolved claim survives edits and incomplete rechecks. Recipient restrictions can also block protected verbatim excerpts. [Claim verification and approval details](docs/PRODUCT.md#3-how-can-the-founder-catch-unsupported-agreement-before-relying-on-an-answer)
+Chat flags unsupported or disputed assertions above the reply and links each flag to the relevant sources. When the extracted claims all have support, the status gives the count and limits its conclusion to those extracted claims. Outreach checks show which claims were extracted and use a separate scan to catch placeholders and common high-risk clauses the model may have missed. The server blocks simulated sending unless the current draft satisfies the applicable review and explicit approval requirements. An unresolved claim survives edits and incomplete rechecks. Recipient restrictions can also block protected verbatim excerpts. The code checks the cited text and applies contextual rules. Whether a passage semantically supports a claim remains a model judgment. [How we test for sycophancy](#sycophancy-abstention-and-source-injection) [Claim verification and approval details](docs/PRODUCT.md#3-how-can-the-founder-catch-unsupported-agreement-before-relying-on-an-answer)
 
 ## Agentic misalignment and verification
 
@@ -26,17 +26,42 @@ The [Anthropic agentic misalignment study](https://www.anthropic.com/research/ag
 
 | Check | Result and scope |
 | --- | --- |
-| Seeded draft errors | Six synthetic drafts with 15 annotated claims on baseline `55927f2`. Both Qwen 3.8 27B FP8 configurations extracted **6/6** problem claims and marked **0/6** supported. The standard and reasoning configurations assigned the expected label to **5/6** and **4/6**, and incorrectly flagged **1/9** and **0/9** ordinary claims, respectively. Each parsed **6/6** drafts. The results describe those configurations and cases. No independent holdout or comparison across model families has been completed. |
-| Historical pressure baseline | Earlier Qwen 2.5 3B runs over-abstained on **6/16** eligible supported turns. The model agreed without support in **5 of 6** pressure turns overall, with one unparseable turn. These runs preceded the current draft checks. |
 | Product verification | **291 unit tests** passed. Deterministic acceptance passed **95/95** request-boundary, concurrency, and model-input checks, **26/26** approval checks, **44/44** archive checks, **67/67** customer-delivery checks, **29/29** workspace-isolation checks, and **31/31** lead-answer checks. The chat claim-check suite passed **24/24** and the shared-memory workflow passed **27/27**, both with deterministic model substitutes. [Shared-memory acceptance](scripts/shared-memory-acceptance.mjs) The English delivery and security suite passed **22/22**, and the mutation suites detected **13/13** deliberate changes to server safeguards. [English workflow and security acceptance](scripts/security-regression-acceptance.mjs) |
 
 [Mutation cases and coverage limits](docs/PRODUCT.md#conditions-tested-by-mutation)
 
+### Pilot findings
+
+The real-model draft pilot used commit `ace50e3`, the same 22 synthetic drafts per model, and one run per model. An approval attempt targeted the current draft version without manual review or a founder guarantee.
+
+| Outcome | Gemini 3.5 Flash-Lite | Qwen 3.8 27B FP8 |
+| --- | ---: | ---: |
+| Problem claims extracted | 13/21 | 12/21 |
+| Extracted problem claims flagged | 13/13 | 12/12 |
+| Request or parsing failures | 1/22 | 7/22 |
+| Problem drafts cleared for simulated send | 0/19 | 0/19 |
+| Clean drafts cleared for simulated send | 2/3 | 2/3 |
+
+The two-sided 95% Wilson interval for each 0/19 result is approximately **0–16.8%**. The send outcome includes blocks caused by failed checks. The drafts were authored by model families under test. The pilot included three clean drafts and no independent human-authored holdout. The Gemini run retains per-case console outcomes and summary counts. Its raw draft responses were overwritten in a report filename collision.
+
+An offline diagnostic of the same baseline draft set ran the rule scanner without pre-covered spans. It flagged clauses containing **14/21** annotated problem spans. The archived Qwen extraction hit **12/21**. Counting the two sets together yielded **19/21** spans, including **7** spans found only by rules. This measures coverage of annotated text under a diagnostic setting. It is separate from per-draft runtime blocking and from semantic correctness.
+
+### Sycophancy, abstention, and source injection
+
+The second-round evaluation tests whether a lead assessment follows the founder's confidence when the customer evidence stays the same. For example, the founder may insist that a prospect is definitely buying after the prospect merely asks to see examples.
+
+- **Same evidence, different framing.** Compare neutral, pressuring, and affirming prompts against identical customer evidence.
+- **Repeated pushback.** Reassess the same lead over four rounds with no new evidence and track changes in the verdict. Compare the model's raw verdict with the status Daymark shows.
+- **New evidence as a positive control.** Add an explicit customer commitment and check that the assessment updates. A system that always abstains can pass the pressure case and still fail this control.
+
+The harness also covers abstention, workspace isolation, and source injection. Run `node evaluation/round2.mjs --fixture` to check the pipeline with predetermined answers. Real-model sycophancy results for this harness are pending. [Second-round evaluation](evaluation/round2.mjs)
+
 ## Current limits
 
+- **Citation scope.** The verifier can accept a verbatim excerpt that mentions the right topic but refers to a different agreement or expresses the opposite conclusion. Treat its support label as a judgment and compare the source before approving a consequential claim.
 - **Chat coverage.** The checker sees this turn’s retrieved records. A missed counterexample or an assertion the model failed to extract can escape the check. The top status summarizes extracted claims.
 - **Draft edits.** The bilingual matcher recognizes common signing, payment, delivery, completion, and commitment phrases. It can miss paraphrases or misunderstand a change of subject. The founder may still need to compare versions and decide whether the original assertion remains. [Rewrite matcher](src/opportunity/claim-match.mjs)
-- **Shared records and disclosure.** The founder can consult and share records across projects. The recipient and hosted-model checks match explicitly protected excerpts. Reworded disclosures and sensitive information without a protection rule remain outside this check. The applicability label guides how the model uses shared material. Tests cover recorded provenance, retrieval boundaries, and the draft checks in the exercised cases. Semantic leakage through shared memory remains unmeasured.
+- **Shared records and disclosure.** The founder can consult and share records across projects. The recipient and hosted-model checks match explicitly protected excerpts. Reworded disclosures and sensitive information without a protection rule remain outside this check. The applicability label guides how the model uses shared material. Tests cover recorded provenance, retrieval boundaries, and the draft checks in the exercised cases. In a small Gemini chat pilot, one of two replies about customer B repeated customer A’s terms while correctly leaving B’s price unconfirmed. Neither reply became a saved outbound draft. Broader measurement remains pending.
 
 ## Run locally
 

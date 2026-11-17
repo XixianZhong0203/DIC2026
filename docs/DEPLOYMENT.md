@@ -16,7 +16,7 @@ The model selected in the composer handles that conversation’s chat replies. T
 
 ## What we measured
 
-The [README evidence table](../README.md#agentic-misalignment-and-verification) reports the draft-detection measurements for two Qwen 3.8 27B FP8 configurations and the earlier Qwen 2.5 3B pressure baseline. Gemini returned a valid reply to a synthetic API connectivity request. That result establishes connectivity for the request. Comparative detection measurements for Gemini, GPT, and the OpenCode-backed models remain pending.
+The [README draft pilot](../README.md#pilot-findings) reports results for Gemini 3.5 Flash-Lite and Qwen 3.8 27B FP8 on the same synthetic drafts. GPT and OpenCode-backed models were outside that pilot.
 
 ## What Daymark sends to a model endpoint
 
