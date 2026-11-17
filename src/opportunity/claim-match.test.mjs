@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { MATCH_VERSION, matchClaimRewrite } from './claim-match.mjs';
 
-// 窗口 1 验收对：旧版被标记的原句 vs 新正文。
-// 逐字保留 → verbatim；近义改写仍是同一事实 → same_fact；改写成了不同事实 → different_fact；
-// 无法确定是否同一事实 → ambiguous；原句消失且无同动作族候选 → absent。
+// Window 1 acceptance verification: Flagged original sentence from old version vs. new body text.
+// Verbatim preserved -> verbatim; synonymous rewrite is still the same fact -> same_fact; rewritten into a
+// different fact -> different_fact;
+// Unable to determine if it is the same fact -> ambiguous; original sentence disappeared and no candidate
+// from the same action family -> absent.
 
 test('the old sentence still verbatim in the body wins over everything (salutation change keeps the flag)', () => {
   const result = matchClaimRewrite('合同已签署', '王经理：合同已签署，请查收。');
@@ -48,7 +50,7 @@ test('the same intent fact rewritten stays the same fact; negating it is differe
 test('an unparseable old sentence falls back to shared content words (ambiguous, never auto-released)', () => {
   assert.equal(matchClaimRewrite('报价单已发送', '报价单已发出。').verdict, 'ambiguous');
   assert.equal(matchClaimRewrite('报价单已发送', '报价单发出时间为周几，请确认。').verdict, 'ambiguous');
-  // 无任何共享内容词、也无动作族 → absent。
+  // No shared content words and no action family -> absent.
   assert.equal(matchClaimRewrite('报价单已发送', '后续安排另行沟通。').verdict, 'absent');
 });
 

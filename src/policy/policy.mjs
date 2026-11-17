@@ -13,7 +13,8 @@ export const demoRecords = [
 export function releaseStatus(draft, events) {
   const relevant = events.filter(event => event.version === draft.version);
   if (relevant.some(event => event.type === 'published' && event.draft === draft.id)) return 'published';
-  // 测试通过记录绑定具体草稿（修订）：编辑产生新草稿后，旧记录不再放行，须重新验证。
+  // Test pass recording specific draft binding (revision): after edits generate a new draft, old records
+  // are no longer permitted and must be re-verified.
   return relevant.some(event => event.type === 'verified' && event.draft === draft.id) ? 'ready' : 'unverified';
 }
 

@@ -429,7 +429,8 @@ test('two dated records on the same day that cannot be ordered are stored as a c
   const { call, current } = fixture({ status: 'unknown' }, user => JSON.stringify({
     claims: [{
       id: '签约状态', dimension: '签约状态', text: '签约状态',
-      // 只引用谈签约的两条当天记录（E1 是客户线程原文，与签约无关）。
+      // Only cite the two same-day records discussing the signing (E1 is the original customer thread
+      // text, unrelated to the signing).
       items: user.sources.filter(source => source.text.includes('签约')).map(source => ({
         evidenceId: source.id,
         stance: source.text.includes('不推进') ? 'refutes' : 'supports',
@@ -486,7 +487,7 @@ test('draft verification binds to the saved version; a new draft goes stale unti
   assert.equal(item.claimsStale, false);
   assert.equal(item.claims.claims.length, 2);
   assert.ok(item.claims.claims.every(claim => claim.status === 'unknown'));
-  // 采用改写：先保存新草稿版本，再重新核查。
+  // Adopt rewrite: save the new draft version first, then re-verify.
   await call('opportunity-draft', { id, recipient: 'client@example.test',
     body: (item.body ?? '').replaceAll('业绩翻番', '业绩翻番（待确认）') });
   item = current();
@@ -535,7 +536,7 @@ test('sources accept a date, a founder identity, and reject invalid input', asyn
   assert.equal(current().sources.length, 1);
 });
 
-// —— 创始人自述与证据判定：仅创始人陈述 vs 有客户来源支持 ——
+// Founder statement and evidence judgment: Founder statement only vs. Supported by customer source
 
 test('supporting quotes all from founder sources leave the claim founder_only, not supported', () => {
   const sources = [
@@ -687,15 +688,16 @@ test('the prompt names the neutral stance and the founder/customer source bounda
     && en.includes('never supports'), 'the en prompt covers neutral and the founder boundary');
 });
 
-// —— parseClaimReport：结构错误判 parse_failed；重复声明 ID 去重并记 warning ——
+// parseClaimReport: Structure errors yield parse_failed; duplicate claim IDs are deduplicated and logged
+// as a warning
 
 test('malformed model output is a parse failure, never a partial review', () => {
   const malformed = [
-    '{"claims":[{"id":"a"',            // 截断的 JSON
-    'Here is the report:\n{"claims":[]}',  // JSON 前后裹了散文
-    '```json\n{"claims":[]',           // 只有开头的代码围栏
-    '{"claims":"none"}',               // claims 不是数组
-    '',                                // 空输出
+    '{"claims":[{"id":"a"',            // Truncated JSON
+    'Here is the report:\n{"claims":[]}',  // JSON wrapped in prose
+    '```json\n{"claims":[]',           // Only leading code fence
+    '{"claims":"none"}',               // Claims is not an array
+    '',                                // Empty output
   ];
   for (const raw of malformed) {
     assert.throws(() => parseClaimReport(raw, {}), { reason: 'parse_failed', message: '结构无效' });
@@ -728,7 +730,8 @@ test('a duplicate claim id keeps the first occurrence and records a warning', ()
   assert.deepEqual(warnings, [{ reason: 'duplicate_claim_id', id: '签约状态' }]);
 });
 
-// —— 字段矛盾：缺 note、立场值不在枚举、模型谎报 supported 都没有引文支撑 ——
+// Field contradiction: Missing note, stance value outside enum, and model falsely reporting supported
+// without citation support
 
 test('an item without a note, or with an unknown stance, is a field conflict leaving the claim incomplete', () => {
   const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
@@ -758,7 +761,8 @@ test('a model-asserted supported status without any supporting items is never su
   assert.ok(forged.failedChecks.some(check => check.reason === 'field_conflict'));
 });
 
-// —— 捣乱输入：额外字段、缺字段、空引文都不能改变判定、不能产生假通过 ——
+// Adversarial input: Extra fields, missing fields, and empty citations must not alter the judgment or
+// produce false passes
 
 test('extra fields on the report, a claim, or an item do not change the verdict', () => {
   const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
@@ -767,7 +771,8 @@ test('extra fields on the report, a claim, or an item do not change the verdict'
     items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '表达签约意向' }],
     missing: '', rewrite: '',
   };
-  // 模型多吐字段：顶层备注/模型名、声明上的置信度与推理、条目上的打分——都不得影响判定。
+  // Model outputs extra fields: Top-level notes/model names, confidence and reasoning on claims, and
+  // scoring on items must not affect the judgment
   const { claims, warnings } = parseClaimReport(JSON.stringify({
     notes: '顶层额外信息', model: 'test double',
     claims: [{
@@ -793,7 +798,7 @@ test('a claim missing status/items/missing/rewrite is incomplete; unknown needs 
   }], sources);
   assert.equal(sparse.status, 'incomplete');
   assert.ok(sparse.failedChecks.some(check => check.reason === 'field_conflict'));
-  // 缺 items 键但有具体缺口与改写：unknown 可采信。
+  // Missing items key but has specific gaps and rewrites: unknown can be accepted
   const [noItemsKey] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: '客户会签约',
     missing: '缺少已签署合同的记录', rewrite: '客户表示希望在本季度签约',
@@ -816,7 +821,8 @@ test('an item with an empty (or blank) quote is a quote_not_found leaving the cl
   }
 });
 
-// —— 草稿正文检查：空原文与截断否定词（仅 body 存在时生效，判未完成核查） ——
+// Draft body check: Empty source text and truncated negative words (active only when body exists, judged
+// as incomplete verification)
 
 test('a draft claim with empty text is an incomplete verification', () => {
   const [claim] = verifyClaims([{
@@ -857,19 +863,21 @@ test('a clean or mixed occurrence is not flagged; without a body the checks neve
   }], [], { body: 'We commit to delivery next week.' });
   assert.equal(en.status, 'unknown');
   assert.deepEqual(en.failedChecks, []);
-  // 混合出现：正文里既有被否定的一次也有正向的一次 → 不整体判截断。
+  // Mixed occurrence: The body contains both a negated instance and a positive instance -> Do not judge as
+  // truncated overall
   const [mixed] = verifyClaims([{
     id: '交付', dimension: '对外承诺', text: '按期完成', status: 'unknown',
     items: [], missing: '缺少客户确认', rewrite: '尚未确认',
   }], [], { body: '我们不会承诺下周交付，但会按期完成。' });
   assert.deepEqual(mixed.failedChecks, []);
-  // 同一段正文里，只被否定过的那条仍判截断。
+  // In the same body paragraph, items that have only been negated are still judged as truncated
   const [mixedNegated] = verifyClaims([{
     id: '交付', dimension: '对外承诺', text: '承诺下周交付', status: 'unknown',
     items: [], missing: '缺少客户确认', rewrite: '尚未确认',
   }], [], { body: '我们不会承诺下周交付，但会按期完成。' });
   assert.ok(mixedNegated.failedChecks.some(check => check.reason === 'truncated_negation'));
-  // 分析模式没有 body：即使原文与某个假设正文构成否定关系也不运行检查。
+  // Analysis mode has no body: Do not run checks even if the source text and a hypothetical body form a
+  // negation relationship
   const [analysis] = verifyClaims([{
     id: '交付', dimension: '对外承诺', text: '承诺下周交付', status: 'unknown',
     items: [], missing: '缺少客户确认', rewrite: '尚未确认',
@@ -887,10 +895,11 @@ test('an occurrence at the very start of the body has no prefix and is not a tru
   assert.deepEqual(claim.failedChecks, []);
 });
 
-// —— 引文上下文检查：逐字存在还不够，片段必须自带完整语义（验收线）——
-// 「The contract is not signed」里的「signed」、「approved pending board review」里的「approved」、
-// 「合同尚未签署」里的「签署」、「需经董事会批准后生效」里的「生效」——截掉否定词/条件/限定的
-// 片段不能采信：不能凭它判 supported（也不能凭它判 refuted），结构化失败原因带原文子句与原因。
+// Citation context check: Verbatim existence is not enough, fragments must carry complete semantics
+// (acceptance threshold). Fragments with negation words, conditions, or qualifiers removed from 'The
+// contract is not signed' ('signed'), 'approved pending board review' ('approved'), etc., cannot be
+// accepted: cannot be judged as supported (nor as refuted), structured failure reason includes the source
+// text clause and reason
 
 test('acceptance: a fragment stripped of its negation (not signed) is missing key context, never supported', () => {
   const sources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: 'The contract is not signed.' }];
@@ -944,7 +953,8 @@ test('acceptance: Chinese fragments cut from 尚未签署 / 需经董事会批�
     const check = cutClaim.failedChecks.find(entry => entry.reason === 'quote_missing_context');
     assert.ok(check, `structured reason for ${cut}`);
     assert.equal(check.clause, text);
-    // 引完整子句（否定/条件都在引文内）即可采信：同一来源判 supported。
+    // Cite complete clauses (with negation/conditions included) to be acceptable: same source judged as
+    // supported.
     const [fullClaim] = verifyClaims([{
       id: '签约状态', dimension: '签约状态', text: full, status: 'supported',
       items: [{ evidenceId: 'S1', stance: 'supports', quote: full, note: '引完整子句' }],
@@ -979,7 +989,7 @@ test('a truncated fragment is inadmissible for refutation as well, and a paralle
     { id: 'S1', source: '客户邮件', date: null, kind: 'customer', text: 'The contract is not signed.' },
     { id: 'S2', source: '合同记录', date: '2026-07-05', kind: 'customer', text: '客户已于 7 月 5 日签署合同。' },
   ];
-  // 截断片段作 refutes 同样不可采信。
+  // Truncated snippets used as refutes are likewise unacceptable.
   const [refuted] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: 'The contract is signed', status: 'refuted',
     items: [{ evidenceId: 'S1', stance: 'refutes', quote: 'signed', note: '只引了 signed' }],
@@ -987,7 +997,8 @@ test('a truncated fragment is inadmissible for refutation as well, and a paralle
   }], sources);
   assert.equal(refuted.status, 'incomplete');
   assert.ok(refuted.failedChecks.some(check => check.reason === 'quote_missing_context'));
-  // 即使同一条声明里另有干净的支持引文，被标记的引文仍使核查未完成（确定性校验不放过坏引文）。
+  // Even if another clean supporting citation exists in the same statement, the flagged citation still
+  // leaves the verification incomplete (deterministic checks do not let bad citations pass).
   const [mixed] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: 'The contract is signed', status: 'supported',
     items: [
@@ -1008,7 +1019,8 @@ test('acceptance: the same fragment in different clauses needs the negated occur
     items: [{ evidenceId: 'S1', stance: 'supports', quote: '签署', note: '两处出现' }],
     missing: '', rewrite: '',
   }], mixedSources);
-  // 多处出现且其中一处被截掉否定词：按缺少关键上下文标记，指出问题子句。
+  // Multiple occurrences with negation truncated in one of them: mark as missing critical context and
+  // point out the problematic clause.
   assert.equal(mixed.status, 'incomplete');
   const check = mixed.failedChecks.find(entry => entry.reason === 'quote_missing_context');
   assert.ok(check);
@@ -1021,12 +1033,13 @@ test('acceptance: the same fragment in different clauses needs the negated occur
     items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望', note: '短片段多处出现' }],
     missing: '', rewrite: '',
   }], ambiguousSources);
-  // 两处都干净但子句不同（含义不同）：要求更完整的引文消除歧义。
+  // Both occurrences are clean but have different clauses (different meanings): require a more complete
+  // citation to disambiguate.
   assert.equal(ambiguous.status, 'incomplete');
   const ambiguousCheck = ambiguous.failedChecks.find(entry => entry.reason === 'quote_ambiguous');
   assert.ok(ambiguousCheck, 'ambiguity is a structured failure reason');
   assert.ok(ambiguousCheck.detail.includes('2'));
-  // 更长、唯一出现的片段消除歧义后即可采信。
+  // A longer, uniquely occurring snippet is acceptable once disambiguated.
   const [longer] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: '客户希望下月签约', status: 'supported',
     items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望下月签约', note: '唯一出现的更长片段' }],
@@ -1050,7 +1063,7 @@ test('english periods delimit clauses: repeated fragments in different sentences
   assert.ok(check, 'cross-sentence repetition is ambiguous');
   assert.equal(ambiguous.items[0].quoteContext.occurrences, 2);
   assert.equal(ambiguous.items[0].quoteContext.clause, 'The terms were revised.');
-  // 引完整子句后唯一出现即可采信。
+  // Acceptable once it uniquely occurs after citing the complete clause.
   const [clean] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: 'The terms were revised', status: 'supported',
     items: [{ evidenceId: 'S1', stance: 'supports', quote: 'The terms were revised', note: '唯一出现' }],
@@ -1059,7 +1072,8 @@ test('english periods delimit clauses: repeated fragments in different sentences
   assert.equal(clean.status, 'supported');
   assert.deepEqual(clean.failedChecks, []);
 
-  // 小数里的句点不划界：「3.5」不切开句子，其后的否定仍作用于片段。
+  // Periods in decimals are not delimiters: '3.5' does not split the sentence, and subsequent negation
+  // still applies to the snippet.
   const decSources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer',
     text: 'The discount of 3.5 is not final.' }];
   const [dec] = verifyClaims([{
@@ -1083,7 +1097,7 @@ test('a condition phrase separated by a comma still counts as cut-off context; a
   assert.equal(cut.status, 'incomplete');
   const check = cut.failedChecks.find(entry => entry.reason === 'quote_missing_context');
   assert.equal(check.clause, '合同需经董事会批准后，生效。');
-  // 引文把条件短语与逗号都带上即可采信。
+  // Citing with both conditional phrases and commas included is acceptable.
   const [full] = verifyClaims([{
     id: '生效条件', dimension: '生效条件', text: '合同需经董事会批准后生效', status: 'supported',
     items: [{ evidenceId: 'S1', stance: 'supports', quote: '需经董事会批准后，生效', note: '引完整条件句' }],
@@ -1092,7 +1106,8 @@ test('a condition phrase separated by a comma still counts as cut-off context; a
   assert.equal(full.status, 'supported');
   assert.deepEqual(full.failedChecks, []);
 
-  // 简单时间状语（无条件标记）不算截掉的关键上下文，不误报。
+  // Simple adverbials of time (without conditional markers) are not considered truncated critical context
+  // and will not trigger false alarms.
   const plainSources = [{ id: 'S1', source: '客户邮件', date: null, kind: 'customer',
     text: '合同生效后付款。' }];
   const [plain] = verifyClaims([{
@@ -1116,7 +1131,8 @@ test('the prompt tells the model to quote the whole clause and to disambiguate r
     && en.includes('occurs exactly once'), 'the en prompt covers clause-internal cuts and disambiguation');
 });
 
-// —— draftChecks：占位符与未被抽取的高风险句（独立于模型输出的确定性检查） ——
+// -- draftChecks: placeholders and unextracted high-risk sentences (deterministic checks independent of
+// model output) --
 
 test('a second commitment in one sentence that was not extracted surfaces as unextracted', () => {
   const { placeholders, unextracted } = draftChecks('我们承诺下周五前完成交付，并在两周内完成上线。', ['下周五前完成交付']);
@@ -1136,7 +1152,7 @@ test('bracket placeholders are pending items; the full-width （待确认） rew
   assert.deepEqual(draftChecks('费用（待确认）后补。', []).placeholders, []);
 });
 
-// —— E2E：核查结果随 warnings 与 draftChecks 一起落库并暴露给界面 ——
+// -- E2E: verification results are persisted along with warnings and draftChecks and exposed to the UI --
 
 test('the stored draft review carries the deterministic pending items', async () => {
   const { call, current } = fixture(

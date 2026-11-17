@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { createOpportunityUI } from './opportunity-ui.js';
 import { buildSendArchive } from '../src/opportunity/archive.mjs';
 
-// 发送档案窗口：用最小假 DOM 驱动真实 UI 模块，断言档案块的三档来源展示、
-// 批准上下文、查看记录与导出链接；冻结动作只发请求，档案由服务端构建。
+// Send archive window: drive the real UI module with a minimal fake DOM, assert the three-tier source
+// display of the archive block, approval context, viewing history, and export links; the freeze action
+// only sends requests, and the archive is built by the server.
 function harness() {
   const nodes = [];
   const element = (tag, text = '') => {
@@ -54,15 +55,17 @@ function harness() {
   return { nodes, render, renderOne, requests, fullText, find, findAll, get };
 }
 
-// 用真实构建器造档案：E1（客户原文）+ S1（客户确认邮件）；
-// 回答明指 S1，声明的支持引文也在 S1，查看记录展开过 S1。
+// Build archives using the real builder: E1 (customer original text) + S1 (customer confirmation email);
+// the answer explicitly refers to S1, the supporting citation for the claim is also in S1, and the viewing
+// history has expanded S1.
 function makeArchive(overrides = {}) {
   return buildSendArchive({
     opportunity: { id: 'o1', kind: 'lead', title: '客户线索', source: '客户邮件',
       evidence: '客户表示希望周五交付。', evidence_kind: 'customer', recipient: 'client@example.test',
       body: '我们确认周五交付。', draft_id: 'd1', sent: 1 },
     sourceRows: [{ id: 1, name: '客户确认邮件', date: '2026-07-10', kind: 'customer', text: '客户确认周五交付。' }],
-    // 核查配置记录在核查记录里（核查时刻落库的真实配置），构建器不再从 ctx 接收。
+    // Verification configuration is recorded in the verification log (the actual configuration persisted
+    // at verification time), and the builder no longer receives it from ctx.
     claims: { target: 'draft', at: '2026-07-11T00:00:00Z', error: null, draftId: 'd1',
       recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y',
       model: 'test double', effort: null,
@@ -99,14 +102,17 @@ test('the archive block renders the three source tiers from the stored snapshot'
   const card = renderOne(item({ archives: [arch] }));
   const text = fullText(card);
   assert.ok(text.includes('发送档案 · 1'), 'the block names the archive count');
-  // 第一档：提供给模型的来源 = 核查输入全集（快照全部 ID，含全文）。
+  // First tier: sources provided to the model = full set of verification inputs (snapshot of all IDs,
+  // including full text).
   assert.ok(text.includes('提供给模型的来源 · 2'), 'tier 1 counts every source of the verification input');
   assert.ok(text.includes('E1 · 客户邮件 · 客户记录'), 'tier 1 names the initial source entry');
   assert.ok(text.includes('S1 · 客户确认邮件 · 客户记录 · 2026-07-10'), 'tier 1 names the added source entry');
   assert.ok(text.includes('客户确认周五交付。'), 'tier 1 keeps the full source text from the snapshot');
-  // 第二档：回答引用的来源 = 分析引文所出（E1）+ 结构化回答明指（S1）。
+  // Second tier: sources cited by the answer = analytical citation source (E1) + structured answer
+  // explicit reference (S1).
   assert.ok(text.includes('回答引用的来源 · 2'), 'tier 2 lists the sources the answer points to');
-  // 第三档：核查判定支持该声明的来源（逐条声明 + 支持引文 + 逐条担保理由）。
+  // Third tier: sources determined by verification to support the claim = per-claim + supporting citation
+  // + per-claim guarantee reason.
   assert.ok(text.includes('核查判定支持该声明的来源'), 'tier 3 names the verification-support tier');
   assert.ok(text.includes('对外承诺 · 我们确认周五交付 · 支持'), 'tier 3 names the claim and its verdict');
   assert.ok(text.includes('S1 · 客户确认邮件 · 客户确认周五交付'), 'tier 3 names the supporting source of the claim');
@@ -168,7 +174,8 @@ test('each frozen archive renders separately with its own basis and export link'
 test('an archive from a check record without config fields shows 未记录, and integrity lines render by status', () => {
   const { renderOne, fullText } = harness();
   const legacy = makeArchive({
-    // 旧核查记录缺配置字段：构建器无从补写，verification 全为 null。
+    // Old verification logs lack configuration fields: the builder cannot backfill them, and verification
+    // is entirely null.
     claims: { target: 'draft', at: '2026-07-11T00:00:00Z', error: null, draftId: 'd1',
       recipient: 'client@example.test', bodyHash: 'x', evidenceHash: 'y', claims: [] },
   });

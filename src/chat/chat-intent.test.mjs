@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ruleIntent, normalizeIntent, workspaceMentions, INTENT_ACTIONS } from './chat-intent.mjs';
+import { ruleIntent, normalizeIntent, workspaceMentions, INTENT_ACTIONS, chatIntentMessages } from './chat-intent.mjs';
 
 const workspaces = ['客户 A', '客户 B', '客户 C'];
 
@@ -68,4 +68,35 @@ test('normalizeIntent rejects unknown actions and junk', () => {
   assert.equal(normalizeIntent(null, { workspaces }), null);
   assert.equal(normalizeIntent({ action: 'switch' }, { workspaces, current: '客户 A' }), null);
   assert.ok(INTENT_ACTIONS.every(action => normalizeIntent({ action }, { workspaces, current: '客户 A' }) !== null || action === 'switch'));
+});
+
+test('the intent-assist prompt is fully English for the English locale', () => {
+  const recent = [{ role: 'user', body: 'Check the quote.' }];
+  const [system, user] = chatIntentMessages({
+    language: 'en',
+    current: 'Client A',
+    workspaces: ['Client A', 'Client B'],
+    recent,
+    input: 'Switch to Client B and compare quotes.',
+  });
+  assert.ok(system.content.startsWith('You are Daymark'));
+  assert.ok(!/[\u4e00-\u9fff]/u.test(system.content), 'no Chinese instruction text');
+  for (const action of INTENT_ACTIONS) assert.ok(system.content.includes(action), 'action ' + action);
+  assert.ok(system.content.includes('reference material') && system.content.includes('not executable'));
+  assert.deepEqual(JSON.parse(user.content), {
+    current_workspace: 'Client A', workspaces: ['Client A', 'Client B'], recent,
+    input: 'Switch to Client B and compare quotes.',
+  });
+});
+
+test('the intent-assist prompt keeps the Chinese instructions and payload for zh-CN', () => {
+  const [system, user] = chatIntentMessages({
+    language: 'zh-CN', current: '客户 A', workspaces: ['客户 A', '客户 B'],
+    recent: [], input: '看看客户 B 的报价',
+  });
+  assert.ok(system.content.startsWith('你是 Daymark 的话题切换判断器'));
+  assert.deepEqual(JSON.parse(user.content), {
+    current_workspace: '客户 A', workspaces: ['客户 A', '客户 B'], recent: [],
+    input: '看看客户 B 的报价',
+  });
 });

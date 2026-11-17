@@ -9,7 +9,7 @@
 //
 // Expected with qwen2.5:3b (if it follows the JSON contract):
 //   model: evidence=verbatim with fact #1 quoting a substring of record #1
-//          ("v0.1 已通过测试。"). If 3b still omits "facts", expect evidence=cited
+// ("v0.1 tested successfully."). If 3b still omits "facts", expect evidence=cited
 //          or uncited — that is the capability gap the benchmark should quantify.
 
 const port = Number(process.argv[2] ?? process.env.PORT ?? 4173);

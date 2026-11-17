@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { evidenceAnswer, SITUATIONS } from './answer.mjs';
 
-// 一份「想看案例」的线索：购买意向未支持 → 证据不足，说清缺口与下一步。
+// A "want case study" clue: purchase intent not supported -> insufficient evidence, state the gap and next
+// steps.
 const onlyCaseRequest = (overrides = {}) => ({
   status: 'unknown',
   error: null,
@@ -29,9 +30,9 @@ test('situation vocabulary is the four bounded cases', () => {
 test('insufficient: only a case request → names the gap and an actionable next step', () => {
   const answer = evidenceAnswer(onlyCaseRequest());
   assert.equal(answer.situation, 'insufficient');
-  assert.match(answer.confirmed, /案例/); // 已确认：想看案例
-  assert.match(answer.missing, /签约/);    // 缺：明确的签约回复
-  assert.equal(answer.next, '可以先发案例并询问采购计划。'); // 下一步：可操作
+  assert.match(answer.confirmed, /案例/); // Confirmed: wants case study
+  assert.match(answer.missing, /签约/);    // Missing: explicit signing response
+  assert.equal(answer.next, '可以先发案例并询问采购计划。'); // Next step: actionable
   assert.deepEqual(answer.supporting, []);
   assert.deepEqual(answer.compare, []);
   assert.equal(answer.retryable, false);
@@ -40,7 +41,7 @@ test('insufficient: only a case request → names the gap and an actionable next
 test('insufficient falls back to the claim gap when the analysis unknown is empty', () => {
   const answer = evidenceAnswer(onlyCaseRequest({ unknown: '' }));
   assert.equal(answer.situation, 'insufficient');
-  assert.match(answer.missing, /签约意向/); // 来自声明的 missing
+  assert.match(answer.missing, /签约意向/); // Missing from claims
 });
 
 test('sufficient: a supported intent gives a bounded conclusion and points at the new source', () => {
@@ -63,14 +64,16 @@ test('sufficient: a supported intent gives a bounded conclusion and points at th
     ],
   }));
   assert.equal(answer.situation, 'sufficient');
-  assert.match(answer.confirmed, /签约意向/); // 已确认：明确表达签约意向
-  assert.match(answer.bounds, /合同是否签署仍待确认/); // 边界：哪一步仍未确认
-  assert.deepEqual(answer.supporting.map(source => source.id), ['S2']); // 指向新增来源
+  assert.match(answer.confirmed, /签约意向/); // Confirmed: explicitly expressed signing intent
+  assert.match(answer.bounds, /合同是否签署仍待确认/); // Boundary: which step remains unconfirmed
+  assert.deepEqual(answer.supporting.map(source => source.id), ['S2']); // Points to newly added source
   assert.equal(answer.retryable, false);
 });
 
-// 混合案例：客户已明确表达签约意向（客户来源支持），但「合同已签署」只有创始人陈述。
-// 回答必须同时给出已确认的意向与待核实的签署状态，而不是把签署状态并入已确认。
+// Mixed case: the customer has explicitly expressed signing intent (supported by customer source), but
+// "contract signed" is only stated by the founder.
+// The response must provide both the confirmed intent and the unverified signing status, rather than
+// merging the signing status into the confirmed items.
 test('mixed case: confirmed intent plus a founder-only signing claim → pending verification is listed', () => {
   const answer = evidenceAnswer(onlyCaseRequest({
     status: 'supported',
@@ -94,13 +97,13 @@ test('mixed case: confirmed intent plus a founder-only signing claim → pending
     ],
   }));
   assert.equal(answer.situation, 'sufficient');
-  assert.match(answer.confirmed, /签约意向/); // 已确认：明确表达签约意向
+  assert.match(answer.confirmed, /签约意向/); // Confirmed: explicitly expressed signing intent
   assert.deepEqual(answer.pending, [
     { dimension: '签约状态', text: '合同已签署', status: 'founder_only' },
   ]);
-  assert.match(answer.bounds, /合同已签署/); // 边界：待核实的签署状态
+  assert.match(answer.bounds, /合同已签署/); // Boundary: unverified signing status
   assert.match(answer.bounds, /待独立核实/);
-  assert.deepEqual(answer.supporting.map(source => source.id), ['S2']); // 依据来源只有客户来源
+  assert.deepEqual(answer.supporting.map(source => source.id), ['S2']); // Based solely on customer source
 });
 
 test('an unconfirmed-identity claim is listed as pending verification in an insufficient answer', () => {
@@ -118,7 +121,7 @@ test('an unconfirmed-identity claim is listed as pending verification in an insu
   assert.deepEqual(answer.pending, [
     { dimension: '签约状态', text: '合同已签署', status: 'unconfirmed' },
   ]);
-  assert.deepEqual(answer.supporting, []); // 未确认来源不构成依据
+  assert.deepEqual(answer.supporting, []); // Unconfirmed sources do not constitute evidence
 });
 
 test('conflict: shows the records that must be compared and withholds a conclusion', () => {
@@ -140,7 +143,7 @@ test('conflict: shows the records that must be compared and withholds a conclusi
   assert.equal(answer.compare.length, 2);
   assert.deepEqual(answer.compare.map(entry => entry.id), ['S1', 'S2']);
   assert.match(answer.missing, /比较/);
-  assert.equal(answer.supporting.length, 0); // 冲突时不指向任何“支持”来源
+  assert.equal(answer.supporting.length, 0); // Do not point to any "supporting" source in case of conflict
 });
 
 test('failed: a verification error is retryable and does not claim a conclusion', () => {

@@ -2,14 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createOpportunityUI } from './opportunity-ui.js';
 
-// 创始人自述与证据判定的界面覆盖（与 opportunity-ui.test.mjs 独立，避免并行修改冲突）：
-// 1. founder_only 状态在声明旁显示「由创始人提供，待独立核实」，并给出补证/改写/复核出路；
-// 2. neutral 引文立场显示「仅相关」；
-// 3. 发送被拦（claims_founder_only）在草稿区显示拦截原因标签；
-// 4. 来源区说明：客户来源/创始人提供标签由用户录入，证据状态按实际支持声明的引文判定；
-// 5. 初始来源身份（客户原文／外部记录、创始人陈述、来源未确认）：出处块按记录身份显示，
-//    可改判（请求 opportunity-evidence-kind）；unconfirmed 状态与 claims_unconfirmed 拦截标签；
-//    客户来源引文支持的声明标注「客户来源支持」。
+// UI coverage for founder self-statement and evidence determination (independent of
+// opportunity-ui.test.mjs to avoid parallel modification conflicts): 1. founder_only status displays
+// "Provided by founder, pending independent verification" next to the claim, and provides options for
+// supplementing evidence, rewriting, or re-reviewing; 2. neutral citation stance displays "Relevant only";
+// 3. send blocked (claims_founder_only) displays the block reason tag in the draft area; 4. source area
+// description: customer source/founder provided tags are entered by the user, and evidence status is
+// determined by citations that actually support the claim; 5. initial source identity (customer original
+// text / external record, founder statement, unconfirmed source): citation block displays according to
+// recorded identity, can be re-judged (request opportunity-evidence-kind); unconfirmed status and
+// claims_unconfirmed block tag; statements supported by customer source citations are marked as "Supported
+// by customer source".
 function harness() {
   const nodes = [];
   const element = (tag, text = '') => {
@@ -20,7 +23,7 @@ function harness() {
       replaceChildren(...kids) { this.children = [...kids]; },
       setAttribute() {},
       addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); },
-      // 模拟浏览器 details 的 toggle 事件：展开/收起时触发已绑定的监听。
+      // Simulate browser details toggle event: trigger bound listeners when expanding/collapsing.
       openToggle(open) { this.open = open; (this.listeners['toggle'] ?? []).forEach(fn => fn()); },
       reportValidity() { return true; },
     };
@@ -45,7 +48,8 @@ function harness() {
     return nodes.map(walk).join(' ');
   };
   const renderOne = (entry, audit = []) => render({ opportunities: [entry], delegation: {}, audit });
-  // 初始来源身份下拉：含 unconfirmed 选项的 select（来源块里的 customer/founder 下拉没有它）。
+  // Initial source identity dropdown: a select containing the unconfirmed option (the customer/founder
+  // dropdown in the source block does not have it).
   const originSelect = () => nodes
     .find(node => node.tag === 'select' && (node.children ?? []).some(option => option.value === 'unconfirmed'));
   const button = label => nodes.find(node => node.tag === 'button' && node.text === label);

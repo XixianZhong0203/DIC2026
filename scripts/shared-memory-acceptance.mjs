@@ -1,28 +1,39 @@
-// 共享记忆保留原项目与适用范围 · 端到端验收（shared-memory 窗口）
+// Shared memory retains original project and applicable scope · End-to-end acceptance (shared-memory
+// window)
 //
-// 验收标准（三条入口，全部确定性断言）：
-//   1) 内部比较 —— A 项目保存一条通用谈判流程（全局共享）和一条客户 A 专属
-//      折扣（A 作用域）；B 项目问「客户 A 是怎么谈的」时：
-//      · /api/chat-intent 确定性判为 compare（比较措辞 + 两个工作区提及，不消耗模型）；
-//      · B 的回复请求里，流程记录带 applies_to='*' 与 origin='客户 A'（原项目），
-//        A 的折扣原文绝不进入 B 的上下文；trace.retrieved 同样携带两个字段。
-//   2) 对外草稿 v1 —— 为 B 起草借鉴谈判流程 + 留下 [待定：B 客户折扣] 占位符
-//      （占位符家族：待确认/待核实/待定/TBD…；「待定」不触发条件句扫描，
-//        让拦截原因精确落在 claims_placeholders 而不是 claims_pending）：
-//      流程句有依据（supported，引用线索客户原文 E1）不被拦截；
-//      发送接口 409 claims_placeholders，零模拟发送。
-//   3) 对外草稿 v2 —— 把受保护的 A 折扣原文逐字放进发给 B 的草稿：
-//      声明核查确定性判 unknown（B 工作区没有任何来源支持该折扣）；
-//      发送接口 409 claims_unresolved，零模拟发送，sent 保持 0。
+// Acceptance criteria (three entry points, all deterministic assertions):
+// 1) Internal comparison - Project A saves a general negotiation process (globally shared) and a client
+// A-exclusive
+// discount (A scope); when Project B asks 'How was client A negotiated?':
+// · /api/chat-intent is deterministically judged as compare (comparison wording + two workspaces
+// mentioned, no model consumed);
+// · In B's response request, the process record carries applies_to='*' and origin='client A' (original
+// project),
+// and the raw text of A's discount never enters B's context; trace.retrieved also carries both fields.
+// 2) External draft v1 - Draft for B borrowing the negotiation process + leaving [Pending: B client
+// discount] placeholder
+// (placeholder family: to be confirmed / to be verified / pending / TBD...; 'pending' does not trigger
+// conditional clause scanning,
+// allowing the interception reason to fall precisely on claims_placeholders instead of claims_pending):
+// Process sentences have evidence (supported, referencing lead client original text E1) and are not
+// intercepted;
+// Dispatch interface returns 409 claims_placeholders, zero simulated dispatches.
+// 3) External draft v2 - Put the protected A discount raw text verbatim into the draft sent to B:
+// Claim verification deterministically judges as unknown (workspace B has no sources supporting the
+// discount);
+// Dispatch interface returns 409 claims_unresolved, zero simulated dispatches, sent remains 0.
 //
-// 测试范围声明：本回归覆盖「明确的适用范围」与「原文披露」两条线；
-// 若把 A 的条款改写后泄露（非逐字原文）仍属于未覆盖缺口，不在本脚本断言。
+// Test scope declaration: This regression covers two lines: 'explicit applicable scope' and 'original text
+// disclosure';
+// if A's terms are paraphrased and leaked (non-verbatim original text), it is still an uncovered gap and
+// is not asserted in this script.
 //
 //   node scripts/shared-memory-acceptance.mjs
 //
-// 与既有验收脚本同一手法：临时数据目录 + 专用端口（4250/4251）启动真实服务，
-// 模型请求打到本地确定性 mock（记录每个请求，队列顺序即流程顺序）。trace 写入
-// docs/evidence/shared-memory-acceptance-<ts>.json（本地留档，不进版本库）。
+// Same approach as existing acceptance scripts: temporary data directory + dedicated ports (4250/4251) to
+// start the real service, model requests sent to local deterministic mock (records each request, queue
+// order matches process order). Trace written to docs/evidence/shared-memory-acceptance-<ts>.json (local
+// archive, not tracked in git).
 
 import { spawn } from 'node:child_process';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
@@ -39,16 +50,17 @@ const base = 'http://127.0.0.1:' + port;
 const A = '客户 A';
 const B = '客户 B';
 
-// A 项目的两条记忆：通用谈判流程（全局共享，从 A 的会话保存 → origin 捕获为 A）
-// 与 A 客户专属折扣（A 作用域，适用对象显式指向 A）。
+// Two memories of Project A: general negotiation process (globally shared, saved from A's session ->
+// captured as origin A) and A-client exclusive discount (A-scoped, target explicitly points to A).
 const FLOW_BODY = '通用谈判流程：先确认需求、再给方案、最后对齐商务条件。';
 const FLOW_SOURCE = '客户 A 项目会议 · 11 月 12 日';
 const DISC_BODY = 'A 客户专属折扣：A 客户可打八折（编号 A-DISC-8821）。';
 const DISC_SOURCE = '客户 A 合同 · 11 月 10 日';
-const DISC_CLAUSE = 'A 客户可打八折（编号 A-DISC-8821）'; // 受保护的原文条款
-// B 侧的确定性比较问句：比较措辞 + 两个工作区全称 → ruleIntent 判 compare。
+const DISC_CLAUSE = 'A 客户可打八折（编号 A-DISC-8821）'; // Protected original text clause. Deterministic comparison question on B side: comparison phrasing + full
+// names of both workspaces -> ruleIntent judges as compare.
 const QUESTION = '对比：客户 A 是怎么谈的？客户 B 有哪些可以借鉴？';
-// 线索（B 工作区）：初始证据身份为 customer，草稿里的流程句用它做逐字支持引文。
+// Clue (Workspace B): Initial evidence identity is customer, process sentences in draft use it as verbatim
+// supporting citation.
 const LEAD_EVIDENCE = '客户 B 需求会议（11 月 14 日）：客户 B 要求正式报价；'
   + '流程上沿用三步谈判法：先确认需求、再给方案、最后对齐商务条件。折扣未定。';
 const LEAD_E1_QUOTE = '先确认需求、再给方案、最后对齐商务条件';
@@ -58,7 +70,7 @@ const DRAFT_V1_CLAIM_TEXT = '我们将沿用客户 A 项目沉淀的谈判流程
 const DRAFT_V2_BODY = '商务条件：' + DISC_CLAUSE + '，我们将把它用于 B 客户的报价。';
 
 // ---------------------------------------------------------------------------
-// 结果记录
+// Result recording
 // ---------------------------------------------------------------------------
 const results = [];
 function record(name, status, detail = '') {
@@ -70,8 +82,9 @@ const failed = () => results.filter(r => r.status === 'FAIL').length;
 const skipped = () => results.filter(r => r.status === 'SKIPPED').length;
 
 // ---------------------------------------------------------------------------
-// 确定性 mock 模型：记录每个请求（隔离断言打在这里），按请求类型从对应队列取
-// 预设回答。队列顺序即流程顺序，多取/错取都会让后续断言失败。
+// Deterministic mock model: records each request (isolation assertions hit here), pops preset responses
+// from corresponding queues by request type. Queue order matches process order; extra/wrong pops will fail
+// subsequent assertions.
 // ---------------------------------------------------------------------------
 const modelRequests = [];
 const chatQ = [];
@@ -99,8 +112,9 @@ const mock = createServer((req, res) => {
     const user = (parsed.messages ?? []).find(m => m.role === 'user')?.content ?? '';
     let canned;
     if (system.includes('你是聊天回答的声明核查器')) {
-      // 聊天回答的关键断言核查（窗口 3）：每次聊天回答后独立发起，固定返回空声明集，
-      // 不消耗任何队列（chatQ 的队列项精确对应该脚本的聊天回复）。
+      // Key assertion check for chat responses (Window 3): initiated independently after each chat
+      // response, fixed to return empty statement set without consuming any queues (chatQ queue items
+      // precisely correspond to this script's chat replies).
       canned = { claims: [] };
     } else if (system.includes('你是声明核查器')) {
       let mode = 'draft';
@@ -110,8 +124,9 @@ const mock = createServer((req, res) => {
     } else if (system.startsWith('你是 Daymark，一个帮助个人接续项目的队友')) {
       canned = take(chatQ, 'chat');
     } else {
-      // 确定性流程不应触达其他模型入口（chat-intent 辅助 / 记忆提取器）；
-      // 一旦触达说明流程走错了分支，回显请求头便于定位。
+      // Deterministic process should not reach other model endpoints (chat-intent auxiliary / memory
+      // extractor); if reached, it indicates the process took the wrong branch, echo request headers for
+      // easy troubleshooting.
       record('unexpected model entry', 'FAIL', system.slice(0, 40));
       canned = { answer: '（模拟模型）意外入口。', facts: [], inferences: [], unknowns: [],
         citations: [], conflict: '', proposal: null, question: '', understood: '' };
@@ -123,11 +138,11 @@ const mock = createServer((req, res) => {
 await mock.listen(mockPort, '127.0.0.1');
 
 // ---------------------------------------------------------------------------
-// 启动真实服务：工作树字节级拷贝（server.mjs + src/ + dist/ + package.json），
-// 仅替换 src/models.mjs 为本地 mock 目录以隔离真实模型端点。
+// Start real service: byte-level copy of work tree (server.mjs + src/ + dist/ + package.json), only
+// replacing src/models.mjs with local mock directory to isolate real model endpoints.
 // ---------------------------------------------------------------------------
 const MOCK_MODELS = `// 测试模型目录（shared-memory 验收窗口）：单一本地 mock 模型，指向脚本启动的
-// 确定性 mock 服务。替换工作树目录仅用于隔离真实端点；被测代码不受影响。
+// Deterministic mock provider. The temporary checkout isolates real endpoints. The code under test is unchanged.
 const BASE = process.env.OPENAI_BASE_URL ?? 'http://127.0.0.1:0/v1';
 export const MODELS = [{ id: 'mock-model', name: 'Mock Model', base: BASE, keyEnv: 'MOCK_API_KEY', fallbackKey: 'mock', timeout: 15000, efforts: {} }];
 export const modelById = id => (typeof id === 'string' && MODELS.find(entry => entry.id === id)) || null;
@@ -186,7 +201,8 @@ let up = false;
 for (let i = 0; i < 100 && !up; i++) {
   try {
     const snapshot = await (await fetch(base + '/api/state')).json().catch(() => ({}));
-    // model 必须是我们注入的 mock 目录项，否则说明端口被别的服务占用（会误测别人的实例）。
+    // model must be our injected mock directory item, otherwise it indicates the port is occupied by
+    // another service (which would mis-test someone else's instance).
     up = snapshot.model === 'mock-model' && snapshot.live === true;
   } catch {
     if (server.exitCode != null) break;
@@ -202,16 +218,17 @@ if (!up) {
 console.log('\nAcceptance: 共享记忆保留原项目与适用范围（mock 模型，确定性）');
 
 const systemOf = req => (req?.messages ?? []).find(m => m.role === 'system')?.content ?? '';
-// 窗口 3：每次聊天回答后会多出一发「关键断言核查」请求；回复内容断言必须落在
-// 真正的回复请求上（system 以 Daymark 回复提示开头）。
+// Window 3: an extra "key assertion check" request occurs after each chat response; reply content
+// assertions must land on the true reply request (system starts with Daymark reply prompt header).
 const replyRequest = () => {
   for (let i = modelRequests.length - 1; i >= 0; i--) {
     if (systemOf(modelRequests[i]).startsWith('你是 Daymark，一个帮助个人接续项目的队友')) return modelRequests[i];
   }
   return null;
 };
-// 回复请求 system 的末行是「引用编号只从以下记录中选择。记录：<JSON>」：
-// 用 lastIndexOf 定位（系统提示里「记录：」只出现这一次），解析出模型实际看到的记录视图。
+// The last line of the reply request system is "Citation IDs only select from the following records.
+// Records: <JSON>": use lastIndexOf to locate ("Records:" appears only once in system prompt), parse out
+// the record view actually seen by the model.
 const recordsInPrompt = req => {
   const system = systemOf(req);
   const at = system.lastIndexOf('记录：');
@@ -237,14 +254,15 @@ const auditReasons = snapshot => (snapshot.audit ?? []).map(r => JSON.parse(r.de
 const hasSimulatedSend = snapshot => (snapshot.audit ?? []).some(r => r.action === 'simulated_send');
 
 // ---------------------------------------------------------------------------
-// 1) 种子：A 项目两条记忆（通用流程 → 全局共享；A 专属折扣 → A 作用域）
+// 1) Seed: Two memories of Project A (General process -> globally shared; A-exclusive discount ->
+// A-scoped)
 // ---------------------------------------------------------------------------
 console.log('\n1) 种子：A 项目保存通用谈判流程（全局）与 A 客户专属折扣（A 作用域）');
 const convA = await api('/api/conversation', { title: A + ' 跟进', project: A });
 record('create the A conversation', convA.ok ? 'PASS' : 'FAIL', convA.error ?? '');
 const aConvId = convA.data.conversation;
-// 先在 A 的会话里留一条会议消息：两条记忆都从这条消息提取（message_id），
-// 保存入口据此捕获原项目 origin_scope。
+// First leave a meeting message in A's session: both memories extracted from this message (message_id),
+// save entry captures original project origin_scope accordingly.
 chatQ.push({
   expect: 'chat in A records the meeting (message for provenance)',
   value: { answer: '已记录客户 A 项目会议：三步谈判法与 A 合同折扣条款。',
@@ -291,7 +309,7 @@ record('create the B conversation', convB.ok ? 'PASS' : 'FAIL', convB.error ?? '
 const bConvId = convB.data.conversation;
 
 // ---------------------------------------------------------------------------
-// 2) 入口一（内部比较）：B 问「客户 A 是怎么谈的」
+// 2) Entry One (Internal comparison): B asks "How was client A negotiated?"
 // ---------------------------------------------------------------------------
 console.log('\n2) 入口一：B 的比较问句走确定性 compare，上下文带出处与适用对象');
 const intentBefore = modelRequests.length;
@@ -330,7 +348,7 @@ record('the chat claim check verifies against the retrieved flow rule',
   'sources=' + checkSources(checkRequest()).length);
 
 // ---------------------------------------------------------------------------
-// 3) 入口二（对外草稿 v1）：借鉴流程句放行，占位符拦截
+// 3) Entry Two (External draft v1): process sentences from reference allowed, placeholder intercepted
 // ---------------------------------------------------------------------------
 console.log('\n3) 入口二：B 的对外草稿 v1 —— 流程句有依据，[待确认] 占位符被拦截');
 const leadRes = await api('/api/opportunity', {
@@ -374,7 +392,8 @@ record('zero simulated sends for v1', !hasSimulatedSend(st) && lead?.sent !== 1 
   'sent=' + JSON.stringify(lead?.sent));
 
 // ---------------------------------------------------------------------------
-// 4) 入口三（对外草稿 v2）：A 折扣原文逐字入稿 → 声明判 unknown → 拦截
+// 4) Entry 3 (external draft v2): A discount original text verbatim drafting -> declare judgment unknown
+// -> intercept
 // ---------------------------------------------------------------------------
 console.log('\n4) 入口三：B 的对外草稿 v2 —— 受保护的 A 折扣原文逐字入稿');
 const draft2 = await api('/api/opportunity-draft', { id: leadId, recipient: 'b@client-b.test', body: DRAFT_V2_BODY });
@@ -410,7 +429,7 @@ record('zero simulated sends for v2 (sent stays 0)', !hasSimulatedSend(st) && le
   'sent=' + JSON.stringify(lead?.sent));
 
 // ---------------------------------------------------------------------------
-// 汇总 + 留档
+// Aggregate + archive
 // ---------------------------------------------------------------------------
 console.log('\nSummary: ' + passed() + ' passed, ' + skipped() + ' skipped, ' + failed() + ' failed');
 const summary = {

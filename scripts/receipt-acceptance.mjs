@@ -1,4 +1,4 @@
-// Acceptance flow for task operation receipts (待办操作回执) and the
+// Acceptance flow for task operation receipts (to-do operation receipts) and the
 // outreach send-block audit refresh.
 //
 //   create → reschedule via a decision card → done → reopen → delete,

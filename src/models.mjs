@@ -1,17 +1,18 @@
 import { codexModels } from './chat/local-gpt-models.mjs';
 
-// Daymark 模型目录（multi-model 窗口）：聊天界面上可按会话切换的全部模型。
+// Daymark model catalog (multi-model window): all models that can be switched by session on the chat
+// interface.
 //
-// 每一项指向一个 OpenAI 兼容的 /chat/completions 端点。凭证解析规则：
-// `key` 字面量 > `keyEnv` 指定的环境变量 > `fallbackKey` 字面量。
-// `efforts` 把界面上的思考档位（low/medium/high）映射到该端点接受的
-// reasoning_effort 取值；空对象表示该模型没有可选档位。
-// `timeout` 是该模型的默认请求超时（毫秒）。
+// Each item points to an OpenAI-compatible /chat/completions endpoint. Credential resolution rules: `key`
+// literal > environment variable specified by `keyEnv` > `fallbackKey` literal. `efforts` maps the
+// thinking tiers on the interface (low/medium/high) to the reasoning_effort values accepted by the
+// endpoint; an empty object indicates that the model has no optional tiers. `timeout` is the default
+// request timeout for the model in milliseconds.
 //
-// opencode.ai 的免费模型走共享公共池（OpenCode 模型目录里 apiKey 为 "public"）；
-// 若 .env 里设置了 OPENCODE_API_KEY，则用你自己的 OpenCode 账户凭证调用。
-// Qwen 走本地 LiteLLM/vLLM 部署：实测该端点只接受 low / medium / xhigh
-// （"high" 会返回 400），因此界面 high 档映射为 xhigh。
+// opencode.ai's free models use the shared public pool (apiKey is "public" in the OpenCode model catalog);
+// if OPENCODE_API_KEY is set in .env, your own OpenCode account credentials are used for calls. Qwen uses
+// local LiteLLM/vLLM deployment: actual testing shows this endpoint only accepts low / medium / xhigh
+// ("high" returns 400), so the interface high tier is mapped to xhigh.
 
 const customBase = process.env.OPENAI_BASE_URL?.trim();
 const customModel = process.env.MODEL_ID?.trim();
@@ -72,7 +73,8 @@ if (customEndpoint) {
 }
 
 export const modelById = id => (typeof id === 'string' && MODELS.find(entry => entry.id === id)) || null;
-// 默认模型：.env 的 MODEL_ID 命中目录则用之，否则取目录第一项。
+// Default model: if .env's MODEL_ID hits the catalog, use it; otherwise, take the first item in the
+// catalog.
 export const DEFAULT_MODEL_ID = (process.env.MODEL_ID && modelById(process.env.MODEL_ID)?.id) || MODELS[0].id;
 export const defaultModel = () => modelById(DEFAULT_MODEL_ID) ?? MODELS[0];
 
@@ -81,8 +83,8 @@ export const modelKey = entry => {
   return entry.key ?? (fromEnv || entry.fallbackKey || '');
 };
 export const modelConfigured = entry => Boolean(entry.local || modelKey(entry));
-// 会话存储的模型/档位 → 有效调用目标。未知模型回落默认模型；不在该模型
-// 支持列表里的档位按“未指定”处理（端点用自己的默认值）。
+// Session-stored model/tier -> effective call target. Unknown models fall back to the default model; tiers
+// not supported by the model are treated as "unspecified" (the endpoint uses its own default values).
 export const conversationModel = (conversation, defaultEntry) => {
   const entry = modelById(conversation?.model) ?? defaultEntry;
   const effort = Object.hasOwn(entry.efforts ?? {}, conversation?.effort) ? conversation.effort : entry.codex ? 'low' : null;

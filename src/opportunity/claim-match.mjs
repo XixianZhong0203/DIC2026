@@ -1,17 +1,26 @@
-// 跨版本声明匹配（窗口 1：旧版被标记的风险说法换个说法后，仍需要处理）。
-// 旧版草稿里被标记的原句在新正文中不再逐字出现时，可能只是近义改写：
-//   - 同一事实的近义改写（「合同已签署」→「双方已完成签约」）→ same_fact：原风险仍待处理；
-//   - 改写成了不同事实（→「客户已表达签约意向」/「双方尚未签约」）→ different_fact：原说法不再成立；
-//   - 无法确定是否同一事实（→「双方下周签约」）→ ambiguous：新旧句交创始人核对；
-//   - 原句消失且无同动作族候选句 → absent。
-// 判定用「动作族 + 情态（completed / intent / negated）」确定性比较，不经模型：
-// 任一情态未知（无法解析）时倾向判 ambiguous，绝不自动解除旧风险。
-// 逐字匹配（原句仍在正文里）优先于一切——返回 verbatim，行为与旧版一致。
+// Cross-version statement matching (Window 1: A previously flagged risk statement in an old version still
+// needs to be processed after being rephrased).
+// When a flagged original sentence in an old draft no longer appears verbatim in the new body text, it
+// might just be a synonymous rewrite:
+// - Synonymous rewrite of the same fact ("Contract signed" -> "Both parties have completed signing") ->
+// same_fact: The original risk remains to be addressed;
+// - Rewritten into a different fact (-> "Customer has expressed intent to sign" / "Both parties have not
+// signed yet") -> different_fact: The original statement is no longer valid;
+// - Unable to determine if it is the same fact (-> "Both parties will sign next week") -> ambiguous: Have
+// the founder review the new and old sentences;
+// - Original sentence disappears and there are no candidates from the same action family -> absent.
+// Determination uses "action family + modality (completed / intent / negated)" for certainty comparison,
+// without passing through the model:
+// When any modality is unknown (unparsable), lean towards judging as ambiguous, and never automatically
+// dismiss old risks.
+// Verbatim matching (original sentence is still in the body text) takes precedence over everything --
+// returns verbatim, behaving the same as the old version.
 
 export const MATCH_VERSION = 'claim-match-v1';
 
-// 动作族：跨语言共用族标签（中文按词、英文按词形），
-// 与 coverage.mjs 的高风险动作表同源，保证「被标记说法」与「高风险句」的动作口径一致。
+// Action family: Cross-language shared family labels (Chinese by word, English by lemma),
+// source-compatible with the high-risk action table in coverage.mjs, ensuring consistency in the action
+// criteria between "flagged statements" and "high-risk sentences".
 const ACTION_FAMILIES = [
   { id: 'signing', zh: ['签约', '签署', '签订', '签好'], en: /\bsign(?:ed|ing)?\b/i },
   { id: 'delivery', zh: ['交付', '交货', '发货'], en: /\bdeliver(?:ed|y|ing)?\b/i },
@@ -22,11 +31,13 @@ const ACTION_FAMILIES = [
     en: /\b(?:commit(?:ted|ting)?|guarantee\w*|ensur\w*|promis\w*|pledg\w*)\b/i },
 ];
 
-// 情态标记：按分句内相对动作词的位置窗口识别（前缀尾段 / 后缀头段），
-// 与 claims.mjs 的引文上下文检查同思路——只看紧挨动作词的成分，不把远处的词算到本动作头上。
+// Modality markers: Identified based on the relative position window of action words within clauses
+// (prefix tail segment / suffix head segment), following the same logic as the citation context check in
+// claims.mjs -- looking only at components closely adjacent to action words, without counting distant
+// words toward the current action.
 const ZH_NEGATION_MULTI = ['尚未', '没有', '还没', '不曾', '从未', '不会', '不愿', '不敢', '无法'];
 const ZH_NEGATION_SINGLE = ['未'];
-const ZH_NEGATION_EXCLUDE_NEXT = ['来', '知', '必', '免']; // 「未来/未知/未必/未免」不是否定动作
+const ZH_NEGATION_EXCLUDE_NEXT = ['来', '知', '必', '免']; // "Future/unknown/not necessarily/inevitably" are not negative actions.
 const ZH_INTENT = ['意向', '意愿', '愿意', '希望', '打算', '计划', '准备', '考虑', '表达', '提出', '期待', '拟'];
 const ZH_INTENT_AFTER = ['意向', '意愿', '期待'];
 const ZH_COMPLETED = ['已经', '完成', '完毕', '成功', '已'];
@@ -37,7 +48,8 @@ const EN_INTENT = new Set(['intent', 'intend', 'intends', 'intended', 'intending
   'plan', 'plans', 'planned', 'planning', 'seek', 'seeks', 'seeking']);
 const EN_PAST = /^(signed|delivered|paid|completed|shipped|launched|deployed|activated|made|collected|received)$/;
 
-// 情态强弱（同一分句多个动作词命中不同情态时的取舍）：否定 > 意向 > 完成 > 未知。
+// Modality strength (trade-offs when multiple action words in the same clause hit different modalities):
+// negation > intent > completed > unknown.
 const ASPECT_RANK = { unknown: 0, completed: 1, intent: 2, negated: 3 };
 
 function zhNegated(prefix) {
@@ -74,13 +86,14 @@ function enAspect(words, index) {
 
 const pickAspect = (a, b) => (ASPECT_RANK[b] > ASPECT_RANK[a] ? b : a);
 
-// 一句话（或一个分句）的签名：命中的动作族 + 每个动作族的情态。
+// Signature of a sentence (or a clause): Hit action families + modality of each action family.
 function signature(text) {
   const t = String(text ?? '').trim();
   if (!t) return { families: [], aspects: {} };
   const families = [];
   const aspects = {};
-  // 词形归一：剥掉粘连的标点（末词常带句点），保证词形表与否定/意向/过去式判定一致。
+  // Lemma normalization: Strip attached punctuation (trailing words often carry periods) to ensure lemma
+  // tables are consistent with negation/intent/past-tense determinations.
   const words = t.toLowerCase().split(/\s+/).map(word => word.replace(/[^a-z']/g, '')).filter(Boolean);
   for (const family of ACTION_FAMILIES) {
     let aspect = 'unknown';
@@ -106,7 +119,8 @@ function signature(text) {
   return { families, aspects };
 }
 
-// 按 coverage.mjs 同一口径切句、切分句（句末标点划界；逗号/顿号/并列词拆子句）。
+// Split sentences and sub-clauses using the same criteria as coverage.mjs (bounded by sentence-ending
+// punctuation; commas/ideographic commas/conjunctions split sub-clauses).
 function clauseParts(sentence) {
   return sentence.split(/，|、|；|;|以及|还有|外加|\s+and\s+|\s+as well as\s+|,\s+|\s+also\s+/i)
     .map(part => part
@@ -117,7 +131,8 @@ function clauseParts(sentence) {
       .trim());
 }
 
-// —— 原句不可解析（无任何动作族）时的兜底：共享内容词 → 无法排除是同一事实 → ambiguous。——
+// -- Fallback when the original sentence is unparsable (no action family): Shared content words -> cannot
+// rule out being the same fact -> ambiguous. --
 const ZH_STOP = new Set('的了是在有和与或及也都就而且更最已未不没太非个之其于对把被让给为以从到向往这那谁哪吗呢吧啊呀哦嗯嘛哈');
 function zhGrams(text) {
   const chars = [...text];
@@ -150,9 +165,11 @@ function sharedContentWords(oldText, clause) {
 
 const RELATION_RANK = { different_fact: 1, ambiguous: 2, same_fact: 3 };
 
-// 主入口：旧版被标记的原句 vs 当前草稿正文。
-// verdict：verbatim（原句仍在，走原有逐字口径）/ same_fact（近义改写仍是同一事实，仍待处理）/
-// different_fact（改写成了不同事实）/ ambiguous（无法确定，需创始人核对）/ absent（原句消失且无候选）。
+// Main entry: Flagged original sentence from the old version vs. current draft body text.
+// verdict: verbatim (original sentence remains, use original verbatim criteria) / same_fact (synonymous
+// rewrite is still the same fact, still pending processing) /
+// different_fact (rewritten into a different fact) / ambiguous (unable to determine, requires founder
+// review) / absent (original sentence disappeared and no candidates exist).
 export function matchClaimRewrite(claimText, body) {
   const old = String(claimText ?? '').trim();
   const text = String(body ?? '').trim();
@@ -183,12 +200,14 @@ export function matchClaimRewrite(claimText, body) {
           if (relation === null || RELATION_RANK[rel] > RELATION_RANK[relation]) relation = rel;
         }
       } else if (!oldSig.families.length) {
-        // 原句解析不出动作族：按共享内容词兜底（无法排除是同一事实 → 交人工核对）。
+        // Original sentence cannot parse action families: Fallback based on shared content words (cannot
+        // rule out being the same fact -> hand over for manual review).
         sharedWords = sharedContentWords(old, clause);
         if (!sharedWords.length) continue;
         relation = 'ambiguous';
       } else {
-        continue; // 原句有动作族、但此分句不属于任何同族动作 → 不是这条声明的候选改写。
+        continue; // Original sentence has action families, but this clause does not belong to any family-matching action ->
+// not a candidate rewrite for this statement.
       }
       candidates.push({ sentence: trimmed, relation, aspects, ...(sharedWords ? { shared: sharedWords } : {}) });
     }

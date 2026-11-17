@@ -1,8 +1,10 @@
-// Acceptance flow for the decision card "confirm-time recheck" (确认时重查).
+// Acceptance flow for the decision card "confirm-time recheck".
 //
-//   原约定周五 → 客户提出周二 → 卡片预览周二空档 → 另一条待办占了周二 →
-//   点旧卡确认时提示冲突，原安排保留 → 选新时间并确认本地更新。
-//   另测：旧偏好卡遇到已修订的记忆时要求重新确认（重锚定后再次确认成功）。
+// Original appointment Friday -> client proposed Tuesday -> card previews Tuesday slot -> another task
+// occupied Tuesday -> clicking confirm on the old card prompts a conflict, original arrangement kept ->
+// select new time and confirm local update.
+// Additional test: old preference card encounters revised memory, requiring re-confirmation (successful
+// re-confirmation after re-anchoring).
 //
 //   node scripts/decision-recheck-acceptance.mjs
 //

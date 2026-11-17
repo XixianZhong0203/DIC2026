@@ -1,12 +1,16 @@
-// 提示词冻结（claim verifier prompt freeze）
+// Claim verifier prompt freeze
 //
-// 冻结对象：src/opportunity/claims.mjs 的 claimMessages() 渲染出的 system 消息
-// （zh/en × analysis/draft 共 4 个变体），以及 user 消息的 JSON 输入契约与模型输出契约。
-// 留出集按冻结版提示词出题；改提示词 = 新轮次（claim-v2），须重跑 --selftest 并重新出题。
+// Frozen targets: The system messages rendered by claimMessages() in src/opportunity/claims.mjs (4
+// variants in total across zh/en x analysis/draft), along with the JSON input contract and model output
+// contract for user messages.
+// Holdout sets generate test cases using the frozen version of the prompt; modifying the prompt = new
+// round (claim-v2), which requires re-running --selftest and generating new test cases.
 //
 // Usage:
-//   node evaluation/claim/prompt/freeze.mjs --write   # 首次冻结（claim-v1）；已有冻结后须 --write --version <新版本>
-//   node evaluation/claim/prompt/freeze.mjs --check  # 漂移检查：当前代码渲染结果 vs 已提交指纹；退出码 0 = 未漂移
+// node evaluation/claim/prompt/freeze.mjs --write # Initial freeze (claim-v1); after an existing freeze,
+// --write --version <new version> is required
+// node evaluation/claim/prompt/freeze.mjs --check # Drift check: current code rendering result vs
+// committed fingerprint; exit code 0 = no drift
 
 import { claimMessages, ANALYSIS_DIMENSIONS, DRAFT_DIMENSIONS } from '../../../src/opportunity/claims.mjs';
 import { execFileSync } from 'node:child_process';
@@ -19,7 +23,8 @@ const promptFile = new URL('PROMPT.md', here);
 const fingerprintsFile = new URL('fingerprints.json', here);
 const sha = s => createHash('sha256').update(s).digest('hex');
 
-// system 消息只依赖 language 与 mode，与具体输入无关；参考输入仅作渲染载体。
+// System messages depend only on language and mode, independent of specific inputs; reference inputs serve
+// solely as rendering carriers.
 function renderAll() {
   const out = {};
   for (const language of ['zh', 'en']) {

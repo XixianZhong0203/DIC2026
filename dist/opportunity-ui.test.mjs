@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createOpportunityUI } from './opportunity-ui.js';
 
-// 用最小假 DOM 驱动真实 UI 模块，断言人工复核表单的行为：
-// 表单提交的结论必须绑定当前草稿版本；旧草稿上的复核失效后表单重新出现。
+// Drive real UI modules using a minimal fake DOM, asserting the behavior of the manual review form:
+// Form submission conclusions must be bound to the current draft version; the form reappears once reviews
+// on old drafts become invalid.
 function harness() {
   const nodes = [];
   const element = (tag, text = '') => {
@@ -14,7 +15,7 @@ function harness() {
       replaceChildren(...kids) { this.children = [...kids]; },
       setAttribute(name, value) { this.attributes ??= {}; this.attributes[name] = value; },
       addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); },
-      // 模拟浏览器 details 的 toggle 事件：展开/收起时触发已绑定的监听。
+      // Simulate the browser details toggle event: trigger bound listeners upon expanding or collapsing.
       openToggle(open) { this.open = open; (this.listeners['toggle'] ?? []).forEach(fn => fn()); },
       reportValidity() { return true; },
     };
@@ -45,12 +46,13 @@ function harness() {
     reviewButton().click();
   };
   const fullText = node => (node.text ?? '') + (node.children ?? []).map(fullText).join(' ');
-  // 返回本次渲染的机会卡片节点，便于断言卡片内的完整文本。
+  // Return the opportunity card node of this render to facilitate asserting the complete text within the
+  // card.
   const renderOne = entry => {
     render({ opportunities: [entry], delegation: {}, audit: [] });
     return elements.get('opportunity-list').children.at(-1);
   };
-  // 按 summary 文案定位可展开的 details（来源原文块、冲突来源块）。
+  // Locate expandable details by summary text (source original text blocks, conflict source blocks).
   const detailsWith = summary => nodes.find(node =>
     node.tag === 'details' && (node.children ?? [])[0]?.text === summary);
   const auditPanel = () => elements.get('opportunity-audit');
@@ -273,8 +275,9 @@ test('a blocked send for an uncovered high-risk clause names the gate reason in 
   assert.ok(blocked, 'the draft editor names the uncovered high-risk clause gate reason on the spot');
 });
 
-// 人工复核来源记录：复核区显示「已展开哪些来源 / 尚未展开来源」，展开来源原文时
-// 记录来源 ID（服务端权威），草稿或来源变化后新复核从空的查看状态开始。
+// Manual review source records: the review area displays which sources have been expanded or remain
+// unexpanded. Record the source ID (server authoritative) when expanding the source original text. After
+// draft or source changes, a new review starts from an empty viewing state.
 
 test('the review area shows that no source has been opened yet', () => {
   const { renderOne, fullText } = harness();
@@ -299,7 +302,8 @@ test('expanding a source records its ID and updates the review area live', () =>
   assert.deepEqual(views, [{ id: 'o1', sourceId: 'S1' }], 'the view action is sent with the source ID');
   assert.ok(fullText(card).includes('已打开 · 客户邮件'), 'the review area lists the opened source');
   assert.ok(!fullText(card).includes('尚未打开来源'), 'the empty-state label goes away once a source is opened');
-  // 引文摘录（不展示来源原文）不计为展开来源；重复展开不重复发送。
+  // Citation excerpts (which do not display the source original text) are not counted as expanded sources;
+  // repeated expansions do not trigger duplicate sends.
   s1.openToggle(true);
   assert.equal(views.length, 1);
 });
@@ -387,7 +391,8 @@ test('the audit lists each opened-source action and a review with no opened sour
   assert.ok(text.includes('尚未打开来源'), 'a review without opened sources says so');
   assert.ok(text.includes('已打开 · 客户邮件、客户邮件'), 'a review lists the sources it had opened');
   assert.ok(text.includes('展开来源原文 · 客户邮件'), 'each opened-source action is auditable');
-  // 功能上线前的旧记录没有 viewed 字段：只有一条（id 5）被标注「尚未打开来源」。
+  // Old records prior to feature launch lack the viewed field: only one record (id 5) is marked as source
+  // not yet opened.
   const emptyNotes = [];
   const walk = node => {
     if (node.tag === 'p' && node.text === '尚未打开来源') emptyNotes.push(node);
@@ -397,8 +402,10 @@ test('the audit lists each opened-source action and a review with no opened sour
   assert.equal(emptyNotes.length, 1, 'legacy review rows without a viewing state are not mislabeled');
 });
 
-// 「当前回答」：证据不足时怎么说、怎么继续。措辞由服务端 evidenceAnswer 决定，
-// UI 只展示并把下一步接到卡片已有入口（查看来源 / 补资料 / 采用澄清问题，对应决策卡 view/source/draft）。
+// "Current Answer": How to phrase and proceed when evidence is insufficient. The wording is determined by
+// the server's evidenceAnswer, and the UI only displays it while connecting the next step to the card's
+// existing entry point (View Source / Supplement Material / Adopt Clarification Question, corresponding to
+// decision card view/source/draft).
 test('an insufficient answer names the confirmed part, the exact gap, and the next step', () => {
   const { renderOne, fullText } = harness();
   const card = renderOne(item({
@@ -537,9 +544,10 @@ test('an unanalyzed lead renders no answer block', () => {
   assert.ok(!fullText(card).includes('当前回答'), 'no answer is claimed without an analysis');
 });
 
-// 待处理项：声明全部 supported 之后，草稿里仍可能留着占位符或未被抽取的高风险句
-// （一句里有两项承诺、模型只抽到一项）。它们要在卡片顶部明确显示「仍有待处理项」，
-// 当前状态不能显示「待批准」。
+// Pending items: Even after declaring all as supported, placeholders or unextracted high-risk sentences
+// may still remain in the draft (e.g., two commitments in one sentence, but the model only extracted one).
+// They must clearly display "Pending items" at the top of the card, and the current status cannot show
+// "Pending Approval".
 
 test('a draft review with pending items surfaces them at the top and withholds awaiting-approval', () => {
   const { renderOne, fullText } = harness();

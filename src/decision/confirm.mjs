@@ -1,10 +1,10 @@
-// /api/decision confirmation dispatch (决策卡确认执行).
+// /api/decision confirmation dispatch.
 //
 // Code ownership (aligned with the decision-card wording window):
 //   this module — the confirm path itself: per-card serialization (double
 //     click, two tabs, retries), confirm-time recheck dispatch, idempotent
-//     recovery from existing records, and the card states 已选待确认 /
-//     已应用 / 暂缓 / 失败;
+// recovery from existing records, and the card states Selected Pending Confirmation / Applied / Paused /
+// Failed;
 //   src/decision/decision.mjs — card wording, deterministic triggers,
 //     recheckDecision (reads only), and the conversation context;
 //   src/tasks/task-audit.mjs — the audit rows and receipt wording for task
@@ -26,11 +26,11 @@
 //     task_audit row linked via via.decision, or the memory row linked via
 //     message_id and matching this option's payload) and marks the card
 //     applied WITHOUT re-applying.
-//   - a confirm held back by the recheck is 暂缓 (paused): nothing is
+// - a confirm held back by the recheck is Paused: nothing is
 //     written, the card is refreshed in place with the reason and, when
 //     available, what is actually effective right now (recheck.current).
 //     A write blocked by a concurrent change is re-checked and paused the
-//     same way when the state simply drifted; only a hard error is 失败.
+// same way when the state simply drifted; only a hard error is Failed.
 
 import { recheckDecision, EFFECT_KINDS, DECISION_MEMORY_SOURCE } from './decision.mjs';
 import { auditForDecision, changeReceipt } from '../tasks/task-audit.mjs';
@@ -118,7 +118,7 @@ export function createDecisionRoute({ db, tasks, memories, mutations, state, fai
     return null; // view / question / temporary change nothing on the server
   };
 
-  // 暂缓 (pause): nothing was written; the card is refreshed in place with
+  // Paused: nothing was written; the card is refreshed in place with
   // the specific reason, refreshed options, and — when the recheck knows it
   // — what is actually effective right now, so follow-ups stay on the live
   // arrangement.
@@ -134,10 +134,15 @@ export function createDecisionRoute({ db, tasks, memories, mutations, state, fai
     if (recheck.current) decision.current = recheck.current;
   }
 
-  return async function decide({ message_id, option_id, confirm }) {
+  return async function decide({ message_id, option_id, confirm, language }) {
     if (!Number.isSafeInteger(message_id) || typeof option_id !== 'string') fail(400, '请求内容不正确。');
     return serialize(message_id, async () => {
       const { review, decision } = readCard(message_id);
+      // The card inherits the language of the reply that produced it; an explicit
+      // request value wins (for clients that send it). The memory-impact check
+      // then receives English instructions in the English locale.
+      const responseLanguage = (language === 'en' || language === 'zh-CN')
+        ? language : (review.language === 'en' ? 'en' : 'zh-CN');
       const option = (decision.options ?? []).find(item => item.id === option_id);
       if (!option) fail(404, '找不到对应的决策选项。');
       const effect = option.effect ?? {};
@@ -168,7 +173,8 @@ export function createDecisionRoute({ db, tasks, memories, mutations, state, fai
         let receipt = '';
         try {
           if (effect.kind === 'task') {
-            // 决策卡触发的改期：关联该次选择，回执给出原时间、新时间和实际结果。
+            // Rescheduling triggered by decision card: associated with this choice, the receipt provides
+            // the original time, new time, and actual result.
             const previous = db.prepare('SELECT * FROM tasks WHERE id = ? AND deleted = 0').get(effect.payload?.id ?? -1);
             await mutations['/api/task']({ ...(effect.payload ?? {}), via: {
               decision: message_id, option: option.id, option_label: option.label, at,
@@ -190,7 +196,7 @@ export function createDecisionRoute({ db, tasks, memories, mutations, state, fai
               return state();
             }
             const impact = await mutations['/api/memory-impact']({
-              kind: payload.kind, scope: payload.scope, body: payload.body, replaces: payload.replaces, language: 'zh-CN',
+              kind: payload.kind, scope: payload.scope, body: payload.body, replaces: payload.replaces, language: responseLanguage,
             });
             mutations['/api/memory']({ ...payload, snapshot: impact.snapshot, review_base: payload.replaces ?? null, message_id });
             const saved = db.prepare('SELECT * FROM memory WHERE message_id = ? ORDER BY id DESC LIMIT 1').get(message_id);
@@ -229,7 +235,7 @@ export function createDecisionRoute({ db, tasks, memories, mutations, state, fai
         return state();
       }
 
-      // A selection only: 已选待确认 — record the choice, write nothing.
+      // A selection only: Selected Pending Confirmation - record the choice, write nothing.
       decision.status = 'choosing';
       decision.choice = { option_id, at, receipt: '' };
       saveCard(message_id, review);

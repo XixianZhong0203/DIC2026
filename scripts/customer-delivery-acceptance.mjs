@@ -1,25 +1,32 @@
-// 客户交付确认流程 · 端到端验收（integration/2026-11-11 集成分支）
+// Customer delivery confirmation workflow · End-to-end acceptance (integration/2026-11-11 integration
+// branch)
 //
-// 一条完整客户故事，覆盖本集成的四个验收维度：
-//   1) 工作区隔离 —— 客户 A 已有周五交付约定；切到客户 B 再切回 A，核对聊天
-//      用的是正确项目的资料；跨工作区合并旧聊天被系统提示拒绝；明确导入一条
-//      资料时，副本带原工作区出处。
-//   2) 决策确认与回执 —— 客户 A 提出改期：卡片展示原约定、新提议和可选时段；
-//      确认后回执给出实际改了什么；客户是否同意单独表达（未确认提议记录），
-//      回执不声称客户已确认。
-//   3) 线索回答与草稿门槛 —— 草稿写「客户已确认改期」而资料只有提议/转述时：
-//      界面指出哪句缺依据、能确认什么、下一步；发送接口拦截。
-//   4) 人工复核与回执 —— 补入明确客户确认后重新核查；展开其中一条来源走人工
-//      复核路径，审计只记录这条；批准当前草稿并模拟发送，核对回执；复核后新
-//      增撤回记录，旧复核随来源变化失效，当前回答转为来源冲突。
+// A complete customer story covering the four acceptance dimensions of this integration:
+// 1) Workspace isolation - Customer A already has a Friday delivery agreement; switch to customer B and
+// back to A, verify that chat uses the correct project materials; merging old chats across workspaces is
+// rejected by the system; when explicitly importing a material, the copy retains the original workspace
+// origin.
+// 2) Decision confirmation and receipt - Customer A proposes rescheduling: the card displays the original
+// agreement, new proposal, and available time slots; after confirmation, the receipt shows what was
+// actually changed; whether the customer agreed is expressed separately (unconfirmed proposal records),
+// and the receipt does not claim the customer has confirmed.
+// 3) Lead answering and draft threshold - When a draft says "Customer has confirmed the rescheduling" but
+// materials only contain a proposal/paraphrase: the interface points out which sentence lacks evidence,
+// what can be confirmed, and the next step; the send API is intercepted.
+// 4) Manual review and receipt - Re-verify after supplementing with explicit customer confirmation; expand
+// one of the sources to follow the manual review path, and the audit logs only this item; approve the
+// current draft and simulate sending, checking the receipt; a new withdrawal record is added after review,
+// old reviews become invalid as sources change, and the current answer turns into a source conflict.
 //
-//   node scripts/customer-delivery-acceptance.mjs            # 全部断言
-//   node scripts/customer-delivery-acceptance.mjs --shots    # 附加浏览器截图（需本机 Chrome）
+// node scripts/customer-delivery-acceptance.mjs # All assertions
+// node scripts/customer-delivery-acceptance.mjs --shots # Attach browser screenshots (requires local
+// Chrome)
 //
-// 与既有验收脚本同一手法：临时数据目录 + 专用端口启动真实服务，模型请求打到
-// 本地确定性 mock（记录每个请求，用于隔离断言）。关键界面状态用真实 UI 模块
-// （dist/opportunity-ui.js + 最小假 DOM）渲染并断言文字。trace 与截图写入
-// docs/evidence/（本地留档，不进版本库）。
+// Same technique as existing acceptance scripts: temporary data directory + dedicated port to start a real
+// service, model requests hit a local deterministic mock (recording each request for isolated assertions).
+// Key UI states are rendered and text asserted using real UI modules (dist/opportunity-ui.js + minimal
+// fake DOM). Traces and screenshots are written to docs/evidence/ (local archiving, excluded from version
+// control).
 
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
@@ -45,7 +52,7 @@ const A_FACT = '交付约定：2026-11-13 周五 15:00 向客户 A 交付版本�
 const A_PROMISE = '客户承诺：客户 A 承诺 11 月 30 日前完成签约。';
 
 // ---------------------------------------------------------------------------
-// 结果记录
+// Record results
 // ---------------------------------------------------------------------------
 const results = [];
 function record(name, status, detail = '') {
@@ -57,8 +64,9 @@ const failed = () => results.filter(r => r.status === 'FAIL').length;
 const skipped = () => results.filter(r => r.status === 'SKIPPED').length;
 
 // ---------------------------------------------------------------------------
-// 确定性 mock 模型：记录每个请求（隔离断言打在这里），按请求类型从对应队列取
-// 预设回答。队列顺序即流程顺序，多取/错取都会让后续断言失败。
+// Deterministic mock model: records each request (isolated assertions hit here), and retrieves preset
+// answers from the corresponding queue based on request type. The queue order matches the workflow order;
+// taking extra or wrong items will cause subsequent assertions to fail.
 // ---------------------------------------------------------------------------
 const modelRequests = [];
 const chatQ = [];
@@ -95,7 +103,7 @@ const mock = createServer((req, res) => {
       let mode = 'analysis';
       try { mode = JSON.parse(user).mode === 'draft' ? 'draft' : 'analysis'; } catch {}
       canned = mode === 'draft' ? take(draftQ, 'draft-claims') : take(analysisQ, 'analysis-claims');
-    } else if (system.includes('Return JSON with status')) {
+    } else if (/Return JSON with status|只返回 JSON 对象，字段 status/.test(system)) {
       canned = take(assessQ, 'assess');
     } else {
       canned = take(chatQ, 'chat');
@@ -109,7 +117,7 @@ const mockPort = mock.address().port;
 await new Promise(resolve => reserve.close(resolve));
 
 // ---------------------------------------------------------------------------
-// 启动真实服务
+// Start real service
 // ---------------------------------------------------------------------------
 const dataDir = await mkdtemp(path.join(tmpdir(), 'daymark-delivery-acceptance-'));
 const server = spawn(process.execPath, ['--env-file-if-exists=.env', 'server.mjs'], {
@@ -153,7 +161,7 @@ if (!up) {
 console.log('\nAcceptance: 客户交付确认流程（mock 模型，确定性；集成分支 ' + 'integration/2026-11-11' + '）');
 
 // ---------------------------------------------------------------------------
-// 真实 UI 模块 + 最小假 DOM（与 review-view-walkthrough / opportunity-ui.test 同一手法）
+// Real UI module + minimal fake DOM (same technique as review-view-walkthrough / opportunity-ui.test)
 // ---------------------------------------------------------------------------
 function uiHarness(language) {
   const element = (tag, text = '', className = '') => {
@@ -197,7 +205,7 @@ const findMemory = (data, body) => (data.memory ?? []).find(item => item.body ==
 const lead = data => (data.opportunities ?? []).find(item => item.id === leadId) ?? null;
 
 // ---------------------------------------------------------------------------
-// 1) 工作区隔离：客户 A 有周五交付约定
+// 1) Workspace isolation: Customer A has a Friday delivery agreement
 // ---------------------------------------------------------------------------
 console.log('\n1) 客户 A 工作区：周五交付约定（聊天使用正确项目的资料）');
 const convA = await api('/api/conversation', { title: '客户 A 交付跟进', project: A });
@@ -268,7 +276,8 @@ record('A chat history still absent from the B request',
   !requestText(lastModel()).includes(replyA.body) ? 'PASS' : 'FAIL');
 
 // ---------------------------------------------------------------------------
-// 4) 客户 A 提出改期：决策卡（原约定 + 新提议 + 可选时段）→ 确认 → 回执
+// 4) Customer A proposes rescheduling: Decision card (original agreement + new proposal + available time
+// slots) -> Confirm -> Receipt
 // ---------------------------------------------------------------------------
 console.log('\n4) 客户 A 提出改期：决策卡与回执');
 chatQ.push({
@@ -323,7 +332,8 @@ record('task activity links the decision card choice', taskAuditRow ? 'PASS' : '
   taskAuditRow ? 'via.decision=' + JSON.parse(taskAuditRow.detail).via?.decision : 'no linked audit row');
 
 // ---------------------------------------------------------------------------
-// 5) 线索：草稿写「客户已确认改期」，资料只有提议/转述 → 界面指缺口，发送拦截
+// 5) Lead: Draft says "Customer has confirmed rescheduling", materials only have proposal/paraphrase ->
+// Interface points out gap, send is intercepted
 // ---------------------------------------------------------------------------
 console.log('\n5) 草稿门槛：「客户已确认改期」只有提议与转述时');
 let leadId = null;
@@ -334,8 +344,10 @@ const leadRes = await api('/api/opportunity', {
 leadId = leadRes.data.opportunities?.[0]?.id;
 record('save the lead', leadRes.ok ? 'PASS' : 'FAIL', leadRes.error ?? '');
 
-// 证据门槛放行：材料支持「客户 A 提出了改期」（逐字引文来自线索证据），但「已确认」仍缺。
-// 这样发送接口会越过证据门槛、停在草稿门槛（claims_unresolved），正好对应本维度要验收的「草稿门槛」。
+// Evidence threshold release: the material supports "Client A requested rescheduling" (verbatim quote from
+// clue evidence), but "confirmed" is still missing.
+// Thus, sending via the API bypasses the evidence threshold and stops at the draft threshold
+// (claims_unresolved), exactly matching the "draft threshold" to be verified in this dimension.
 assessQ.push({
   expect: 'analysis: the proposal is supported, but the confirmation is still missing',
   value: { status: 'supported', quote: '客户 A 11 月 10 日来信提议改到 2026-11-17 15:30',
@@ -367,7 +379,8 @@ record('current answer is insufficient: says the confirmed part, the exact gap, 
     text.includes('下一步') && text.includes('查看来源') && text.includes('补资料') ? 'PASS' : 'FAIL');
 }
 
-// 预设回答必须在触发它的调用之前入队（mock 是同步的：调用即请求模型）。
+// Preset responses must be queued before the call that triggers them (mock is synchronous: calling
+// immediately requests the model).
 analysisQ.push({
   expect: 're-run after S1 (still just a proposal)',
   value: { claims: [
@@ -433,10 +446,12 @@ st = await state();
 record('the block is audited (claims_unresolved)', (st.audit ?? []).some(r => r.action === 'blocked' && JSON.parse(r.detail).reason === 'claims_unresolved') ? 'PASS' : 'FAIL');
 
 // ---------------------------------------------------------------------------
-// 6) 补入明确客户确认 → 重新核查 → 展开一条来源走人工复核 → 批准发送 → 回执
+// 6) Add explicit customer confirmation -> re-verify -> expand a source for manual review -> approve send
+// -> receipt
 // ---------------------------------------------------------------------------
 console.log('\n6) 补入明确客户确认：重新核查、人工复核、模拟发送回执');
-// S3（明确确认）入队：新增来源先重跑分析目标、最后重跑草稿目标（claims_review 保持草稿目标）。
+// S3 (explicit confirmation) queued: newly added sources first re-run the analysis target, and finally
+// re-run the draft target (claims_review keeps the draft target).
 analysisQ.push({
   expect: 're-run after S3: analysis claim now supported by S3',
   value: { claims: [
@@ -512,10 +527,12 @@ record('receipt: approval + simulated send carry the current draft',
   'evidence=' + (approved ? JSON.parse(approved.detail).evidence : ''));
 
 // ---------------------------------------------------------------------------
-// 7) 复核后新增撤回记录：旧复核随来源变化失效，当前回答转为来源冲突
+// 7) Add a withdrawal record after review: the old review becomes invalid as the source changes, and the
+// current response turns into a source conflict.
 // ---------------------------------------------------------------------------
 console.log('\n7) 复核后新增撤回记录：旧复核失效');
-// S4（撤回、未显式 supersede）入队：S3 支持、S4 撤回，无 revises → 保持来源冲突（不静默覆盖）。
+// S4 (withdrawal, not explicitly superseded) queued: S3 supports, S4 withdraws, no revises -> keep source
+// conflict (do not silently overwrite).
 analysisQ.push({
   expect: 're-run after S4: S3 vs S4 stays a conflict (no confirmed supersession)',
   value: { claims: [
@@ -563,7 +580,7 @@ record('the current answer switches to the conflict case with the records to com
 }
 
 // ---------------------------------------------------------------------------
-// 汇总 + 留档
+// Summary + archiving
 // ---------------------------------------------------------------------------
 console.log('\nSummary: ' + passed() + ' passed, ' + skipped() + ' skipped, ' + failed() + ' failed');
 const summary = {
@@ -584,7 +601,8 @@ await writeFile(path.join(evidenceDir, 'customer-delivery-acceptance-server.log'
 console.log('  trace: ' + traceFile);
 
 // ---------------------------------------------------------------------------
-// 可选：浏览器截图（headless Chrome + CDP；失败只记 SKIPPED，不影响断言结论）
+// Optional: browser screenshot (headless Chrome + CDP; failure is only marked as SKIPPED, does not affect
+// assertion conclusions)
 // ---------------------------------------------------------------------------
 async function captureScreenshots() {
   const chrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -631,7 +649,7 @@ async function captureScreenshots() {
   try {
     await send('Page.enable');
     await send('Page.navigate', { url: base + '/' });
-    await sleep(3500); // 等待 /api/state 渲染
+    await sleep(3500); // Wait for /api/state rendering
     const shot = async (name) => {
       const result = await send('Page.captureScreenshot', { format: 'png' });
       await writeFile(path.join(shotsDir, name + '.png'), Buffer.from(result.data, 'base64'));
@@ -655,7 +673,8 @@ async function captureScreenshots() {
     record('browser screenshots', 'SKIPPED', error.message);
   } finally {
     try { ws.close(); } catch {}
-    // 等 Chrome 真正退出（它退出前还会往 profile 写缓存/锁文件），再清理临时 profile。
+    // Wait for Chrome to actually exit (it writes cache/lock files to the profile before exiting) before
+    // cleaning up the temporary profile.
     if (chromeProc.exitCode == null) {
       chromeProc.kill('SIGTERM');
       await Promise.race([
@@ -664,7 +683,7 @@ async function captureScreenshots() {
       ]);
     }
     try { await rm(profile, { recursive: true, force: true }); }
-    catch { /* 临时 profile 清理尽力而为：截图已写入 docs/evidence/，不影响结论 */ }
+    catch { /* Temporary profile cleanup is best-effort: screenshots are already written to docs/evidence/, and do not affect the conclusion */ }
   }
 }
 if (wantShots) {

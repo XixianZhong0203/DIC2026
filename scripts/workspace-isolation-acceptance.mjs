@@ -1,6 +1,6 @@
 // Acceptance flow for cross-workspace context isolation.
 //
-//   two workspaces with different quote rules (Alpha: 八折, Beta: 原价) →
+// two workspaces with different quote rules (Alpha: 20% off, Beta: original price) ->
 //   a cross-workspace merge of a session with history is refused →
 //   a cross-workspace move of a session with history is refused →
 //   the target workspace's replies never see the old chat's quotes,

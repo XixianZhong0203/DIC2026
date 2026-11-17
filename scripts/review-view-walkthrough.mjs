@@ -1,13 +1,17 @@
-// 人工复核来源记录 · 界面走查与验收脚本
+// Manual review source records · UI walkthrough and acceptance script
 //
-// 自包含：在临时数据目录里启动本地服务（PORT 4317），按验收场景驱动 API，
-// 并在每一步用真实 UI 模块（dist/opportunity-ui.js，最小假 DOM）渲染机会卡片与
-// 审计面板，打印复核区/审计里实际显示的文字（中英双语），同时断言验收条件：
-//   1. 展开来源 S1 但不展开 S2 → 保存复核 → 审计只显示 S1；
-//   2. 更换草稿或加入新来源后，旧查看记录不会出现在新复核上；
-//   3. 未展开来源时复核区与审计准确显示「尚未展开来源」。
+// Self-contained: start local service in temporary data directory (PORT 4317), drive APIs according to
+// acceptance scenarios,
+// and render opportunity cards and audit panels at each step using real UI modules
+// (dist/opportunity-ui.js, minimal fake DOM).
+// Print the actual text displayed in the review area/audit (bilingual), while asserting acceptance
+// conditions:
+// 1. Expand source S1 but not S2 → save review → audit shows only S1;
+// 2. After changing drafts or adding new sources, old view records do not appear on the new review;
+// 3. When sources are not expanded, the review area and audit accurately display "Sources not yet
+// expanded".
 //
-// 运行：node scripts/review-view-walkthrough.mjs
+// Run: node scripts/review-view-walkthrough.mjs
 
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -48,7 +52,7 @@ const post = async (name, body) => {
   if (!response.ok) throw new Error(`${name} 失败（${response.status}）：${data.error}`);
   return data;
 };
-// 状态是 GET 端点（server.mjs：/api/state）。
+// Status is a GET endpoint (server.mjs: /api/state).
 const state = async () => {
   const response = await fetch(BASE + '/api/state', { signal: AbortSignal.timeout(5000) });
   const data = await response.json();
@@ -56,7 +60,8 @@ const state = async () => {
   return data;
 };
 
-// ---- 最小假 DOM：驱动真实 UI 模块，取回渲染后的文字（与 dist/opportunity-ui.test.mjs 同一手法）----
+// ---- Minimal fake DOM: drives real UI modules, retrieves rendered text (same technique as
+// dist/opportunity-ui.test.mjs) ----
 function uiHarness(language) {
   const element = (tag, text = '') => {
     const node = { tag, text, children: [], open: false, listeners: {},
@@ -81,7 +86,7 @@ function uiHarness(language) {
   const prefixes = [translate(language, '已展开来源'), translate(language, '尚未展开来源')];
   return {
     render,
-    // 复核区状态行：「已展开来源 · …」或「尚未展开来源」。
+    // Review area status line: "Sources expanded · ..." or "Sources not yet expanded".
     viewLine: () => {
       const walk = node => {
         for (const kid of node.children ?? []) {
@@ -93,7 +98,7 @@ function uiHarness(language) {
       };
       return walk(elements.get('opportunity-list')) ?? '(无复核区状态行)';
     },
-    // 审计面板里每条记录的摘要 + 查看状态行。
+    // Summary of each record in the audit panel + view status line.
     audit: () => elements.get('opportunity-audit').children.map(block => {
       const summary = block.children?.[0]?.text ?? '';
       const note = (block.children ?? []).find(kid => kid.tag === 'p' &&
@@ -122,10 +127,10 @@ try {
   await waitForServer();
   console.log('服务已启动（临时数据目录 ' + dataDir + '）');
 
-  // 准备一条线索：证据 E1 + 两个来源 S1、S2，并保存第一版草稿。
+  // Prepare a lead: Evidence E1 + two sources S1, S2, and save the first draft version.
   leadId = (await post('opportunity', {
     kind: 'lead', title: '交付日期线索', source: '客户邮件', evidence: '客户表示希望周五交付。',
-  })).opportunities.at(0).id; // rowid 倒序：刚创建的线索在最前
+  })).opportunities.at(0).id; // Descending rowid: newly created leads appear at the top.
   await post('opportunity-source', { id: leadId, name: '客户邮件', date: '2026-07-01', kind: 'customer', text: '客户确认周五交付。' });
   await post('opportunity-source', { id: leadId, name: '创始人笔记', kind: 'founder', text: '创始人记得周五已答应客户。' });
   await post('opportunity-draft', { id: leadId, recipient: 'client@example.test', body: '我们按周五交付推进。' });
@@ -134,14 +139,14 @@ try {
   assert.match(zh.viewLine(), /尚未展开来源/, '验收 3：未展开来源时复核区显示「尚未展开来源」');
   assert.match(en.viewLine(), /^No sources opened yet$/, 'English shows the empty state');
 
-  // 展开 S1 的来源原文（对应界面点击展开；不展开 S2）。
+  // Expand the source original text of S1 (corresponds to clicking to expand in the UI; do not expand S2).
   await post('opportunity-review-view', { id: leadId, source_id: 'S1' });
 
   show('展开来源 S1（不展开 S2）', await state());
   assert.match(zh.viewLine(), /已展开来源 · 客户邮件/, '复核区当场显示已展开的来源');
   assert.doesNotMatch(zh.viewLine(), /尚未展开来源/);
 
-  // 保存复核：审计写入已展开来源、草稿 ID、来源版本与结论。
+  // Save review: audit writes expanded sources, draft ID, source version, and conclusion.
   await post('opportunity-review', { id: leadId, analysis_id: null, draft_id: leadOf(await state()).draft_id, resolution: '已读客户邮件原文，日期仍需确认。' });
   const data1 = await state();
   const detail1 = JSON.parse(data1.audit.find(event => event.action === 'human_reviewed').detail);
@@ -153,13 +158,13 @@ try {
   assert.equal(detail1.resolution, '已读客户邮件原文，日期仍需确认。', '审计带复核结论');
   assert.ok(data1.audit.some(event => event.action === 'review_source_viewed'), '查看动作本身有审计记录');
 
-  // 更换草稿（v2）：查看状态从空开始，旧复核留在历史里。
+  // Switch draft (v2): view status starts fresh, old review remains in history.
   await post('opportunity-draft', { id: leadId, recipient: 'client@example.test', body: '我们按客户确认的日期推进。' });
 
   show('更换为草稿 v2 后，复核区回到空查看状态', await state());
   assert.match(zh.viewLine(), /尚未展开来源/, '验收 2：草稿变化后旧查看记录不带到新复核');
 
-  // 针对新草稿保存复核（仍未展开任何来源）。
+  // Save review for the new draft (still no sources expanded).
   await post('opportunity-review', { id: leadId, analysis_id: null, draft_id: leadOf(await state()).draft_id, resolution: '针对 v2 草稿重新复核。' });
   const data2 = await state();
   const detail2 = JSON.parse(data2.audit.find(event => event.action === 'human_reviewed').detail);
@@ -168,7 +173,7 @@ try {
   const history = data2.audit.filter(event => event.action === 'human_reviewed');
   assert.deepEqual(JSON.parse(history[1].detail).viewed, ['S1'], '旧复核及其查看记录保留在历史里');
 
-  // 加入新来源 S3（撤回邮件）：查看状态再次重置；展开 S1 后再保存复核。
+  // Add new source S3 (retracted email): view status resets again; save review after expanding S1.
   await post('opportunity-source', { id: leadId, name: '撤回邮件', date: '2026-07-10', kind: 'customer', text: '客户撤回此前的日期确认。' });
 
   show('加入新来源 S3 后，查看状态重新从空开始', await state());

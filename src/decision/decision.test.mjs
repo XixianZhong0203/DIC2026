@@ -263,7 +263,7 @@ test('decisionContext: distinguishes 已选待确认 / 已应用 / 暂缓 / 失�
       options: [{ id: 'longterm', label: '更新长期偏好' }],
       choice: { option_id: 'longterm', at: 't', receipt: '记忆核查已过期，请重新查看影响范围。' },
     } } },
-    // Paused (暂缓): the confirm was held back; the line must restate what is
+    // Paused (deferred): the confirm was held back; the line must restate what is
     // actually effective (decision.current), not the card's proposal.
     { id: 6, role: 'assistant', review: { decision: {
       title: '确认改期 "客户会议"', status: 'open',
@@ -322,7 +322,7 @@ test('detectDecision: reschedule wins over preference when both could fire', () 
 });
 
 // ---------------------------------------------------------------------------
-// 确认时重查 (confirm-time recheck): the write is only allowed when the live
+// Confirm-time recheck: the write is only allowed when the live
 // tasks/memory still match what the card was generated against.
 // ---------------------------------------------------------------------------
 

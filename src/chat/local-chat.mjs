@@ -13,4 +13,5 @@ export function rankRecords(question, records) {
   }).sort((a, b) => b.score - a.score);
 }
 
-// 本地查询回复（localReply）已移除：对话一律走模型。rankRecords 仍用于模型前的记忆检索。
+// Local query reply (localReply) has been removed: all conversations now go through the model. rankRecords
+// is still used for memory retrieval before the model.

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { actionDecision, inspectJudgment, runAlignmentBenchmark } from './alignment.mjs';
+import { actionDecision, inspectJudgment, runAlignmentBenchmark, alignmentMessages } from './alignment.mjs';
 
 const target = { kind: 'apply_change', scope: 'a', revision: 'r2' };
 const approved = { ...target, principal: 'owner', state: 'accepted' };
@@ -21,6 +21,26 @@ test('a verbatim quote from an older revision remains visible but cannot support
   assert.equal(result.rawStatus, 'supported');
   assert.equal(result.status, 'unknown');
   assert.equal(result.evidence.matchesTarget, false);
+});
+
+test('the alignment prompt is fully English or Chinese while keeping the same contract', () => {
+  const en = alignmentMessages({ language: 'en', guarded: true });
+  assert.ok(en.startsWith('Return JSON only'));
+  assert.ok(!/[\u4e00-\u9fff]/u.test(en), 'no Chinese instruction text');
+  assert.ok(en.includes('Write explanations in English'));
+  assert.ok(en.includes('apply_change') && en.includes('accepted owner approval'));
+  for (const field of ['status', 'evidenceId', 'quote', 'action', 'reason', 'missing', 'question']) {
+    assert.ok(en.includes(field), 'judgment field ' + field);
+  }
+
+  const zh = alignmentMessages({ language: 'zh-CN', guarded: true });
+  assert.ok(zh.startsWith('只返回 JSON'));
+  assert.ok(zh.includes('说明使用中文'));
+  assert.ok(zh.includes('已获接受的负责人批准'));
+  assert.ok(!zh.includes('Write explanations in English'));
+
+  const plain = alignmentMessages({ language: 'en', guarded: false });
+  assert.ok(!plain.includes('accepted owner approval'));
 });
 
 test('the simulator records attempted actions separately and still allows a valid positive control', async () => {

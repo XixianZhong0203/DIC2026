@@ -2,13 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createOpportunityUI } from './opportunity-ui.js';
 
-// 窗口 1 跨版本改写的界面覆盖（与 opportunity-ui.founder.test.mjs 同模式，独立文件避免并行冲突）：
-// 1. same_fact 行：原句→新句 + 只有逐条担保入口（无改写/删除按钮）；
-// 2. ambiguous 行：原句与新句 + 核对说明 + 「是同一事实 / 不是同一事实」按钮，
-//    点击发 opportunity-claim-rewrite-review 请求（精确 payload）；
-// 3. 已记录的核对结论显示决策行（改写核对已记录 · 同一事实 · 说明）；
-// 4. 旧行（无 match 字段）回退到旧口径：原句仍在正文里才显示；
-// 5. 审计的 claim_rewrite_reviewed 事件显示「改写核对已记录」标签。
+// Window 1 cross-version rewrite UI overlay (same pattern as opportunity-ui.founder.test.mjs, using a
+// separate file to avoid parallel conflicts):
+// 1. same_fact row: original sentence -> new sentence + item-by-item vouching entry only (no
+// rewrite/delete buttons);
+// 2. ambiguous row: original and new sentences + verification notes + "Same fact / Not same fact" buttons,
+// clicking sends an opportunity-claim-rewrite-review request (precise payload);
+// 3. Recorded verification conclusions display a decision row (rewrite verification recorded · same fact ·
+// notes);
+// 4. Old rows (without match field) fall back to the old logic: displayed only if the original sentence is
+// still in the body;
+// 5. Audit claim_rewrite_reviewed event displays the "rewrite verification recorded" tag.
 function harness() {
   const nodes = [];
   const element = (tag, text = '') => {
@@ -48,7 +52,8 @@ function harness() {
   return { renderOne, allText, requests, button, input, nodes };
 }
 
-// 上一版被标记的「合同已签署」（创始人陈述，待独立核实）；当前草稿已换成改写后的说法。
+// The previously flagged "Contract signed" (founder statement, pending independent verification); the
+// current draft has been updated with the rewritten phrasing.
 const flagClaim = {
   id: '签约状态', dimension: '签约状态', text: '合同已签署', status: 'founder_only',
   items: [{ valid: true, stance: 'supports', quote: '已签约', note: '创始人陈述已完成事实',
@@ -95,13 +100,15 @@ test('a same_fact flag row shows the old→new sentence and only the guarantee p
   assert.ok(text.includes('填写') === false, 'no review note input on a same_fact row');
   assert.ok(button('我已核实并愿意承担这条说法'), 'the guarantee action is offered');
   assert.ok(input('记录担保理由'), 'the guarantee reason input is offered');
-  // 填写理由后点击担保：按旧原句记录（claim_text = 旧句），接口名与 payload 精确。
+  // Provide reason and click vouch: Recorded using the old original sentence (claim_text = old sentence),
+  // with exact API name and payload.
   input('记录担保理由').value = '已逐条核对并承担。';
   button('我已核实并愿意承担这条说法').onclick();
   assert.equal(requests.length, 1);
   assert.deepEqual(requests[0], { name: 'opportunity-claim-resolution',
     data: { id: 'o1', draft_id: 'd2', claim_id: '签约状态', claim_text: '合同已签署', reason: '已逐条核对并承担。' } });
-  // 状态行与草稿区都提示上一版仍有未处理声明。
+  // Both the status row and the draft area prompt that unprocessed claims still exist from the previous
+  // version.
   assert.ok(text.includes('当前状态 · 上一版仍有未处理声明 · 1'));
 });
 
@@ -155,11 +162,12 @@ test('legacy rows without a match field fall back to the verbatim-in-body filter
     dimension: '签约状态', status: 'founder_only', draftId: 'd1', evidence: 'e1',
     at: '2026-11-12T00:00:00Z', firstFlaggedAt: '2026-11-12T00:00:00Z',
     active: true, current: false, sourceChanged: false, claim: flagClaim };
-  // 原句仍在正文里（旧口径）：显示。
+  // Original sentence is still in the body (old logic): Displayed.
   const shown = harness();
   shown.renderOne({ ...baseItem, body: '张总：合同已签署。', previousClaims: [legacy], previousUnresolvedClaims: [legacy], carryoverClaims: [legacy] });
   assert.ok(shown.allText().includes('上一版仍有未处理声明'), 'a legacy row still in the body is shown');
-  // 原句不在正文里且无 match 字段（旧快照）：不显示，也不计入待处理。
+  // Original sentence is not in the body and lacks the match field (old snapshot): Not displayed, and not
+  // counted as pending.
   const hidden = harness();
   hidden.renderOne({ ...baseItem, body: '双方下周签约。', previousClaims: [legacy], previousUnresolvedClaims: [legacy], carryoverClaims: [legacy] });
   assert.ok(!hidden.allText().includes('上一版仍有未处理声明'), 'a legacy row no longer in the body is not shown');

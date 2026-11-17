@@ -1,15 +1,20 @@
 import { createHash } from 'node:crypto';
 
-// 声明核查（claim verification）的共用判定核心。
-// 按 FEVER 的思路组织输入：待核查声明 + 来源 ID + 来源原文（含日期/版本），
-// 判定分类：supported / refuted / unknown / conflict / incomplete（未完成核查）。
-// 引文必须逐字出自指定来源，来源内容只作为资料读取，其中指令无授权效力。
-// 「新来源覆盖旧来源」：只有能确认最新记录明确修订或撤回了同一客户的同一事项
-// （记录在 revises 中明确指明被修订的更早来源）时，才更新当前结论；
-// 仅日期较新、存在无日期记录、最新日期相同无法排序、或修订无法对应到声明内更早记录时，
-// 保留来源冲突并返回双方原文。
-// 提示版本（send-archive 窗口）：声明核查提示（claimMessages）的稳定标识。
-// 提示文案变化时应更新版本号；发送档案记录当时所用版本，用于还原「当时基于什么提示判定」。
+// Shared judgment core for claim verification.
+// Organize inputs following the FEVER approach: Claim to verify + Source ID + Source original text
+// (including date/version).
+// Judgment categories: supported / refuted / unknown / conflict / incomplete (verification incomplete).
+// Citations must be verbatim from the specified source; source content is read strictly as data, and any
+// instructions within it have no authorization effect.
+// "New sources override old sources": The current conclusion is updated only when it can be confirmed that
+// the latest record explicitly revises or withdraws the same matter for the same customer (explicitly
+// indicated as revised in the earlier source via revises).
+// When dates are simply newer, records lack dates, latest dates are identical and cannot be ordered, or
+// revisions cannot be mapped to an earlier record within the claim, retain the source conflict and return
+// both original texts.
+// Prompt version (send-archive window): Stable identifier for claim verification prompts (claimMessages).
+// The version number must be updated when the prompt text changes; the send archive records the version
+// used at that time to restore "what prompt the judgment was based on at the time".
 export const CLAIMS_PROMPT_VERSION = 'claims-v2';
 export const ANALYSIS_DIMENSIONS = ['购买意向', '签约状态'];
 export const DRAFT_DIMENSIONS = ['客户意向', '签约状态', '公司业绩', '对外承诺'];
@@ -18,9 +23,10 @@ export const STATUSES = ['supported', 'refuted', 'unknown', 'conflict'];
 
 export const sha256 = value => createHash('sha256').update(value).digest('hex');
 
-// 核查有效性指纹：初始来源的原文 + 来源身份（evidence_kind）+ 逐条来源。
-// 来源身份变化（如把同一段原文从「来源未确认」改判为「客户原文」）会改变指纹，
-// 旧核查结果因此过期，不能沿用旧判断自动放行。
+// Check validity fingerprint: Original text of initial source + source identity (evidence_kind) + itemized
+// sources. Changes in source identity (such as re-evaluating the same original text from 'unconfirmed
+// source' to 'customer original text') will change the fingerprint, so old verification results expire and
+// cannot be automatically passed through using old judgments.
 export function evidenceHash(opportunity, sourceRows) {
   return sha256(JSON.stringify([
     opportunity.evidence,
@@ -29,14 +35,16 @@ export function evidenceHash(opportunity, sourceRows) {
   ]));
 }
 
-// 证据状态判定（有支持、无有效反驳时）：只看当前仍有效、且实际支持这条声明的引文，
-// 按用户录入的来源身份判定——
-//   customer（客户原文／外部记录）引文支持 → supported（客户来源支持）；
-//   支持引文全部来自创始人来源 → founder_only（仅创始人陈述，待独立核实）；
-//   含「来源未确认」引文（未确认单独，或与创始人陈述混合；含旧版通用 evidence 引文）
-//   → unconfirmed（来源未确认，待核实）。
-// 标为「仅相关」(neutral) 的引文不在支持集合里，不能提供支持。
-// 旧版记录的通用 evidence 身份按未确认读取：原文与引用能力保留，但不能再自动通过门槛。
+// Evidence status determination (when there is support and no valid refutation): Look only at citations
+// that are currently still valid and actually support this statement, determined by the source identity
+// entered by the user: customer (customer original text / external record) citation support -> supported
+// (customer source support); supporting citations all come from founder sources -> founder_only (founder
+// statement only, pending independent verification); containing 'unconfirmed source' citations
+// (unconfirmed alone, or mixed with founder statements; including old generic evidence citations) ->
+// unconfirmed (source unconfirmed, pending verification). Citations marked as 'neutral' are not in the
+// support set and cannot provide support. Generic evidence identities from old records are read as
+// unconfirmed: original text and citation capabilities are retained, but they can no longer automatically
+// pass the threshold.
 export function supportEvidenceState(supports) {
   if (!supports.length) return null;
   const kinds = new Set(supports.map(item => item.source.kind));
@@ -45,7 +53,8 @@ export function supportEvidenceState(supports) {
   return 'unconfirmed';
 }
 
-// 创始人自述判定：支持该声明的全部有效引文都来自创始人来源。
+// Founder self-statement determination: All valid citations supporting the statement come from founder
+// sources.
 export function founderOnlySupport(supports) {
   return supportEvidenceState(supports) === 'founder_only';
 }
@@ -54,8 +63,10 @@ const jsonText = raw => (raw ?? '').trim().replace(/^\x60\x60\x60(?:json)?\s*|\s
 
 export function claimMessages({ mode, request, assessment, draft, dimensions, sources, language }) {
   const en = language === 'en';
-  // 草稿模式的覆盖边界：声明列表为空，需从草稿正文中找出会影响决定的说法再逐条核查——
-  // 已完成的事实（合同已签署、已交付、已付款）与对外承诺（如保证某时间完成）。
+  // Coverage boundaries of draft mode: The statement list is empty, requiring identification of statements
+  // from the draft body that will affect decisions and checking them one by one -- completed facts
+  // (contracts signed, delivered, paid) and external commitments (such as guaranteeing completion by a
+  // certain time).
   const draftModeNote = en
     ? 'In draft mode the supplied claims list is empty: extract the statements in the draft body that could decide the outcome — completed facts (a contract signed, a delivery made, a payment received) and outward commitments (such as a guaranteed completion date) — and verify each of them. Each claim text must be a verbatim substring of the draft body; never add statements the draft does not contain.'
     : '草稿模式下声明列表为空：请从草稿正文中找出会影响决定的说法——已完成的事实（合同已签署、已交付、已付款）与对外承诺（如保证某时间完成）——逐条核查。每条声明的 text 必须逐字出自草稿正文，不得新增草稿里没有的说法。';
@@ -98,14 +109,16 @@ export function claimMessages({ mode, request, assessment, draft, dimensions, so
   ];
 }
 
-// 解析模型输出，返回每条声明的原始字段。结构不合法时抛错由调用方记为未完成核查。
+// Parse the model output and return the original fields for each statement. If the structure is invalid,
+// throw an error to be logged by the caller as an incomplete verification.
 export function parseClaims(raw, options) {
   return parseClaimReport(raw, options).claims;
 }
 
-// 解析模型输出，返回 { claims, warnings }。
-// 重复声明 ID 保留第一条、忽略其后重复并记入 warnings：重复抽取是模型错误，
-// 但第一条已经覆盖该声明，核查照常进行；warning 供界面作为待处理项显示。
+// Parse the model output and return { claims, warnings }. Duplicate statement IDs keep the first one,
+// ignore subsequent duplicates, and log them to warnings: duplicate extraction is a model error, but the
+// first one already covers the statement and verification proceeds as normal; warnings are provided for
+// the UI to display as pending items.
 export function parseClaimReport(raw, { mode, expectIds }) {
   let parsed;
   try { parsed = JSON.parse(jsonText(raw)); } catch { throw { reason: 'parse_failed', message: '结构无效' }; }
@@ -153,8 +166,9 @@ function normalizeItems(claimItems, byId) {
     if (source && !quote.trim()) reasons.push('quote_not_found');
     else if (source && !source.text.includes(quote)) reasons.push('quote_not_found');
     else if (source) {
-      // 上下文检查：逐字存在还不够——从原文定位引文、检查其完整子句，
-      // 截掉否定词/条件/限定的片段与含义有歧义的多处出现都不能采信（任何立场都不行）。
+      // Context check: Verbatim presence is not enough. Locate the citation from the original text, check
+      // its complete clause, and reject any segments with truncated negation/conditions/limitations or
+      // ambiguous multiple occurrences (regardless of stance).
       quoteCtx = quoteContext(source.text, quote);
       if (quoteCtx?.issue) reasons.push(quoteCtx.issue.reason);
     }
@@ -168,14 +182,18 @@ function normalizeItems(claimItems, byId) {
   });
 }
 
-// 「新来源覆盖旧来源」判定：较新记录只有在能确认它明确修订或撤回了同一客户的同一事项时才更新当前结论。
-// 确认依据（缺一不可）：
-//   1. 声明内所有记录都有日期——无日期记录无法确认先后；
-//   2. 最新日期唯一——最新两条同日时无法排序；
-//   3. 最新记录的 revises 明确列出与本记录立场相反的每一条更早记录
-//      （同属一个声明即同一客户、同一事项；ISO 日期按字典序即时间序，目标必须更早）。
-// 任一条件不满足（如仅日期较新、修订指向声明外的来源、仍有未被修订的相反记录）返回 null，
-// 调用方保留来源冲突并返回双方原文。
+// Determination of "new source overrides old source": Update the current conclusion with a newer record
+// only when it is confirmed to explicitly revise or retract the same matter for the same client.
+// Confirmation criteria (all are mandatory):
+// 1. All records within the statements have dates; undated records cannot be ordered chronologically.
+// 2. The latest date must be unique; sorting is impossible if the two latest records share the same date.
+// 3. The revises field of the latest record must explicitly list every earlier record with an opposing
+// stance.
+// (Belonging to the same statement means the same client and matter; ISO dates follow lexicographical
+// order as chronological order, and the target must be earlier).
+// If any condition is not met (e.g., only having a newer date, revision pointing to sources outside the
+// statement, or remaining unrevised opposing records), return null, and the caller preserves the source
+// conflict and returns the original texts of both sides.
 function decisiveSupersession(items, supports, opposes) {
   if (!items.every(item => item.source.date)) return null;
   const dates = items.map(item => item.source.date).sort();
@@ -191,9 +209,11 @@ function decisiveSupersession(items, supports, opposes) {
   return leader;
 }
 
-// 判断正文中某次出现之前的前缀是否紧跟否定词：所有出现都被否定时，
-// 说明声明原文是从否定句里截出来的片段（正文「不会承诺下周交付」只抽出「承诺下周交付」），
-// 原文已不携带声明所述含义，不能按正向声明核查。
+// Determine whether the prefix immediately preceding an occurrence in the text is followed by a negation
+// word: When all occurrences are negated, it indicates that the original statement is a fragment extracted
+// from a negative sentence (e.g., extracting "promise to deliver next week" from "will not promise to
+// deliver next week"). The original text no longer carries the meaning described in the statement and
+// cannot be verified as a positive statement.
 const ZH_NEG_1 = '不没无未非别莫';
 const ZH_NEG_2 = ['不会', '不能', '没有', '无法', '不愿', '不敢', '不可', '不要', '不想', '不肯', '绝不', '从不', '不再', '未必', '并非', '切勿', '莫要'];
 const ZH_NEG_3 = ['不可能', '不愿意', '不打算'];
@@ -207,21 +227,31 @@ export function isNegatedPrefix(prefix) {
   return EN_NEGATION.test(prefix.slice(-40));
 }
 
-// —— 引文上下文检查：引文逐字存在只是可采信的必要条件，片段还必须自带完整语义 ——
-// 模型可能从含否定、条件或限定的子句里只截出一个片段：「The contract is not signed」里的
-// 「signed」、「approved pending board review」里的「approved」、「合同尚未签署」里的「签署」、
-// 「需经董事会批准后生效」里的「生效」——片段本身已不携带声明所述含义，凭它既不能判支持
-// 也不能判反驳（引文缺少关键上下文）。程序从原文定位每次出现，检查其所在完整子句
-// （以句末标点/换行划界；逗号内不划界，避免把只管另一分句的否定词误认到本片段上）：
-//   1. 引文前直接跟着被截掉的否定词/条件（前缀末尾）→ quote_missing_context；
-//   2. 引文后直接接被截掉的条件/限定（后缀开头）→ quote_missing_context；
-//   3. 同一片段在原文中出现多次、所处子句不同（含义可能不同）→ quote_ambiguous：
-//      短引文不能唯一确定指向，需要更完整、在原文中唯一出现的片段消除歧义。
-// 引了完整子句（否定/条件/限定都在引文内）或片段在原文中唯一出现且上下文干净时不标记。
+// -- Citation context check: Verbatim presence of a citation is only a necessary condition for
+// credibility; the fragment must also carry complete semantics by itself --
+// The model might extract only a fragment from a clause containing negation, conditions, or limitations:
+// such as "signed" from "The contract is not signed", "approved" from "approved pending board review",
+// "signed" from "Contract not yet signed", or "effective" from "Shall become effective after board
+// approval" -- the fragment itself no longer carries the meaning described in the statement, and based on
+// it, neither support nor refutation can be judged (the citation lacks critical context). The program
+// locates each occurrence from the original text and checks its containing complete clause (demarcated by
+// end-of-sentence punctuation/newlines; commas do not demarcate, to avoid misattributing negation words
+// that only govern another clause to the current fragment):
+// 1. Directly preceded by a truncated negation/condition at the end of the prefix ->
+// quote_missing_context;
+// 2. Directly followed by a truncated condition/limitation at the start of the suffix ->
+// quote_missing_context;
+// 3. The same fragment appears multiple times in the original text in different clauses (with potentially
+// different meanings) -> quote_ambiguous:
+// Short citations cannot be uniquely determined, requiring a more complete and uniquely appearing fragment
+// in the original text to resolve ambiguity.
+// Do not flag if the complete clause is cited (negation/condition/limitation are all inside the citation)
+// or if the fragment appears uniquely in the original text with a clean context.
 
 const CLAUSE_BOUNDARY = /[。！？!?；;\n…]/;
-// 英文句点仅在「句末」时划界：点后首个非空白字符是大写字母/引号/右括号或文本结尾。
-// 否则小数（"3.5"）、缩写（"e.g."）会把一个句子错切成两截。
+// English periods demarcate only at the "end of a sentence": the first non-whitespace character after the
+// period is an uppercase letter, quotation mark, right parenthesis, or the end of the text. Otherwise,
+// decimals ("3.5") or abbreviations ("e.g.") would incorrectly split a single sentence into two.
 function isSentenceEnd(text, i) {
   if (text[i] !== '.') return false;
   let j = i + 1;
@@ -242,7 +272,8 @@ const ZH_NEGATION_CHARS = '不没无未非别莫';
 const ZH_NEGATION_WORDS = ['不会', '没有', '无法', '不愿', '不敢', '不可', '不要', '不想', '不肯', '绝不',
   '从不', '不再', '未必', '并非', '切勿', '莫要', '不能', '难以', '尚未', '从未',
   '不可能', '不愿意', '不打算'];
-// 否定词之后、引文之前的允许连接成分（字符或双字单位）：「没有被」「不愿意」「不要求」「不需要」。
+// Allowed connecting components (characters or bigrams) between negation words and citations: "not being",
+// "unwilling to", "not requiring", "not needing".
 const ZH_NEGATION_BRIDGES = '被得会过有去就再又也而需';
 const ZH_NEGATION_BRIDGE_UNITS = ['要求', '愿意', '能够', '可以', '打算', '考虑', '准备', '可能'];
 const ZH_CONDITION_TAILS = ['如果', '除非', '只有', '只要', '若', '需', '须', '要', '待'];
@@ -252,25 +283,29 @@ function clauseBounds(text, start, end) {
   while (a > 0 && !clauseIsBoundary(text, a - 1)) a--;
   let b = end;
   while (b < text.length && !clauseIsBoundary(text, b)) b++;
-  if (b < text.length) b++; // 句末标点保留在子句内，展示时是完整原句
+  if (b < text.length) b++; // Sentence-ending punctuation is kept within the clause, displaying the complete original sentence.
   return { start: a, end: b, text: text.slice(a, b) };
 }
 
-// 前缀末尾是否带着被引文截掉的否定/条件。只看紧挨引文的片段（最近一个否定词、
-// 其后只允许连接成分），避免把只管子句里另一分句的否定词算到本引文头上。
+// Whether the end of the prefix carries negation or conditions truncated by the quotation. Look only at
+// the segment immediately adjacent to the quotation (the closest negative word followed only by linking
+// components) to avoid attributing a negative word that governs another clause to this quotation.
 function contextBefore(prefix) {
   const p = String(prefix ?? '').trim();
   if (!p) return null;
-  // 英文按词看；词尾标点（"not," / "signed."）剥掉再判，避免标点黏在词上逃过检测。
+  // English evaluated by word; trailing punctuation ("not," / "signed.") is stripped before checking to
+  // prevent punctuation from sticking to words and evading detection.
   const words = p.split(/\s+/).map(word => word.toLowerCase().replace(/[,;:.!?…]+$/u, '')).filter(word => word).slice(-6);
   for (let i = words.length - 1; i >= 0; i--) {
     if (!enNegWord(words[i])) continue;
     if (words.slice(i + 1).every(word => EN_BRIDGE_WORDS.has(word))) return { kind: 'negation', word: words[i] };
-    break; // 最近一个否定词若被非连接成分隔开，更前面的否定词不可能管辖引文
+    break; // If the nearest negative word is separated by non-connecting components, earlier negative words cannot
+// govern the quotation.
   }
   if (EN_CONDITION_TAIL.test(p)) return { kind: 'condition', word: p.match(EN_CONDITION_TAIL)[0] };
-  // 中文规则用去尾标点的版本：「经董事会批准后，生效」里的逗号不该让条件判定失效
-  // （逗号在子句内不划界，条件短语与主句只是被逗号隔开）。
+  // Chinese rules use the version with trailing punctuation removed: commas in "Effective upon board
+  // approval" should not invalidate condition judgment (commas do not create boundaries within clauses;
+  // conditional phrases and main clauses are merely separated by commas).
   const pz = p.replace(/[\s,，、:：]+$/u, '');
   const tail = [...pz.slice(-6)];
   for (let i = tail.length - 1; i >= 0; i--) {
@@ -287,7 +322,7 @@ function contextBefore(prefix) {
   }
   for (const word of ZH_CONDITION_TAILS) {
     if (!pz.endsWith(word)) continue;
-    if (word === '待' && pz.slice(-2) === '期待') continue; // 「期待」不是条件
+    if (word === '待' && pz.slice(-2) === '期待') continue; // "Expect" is not a condition.
     return { kind: 'condition', word };
   }
   if (pz.endsWith('经') && pz.slice(-2) !== '已经') return { kind: 'condition', word: '经' };
@@ -296,8 +331,8 @@ function contextBefore(prefix) {
   return null;
 }
 
-// 后缀开头是否直接跟着被引文截掉的条件/限定（「approved pending board review」里的
-// 「pending board review」、「生效，需经董事会批准」里的「需经…」）。
+// Whether the suffix starts directly with a condition/qualifier truncated by the quotation ("pending board
+// review" in "approved pending board review", "subject to..." in "Effective, subject to board approval").
 function contextAfter(suffix) {
   const p = String(suffix ?? '').replace(/^[\s,;:，、；;]+/, '');
   if (!p) return null;
@@ -308,11 +343,12 @@ function contextAfter(suffix) {
   return null;
 }
 
-// 在来源原文中定位引文的每一次出现，逐处检查其完整子句。返回
-// { clause, occurrences, issue }：clause 是首次出现所在的完整子句（展示原文用），
-// issue 为 null 或 { reason: 'quote_missing_context' | 'quote_ambiguous', detail }。
-// 任一处出现被截掉否定/条件/限定 → quote_missing_context（该处优先展示）；
-// 多处出现且子句不同但各自干净 → quote_ambiguous（需更完整的引文消歧）。
+// Locate every occurrence of the quotation in the source text and check its complete clause one by one.
+// Return { clause, occurrences, issue }: clause is the complete clause of the first occurrence (for
+// display), and issue is null or { reason: 'quote_missing_context' | 'quote_ambiguous', detail }.
+// Truncated negation/condition/qualifier at any occurrence -> quote_missing_context (prioritize displaying
+// this occurrence); multiple occurrences with different yet clean clauses -> quote_ambiguous (requires a
+// more complete quotation for disambiguation).
 export function quoteContext(text, quote) {
   const q = typeof quote === 'string' ? quote : '';
   const t = typeof text === 'string' ? text : '';
@@ -343,21 +379,26 @@ export function quoteContext(text, quote) {
   return { clause: analyzed[0].clause, occurrences: analyzed.length, issue: null };
 }
 
-// 程序校验 + 时间/范围判定：引文未找到、引文缺少关键上下文、字段相互矛盾时判未完成核查。
-// options.body（草稿核查）额外要求声明原文逐字出现在正文中，否则改写无法定位，同样判未完成核查；
-// 正文存在而声明原文为空（empty_claim_text）、或声明从否定句中截断（truncated_negation）同样判未完成核查。
+// Program validation + time/scope judgment: unverified status is determined if the quotation is not found,
+// lacks critical context, or fields contradict each other. options.body (draft verification) additionally
+// requires declaring that the original text appears verbatim in the body, otherwise rewrites cannot be
+// located, also resulting in unverified status; if the body exists but the declared original text is empty
+// (empty_claim_text), or if it is declared as truncated from a negative sentence (truncated_negation), it
+// is also judged as unverified.
 export function resolveClaim(claim, sources, options = {}) {
   const byId = new Map(sources.map(source => [source.id, source]));
   const items = normalizeItems(claim?.items, byId);
-  // 聊天回答核查（窗口 3）的来源身份口径（identity='workspace'）：工作区记录就是
-  // 该轮回答的证据基础，任何一条有效支持引文都算「有依据」（supported），
-  // 不再区分客户／创始人／未确认。线索与草稿流程仍按用户录入的来源身份判定。
+  // Source identity policy for chat answer verification (Window 3) (identity='workspace'): workspace
+  // records serve as the evidence base for that round of answers, and any valid supporting quotation
+  // counts as "supported", without distinguishing between customer/founder/unconfirmed. Leads and draft
+  // workflows still follow the source identity entered by the user.
   const stateOf = supports => (options.identity === 'workspace'
     ? (supports.length ? 'supported' : null)
     : supportEvidenceState(supports));
   const invalid = items.filter(item => !item.valid);
-  // 失败原因结构化：引文上下文问题带上被截子句（clause）与原因（detail），
-  // 供核查展示与发送流程（窗口 1）直接呈现「原文 + 原因」，不用重新推断。
+  // Structured failure reasons: quotation context issues carry the truncated clause and reason (detail)
+  // for direct presentation of "original text + reason" in the verification display and sending workflow
+  // (Window 1) without re-inference.
   const failedChecks = invalid.flatMap(item => item.reasons.map(reason => {
     const issue = item.quoteContext?.issue;
     return issue && issue.reason === reason
@@ -387,18 +428,22 @@ export function resolveClaim(claim, sources, options = {}) {
     rawStatus: STATUSES.includes(claim?.status) ? claim.status : null, items, missing, rewrite,
     conflict: null, withdrawn: false, failedChecks };
   if (invalid.length || !inBody || truncatedNegation) return { ...base, status: 'incomplete' };
-  // neutral（相关但不定论，如客户对"已完成"事实只表达意愿）既不算支持也不算反驳：
-  // 一条未定论的客户引文不能改变证据状态。
+  // neutral (relevant but inconclusive, such as a customer merely expressing intent regarding a
+  // "completed" fact) is neither supporting nor refuting: an inconclusive customer quotation cannot change
+  // the evidence state.
   const supports = valid.filter(item => item.stance === 'supports');
   const opposes = valid.filter(item => item.stance === 'refutes' || item.stance === 'withdraws');
   if (opposes.length && supports.length) {
-    // 新来源覆盖旧来源：只有确认了明确修订才更新当前结论；
-    // 仅日期较新、无法排序或修订无法确认时，保留冲突（conflict 中的双方条目各带来源原文）。
+    // New sources override old sources: update the current conclusion only when explicit revision is
+    // confirmed; retain the conflict (both entries in conflict carry their respective source texts) when
+    // dates are newer, unsortable, or revisions cannot be confirmed.
     const decisive = decisiveSupersession(valid, supports, opposes);
     if (decisive) {
-      // 修订确认后，当前状态同样按来源身份判定：线索/草稿中只有客户来源引文支持才算
-      // 有依据，落在创始人陈述或来源未确认引文上时沿用对应待核实状态；
-      // 聊天回答核查（identity='workspace'）任何有效支持引文都算有依据。
+      // After revision confirmation, the current state is still determined by source identity: in
+      // leads/drafts, only customer source quotations count as supported; when falling back to founder
+      // statements or unconfirmed source quotations, the corresponding pending verification state is used;
+      // for chat answer verification (identity='workspace'), any valid supporting quotation counts as
+      // supported.
       const status =
         decisive.stance === 'supports'
           ? stateOf(supports)
@@ -412,8 +457,9 @@ export function resolveClaim(claim, sources, options = {}) {
     return { ...base, status: 'refuted', decisive, withdrawn: decisive.stance === 'withdraws' };
   }
   if (supports.length) {
-    // 支持引文按来源身份判定证据状态：只有客户来源引文支持才算有依据；
-    // 仅创始人陈述、含来源未确认引文或沿用旧版通用 evidence 引文，都不得自动通过。
+    // Supporting quotations determine the evidence state based on source identity: only customer source
+    // quotations count as supported; founder statements alone, quotations with unconfirmed sources, or
+    // fallback to older generic evidence quotations must not automatically pass.
     const status = stateOf(supports);
     return { ...base, status, decisive: supports.at(-1) };
   }
@@ -426,10 +472,13 @@ export function verifyClaims(claims, sources, options = {}) {
   return claims.map(claim => resolveClaim(claim, sources, options));
 }
 
-// —— 草稿确定性检查（窗口 2，实现在 coverage.mjs，本模块转出）——
-// 1. 占位符：正文里仍留有 [待确认：…] 一类方括号占位符——未确认内容必须在发送前落实。
-// 2. 未被抽取的高风险片段：按「同一句里的多项承诺、委婉表述的日期承诺、附带条件的批准或交付」
-//    三类形式（外加已完成事实／数字）逐句/分句扫描，报告哪段原文没有进入本次核查——
-//    片段 + 所在原句 + 命中形式 + 同句已核查的分句，供创始人定位、改写或补证。
-// draftChecks 是发送门槛（窗口 1）读取的兼容视图；coverageScan 是完整结果（独立模块）。
+// —— Draft determinism check (Window 2, implemented in coverage.mjs, exported by this module) ——
+// 1. Placeholders: bracketed placeholders like [Pending confirmation: ...] still remain in the
+// text—unconfirmed content must be finalized before sending.
+// 2. Unextracted high-risk segments: scanned sentence-by-sentence/clause-by-clause according to three
+// forms ("multiple commitments in the same sentence, euphemistically expressed date commitments,
+// conditional approval or delivery" (plus completed facts/numbers)), reporting which original text did not
+// enter this verification—segment + original sentence containing it + matched form + verified clauses in
+// the same sentence, for founders to locate, rewrite, or supplement evidence. draftChecks is a compatible
+// view read by the sending threshold (Window 1); coverageScan is the complete result (standalone module).
 export { coverageScan, draftChecks, riskCategories, COVERAGE_CATEGORIES, COVERAGE_CATEGORY_LABELS } from './coverage.mjs';

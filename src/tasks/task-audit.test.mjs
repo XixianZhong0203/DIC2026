@@ -58,7 +58,7 @@ test('changeReceipt shows original time, new time, and the actual result', () =>
   assert.equal(changeReceipt('deleted', before, { title: '交付' }), '待办已删除 · 交付');
   assert.match(changeReceipt('created', null, after), /待办已创建 · 交付/);
   assert.equal(changeReceipt('updated', before, null), '操作未生效，请刷新后重试');
-  // An edit that does not move the time has no 原/新 contrast.
+  // An edit that does not move the time has no old/new contrast.
   assert.equal(changeReceipt('updated', before, { ...before, notes: '补充备注' }),
     '事件已更新 · 交付 · 2026-11-13 15:00 → 2026-11-13 16:30');
 });

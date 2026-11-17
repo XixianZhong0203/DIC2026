@@ -1,27 +1,34 @@
-// 证据不足时怎么说、怎么继续（evidence answer）。
+// How to phrase and how to proceed when evidence is insufficient (evidence answer).
 //
-// 把一个「证据束」（一次线索分析结果 + 逐条声明核查 + 来源原文）转成
-// 一份结构化、确定性的回答，回答四件事：
-//   已确认什么（confirmed）/ 缺少哪条信息（missing）/ 下一步怎么做（next）
-//   / 指向哪些来源（supporting）。
+// Convert an "evidence bundle" (a single clue analysis result + itemized statement verification + source
+// original text) into a structured, deterministic answer covering four aspects:
+// What is confirmed (confirmed) / What information is missing (missing) / What to do next (next)
+// / Which sources to point to (supporting).
 //
-// 已提取声明里「仅创始人陈述」（founder_only）与「来源未确认」（unconfirmed）的
-// 条目不算已确认，单独列入待核实项（pending）：结论只到客户来源支持的部分，
-// 待核实项始终可见，不会被摘要省略。
+// Extracted statements marked as "founder_only" and "unconfirmed" are not counted as confirmed, and are
+// listed separately as pending items (pending): conclusions extend only to parts supported by customer
+// sources, and pending items remain always visible and will not be omitted by summaries.
 //
-// 并区分四种情形（situation），让「怎么说」和「怎么继续」各有边界：
-//   insufficient  证据不足  —— 现有材料只支持部分结论：说清已确认、缺哪条、下一步。
-//   conflict      来源冲突  —— 来源相互矛盾：展示需要比较的记录，不擅自下结论。
-//   failed        核查失败  —— 模型核查失败：提示可重试（原文与来源不受失败影响）。
-//   sufficient    证据充分  —— 给出明确且有边界的结论：已确认到哪一步、哪一步仍待确认。
+// Distinguish four situations so that "how to phrase" and "how to proceed" each have clear boundaries:
+// insufficient Insufficient evidence - Existing materials only support partial conclusions: state clearly
+// what is confirmed, what is missing, and the next steps.
+// conflict Source conflict - Sources contradict each other: display records that need comparison without
+// jumping to conclusions.
+// failed Verification failed - Model verification failed: prompt that it can be retried (original text and
+// sources are not affected by the failure).
+// sufficient Sufficient evidence - Provide a clear and bounded conclusion: up to which step it is
+// confirmed and which step remains to be confirmed.
 //
-// 这是「怎么说」的唯一事实来源：线索流程与决策卡都消费它，措辞保持一致。
-// 纯函数、无 I/O、无模型调用——模型只负责产出原料（status/quote/unknown/...），
-// 这里的措辞与边界由确定性代码决定，可单测、可回放。
+// This is the single source of truth for "how to phrase": the clue workflow and decision cards both
+// consume it, keeping wording consistent.
+// Pure function, no I/O, no model calls - the model is only responsible for producing raw materials
+// (status/quote/unknown/...), while the wording and boundaries here are determined by deterministic code,
+// which is unit-testable and replayable.
 
 export const SITUATIONS = ['sufficient', 'insufficient', 'conflict', 'failed'];
 
-// 把证据束转成结构化回答。bundle 字段见 buildAnswerBundle（opportunities.mjs）。
+// Convert the evidence bundle into a structured answer. For bundle fields, see buildAnswerBundle
+// (opportunities.mjs).
 export function evidenceAnswer(bundle) {
   const b = bundle ?? {};
   const claims = Array.isArray(b.claims) ? b.claims : [];
@@ -34,15 +41,17 @@ export function evidenceAnswer(bundle) {
   const unknown = of('unknown');
   const refuted = of('refuted');
   const incomplete = of('incomplete');
-  // 待核实项：仅创始人陈述（founder_only）与来源未确认（unconfirmed）的已提取声明。
-  // 它们可能与其他声明并存（如意向已被客户来源支持、签署状态只有创始人陈述），
-  // 因此按声明逐条列出，而不是折叠进某个单一缺口文案。
+  // Pending items: extracted statements that are founder_only and unconfirmed.
+  // They may coexist with other statements (e.g., intent is supported by customer sources, but signing
+  // status only has founder statements),
+  // so they are listed statement by statement rather than collapsed into a single missing-gap text.
   const pending = [
     ...of('founder_only').map(claim => pendingItem(claim, 'founder_only')),
     ...of('unconfirmed').map(claim => pendingItem(claim, 'unconfirmed')),
   ];
 
-  // --- 核查失败：模型核查失败，提示可重试（原文与来源不受失败影响）-----------
+  // --- Verification failed: Model verification failed, prompt that it can be retried (original text and
+  // sources are not affected by the failure) -----------
   if (b.error) {
     return {
       situation: 'failed',
@@ -58,7 +67,8 @@ export function evidenceAnswer(bundle) {
     };
   }
 
-  // --- 来源冲突：展示需要比较的记录，不擅自下结论 ---------------------------
+  // --- Source conflict: Display records that need comparison, do not make arbitrary conclusions
+  // ---------------------------
   if (conflicted.length) {
     const compare = [];
     for (const claim of conflicted) {
@@ -87,16 +97,19 @@ export function evidenceAnswer(bundle) {
     };
   }
 
-  // --- 证据充分：至少一条关键声明被来源支持 → 明确且有边界的结论 ------------
-  //     已确认 = 被支持的声明（现有证据真正能撑住的说法）；
-  //     边界 = 仍未确认/被反驳/未完成的部分（明确说清结论只到这一步）。
+  // --- Sufficient evidence: At least one key statement is supported by sources -> Clear and bounded
+  // conclusion ------------
+  // Confirmed = Supported statements (claims that existing evidence can actually back up);
+  // Boundary = Parts still unconfirmed/refuted/incomplete (explicitly state that the conclusion only goes
+  // this far).
   if (supported.length) {
     const confirmed = supported.map(claim => claim.rewrite || claimLabel(claim)).join('；');
     const open = unknown.map(claim => claim.missing || claimLabel(claim)).join('；');
     const refutedNote = refuted.map(claim => claimLabel(claim) + ' 被来源反驳').join('；');
     const incompleteNote = incomplete.map(claim => claimLabel(claim) + ' 未完成核查').join('；');
-    // 待核实项同样划入结论边界：结论只到已支持的部分，创始人陈述与未确认来源
-    // 撑住的声明明确标出「待独立核实／待核实」。
+    // Pending items are also classified into the conclusion boundary: conclusions only extend to the
+    // supported parts, and statements backed by founder statements and unconfirmed sources are explicitly
+    // marked as "pending independent verification / pending verification".
     const pendingNote = pending.map(claim => claimLabel({ dimension: claim.dimension, text: claim.text })
       + (claim.status === 'founder_only' ? '（仅创始人陈述，待独立核实）' : '（来源未确认，待核实）')).join('；');
     const bounds = [open, refutedNote, incompleteNote, pendingNote].filter(Boolean).join('；') || '暂无仍未确认项。';
@@ -114,9 +127,11 @@ export function evidenceAnswer(bundle) {
     };
   }
 
-  // --- 证据不足：没有关键声明被来源支持 → 说清已确认、缺哪条、下一步 --------
-  //     已确认 = 逐字核对过的原文摘录（或判断依据）；缺 = 具体缺哪条信息；
-  //     下一步 = 可操作的建议（发案例并询问采购计划这类）。
+  // --- Insufficient evidence: No key statement is supported by sources -> Clearly state what is
+  // confirmed, what is missing, and the next steps --------
+  // Confirmed = Verbatim-checked original excerpts (or judgment basis); Missing = Specifically what
+  // information is missing;
+  // Next step = Actionable suggestions (such as sending a case study and asking about procurement plans).
   const missing = b.unknown || unknown.map(claim => claim.missing).filter(Boolean).join('；')
     || '现有材料不足以支持关键结论。';
   return {
@@ -137,13 +152,15 @@ function claimLabel(claim) {
   return (claim?.dimension ? claim.dimension + '：' : '') + (claim?.text || '（模型未返回声明原文）');
 }
 
-// 待核实条目：声明的维度与原文 + 待核实原因（founder_only / unconfirmed），
-// 措辞交给消费方（回答卡）按现有状态标签渲染。
+// Pending items: dimension of the statement along with original text + reason for pending (founder_only /
+// unconfirmed),
+// leaving the phrasing to be rendered by the consumer (answer card) based on existing status tags.
 function pendingItem(claim, status) {
   return { dimension: claim.dimension ?? '', text: claim.text ?? '', status };
 }
 
-// 当前结论所指向的来源：取被支持声明里 stance=supports 的逐字来源，去重、保序。
+// Source pointed to by current conclusion: extract verbatim sources with stance=supports from the
+// supported claim, deduplicate while preserving order.
 function supportingSources(supportedClaims, bySourceId) {
   const seen = new Map();
   for (const claim of supportedClaims) {

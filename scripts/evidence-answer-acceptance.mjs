@@ -1,13 +1,18 @@
-// Acceptance flow for the evidence answer（证据不足时怎么说、怎么继续）.
+// Acceptance flow for the evidence answer (what to say and how to proceed when evidence is insufficient).
 //
-//   验收场景（同一条线索：客户「想看案例」）：
-//     1) 先只有「想看案例」→ 当前回答必须是：已确认什么 / 缺少哪条信息 / 下一步可以怎么做
-//        （具体缺口 + 可操作建议），而不是笼统的「证据不足」。
-//     2) 补来一条明确表达签约意向的回复 → 系统更新结论（有边界的明确结论），并指向新增来源。
-//     5) 混合案例（另一条线索）：客户已明确表达签约意向（客户来源支持），
-//        但「合同已签约」只有创始人陈述 → 回答同时显示已确认的意向与待核实的签署状态
-//        （pending 列出 founder_only 声明，依据来源不指向创始人陈述）。
-//   另加两个情形：来源相互矛盾（展示需要比较的记录，不擅自下结论）；模型核查失败（可重试）。
+// Acceptance scenario (same clue: customer wants to see cases):
+// 1) Initially only 'wants to see cases' -> current answer must be: what is confirmed / what info is
+// missing / what to do next
+// (specific gap + actionable advice), rather than a generic 'insufficient evidence'.
+// 2) Add a reply clearly expressing intention to sign -> system updates conclusion (bounded clear
+// conclusion), pointing to the new source.
+// 5) Mixed case (another clue): customer clearly expressed intention to sign (supported by customer
+// source),
+// but 'contract signed' is only stated by the founder -> answer shows both the confirmed intention and the
+// pending verification signing status
+// (pending lists founder_only statement, citation source does not point to founder statement).
+// Plus two other situations: contradictory sources (displays records that need comparison, draws no
+// arbitrary conclusion); model verification failed (retryable).
 //
 //   node scripts/evidence-answer-acceptance.mjs
 //
@@ -55,7 +60,8 @@ function mockReply(input) {
     const contradiction = sources.find(source => source.text?.includes('希望改为下周一'));
     const founderSigned = sources.find(source => source.kind === 'founder' && source.text?.includes('已签约'));
     if (intent && contradiction) {
-      // 同一声明同时被两条来源支持又反驳 → 核查判为来源冲突（conflict 带双方原文）。
+      // The same statement is both supported and refuted by two sources -> verification judges as source
+      // conflict (conflict with both original texts).
       return JSON.stringify({ claims: [
         { id: '购买意向', dimension: '购买意向', text: '客户有签约意向', status: 'conflict',
           items: [
@@ -68,7 +74,8 @@ function mockReply(input) {
       ] });
     }
     if (intent && founderSigned) {
-      // 混合案例：意向由客户来源支持，签署状态只有创始人陈述（核查器按来源身份判 founder_only）。
+      // Mixed case: intention supported by customer source, signing status only from founder statement
+      // (verifier judges as founder_only based on source identity).
       return JSON.stringify({ claims: [
         { id: '购买意向', dimension: '购买意向', text: '客户有签约意向', status: 'supported',
           items: [{ evidenceId: intent.id, stance: 'supports', quote: '我们希望尽快签约',
@@ -93,7 +100,8 @@ function mockReply(input) {
     return unknownClaims();
   }
   if (input.mode === 'draft') return JSON.stringify({ claims: [] });
-  // assess：「想看案例」不构成签约意向 → unknown，缺口与下一步都写具体。
+  // assess: 'wants to see cases' does not constitute intention to sign -> unknown, write both gaps and
+  // next steps specifically.
   return JSON.stringify({
     status: 'unknown', quote: '想先看案例',
     reason: '客户表示想先看案例；请求查看案例不构成购买意向。',
@@ -170,7 +178,8 @@ let up = false;
 for (let i = 0; i < 100 && !up; i++) {
   try {
     const state = await (await fetch(base + '/api/state')).json().catch(() => ({}));
-    // model 必须是我们注入的确定性模型，否则说明端口被别的服务占用（会误测别人的实例）。
+    // The model must be the deterministic model we inject, otherwise it indicates the port is occupied by
+    // another service (which would mis-test someone else's instance).
     up = state.model === 'deterministic-mock' && state.live === true;
   } catch {
     if (server.exitCode != null) break;

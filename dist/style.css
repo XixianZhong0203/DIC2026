@@ -570,14 +570,14 @@ summary { cursor: pointer; font-size: 13.5px; font-weight: 550; color: var(--tex
 .source-heading h2 { font-size: 15.5px; font-weight: 650; }
 .source-panel h3 { font-size: 14px; margin: 20px 0 8px; }
 
-/* ── 聊天回答的关键断言（窗口 3）──────────────────────────────────────────── */
-/* 回答正文里逐字标注的断言片段：底色随核查状态，点击片段后的状态徽章打开证据面板。 */
+/* -- Key assertions in chat response (window 3) -------------------------------------------- */
+/* Verbatim annotated assertion fragments in the response body: Background color changes with verification status, and clicking the status badge after the fragment opens the evidence panel. */
 .claim-flag { background: #fdf3e3; color: inherit; padding: 0 2px; border-radius: 3px; }
 .claim-flag.claim-flag-supported { background: #e8f5ee; }
 .claim-flag.claim-flag-conflict,
 .claim-flag.claim-flag-refuted,
 .claim-flag.claim-flag-withdrawn { background: var(--danger-bg); }
-/* 状态徽章（回答内联 + 证据行摘要共用）：绿色＝有依据，琥珀＝待确认，红棕＝冲突/反驳/撤回。 */
+/* Status badge (shared by response inline + evidence row summary): Green = supported, Amber = pending confirmation, Red-brown = conflict / refutation / retraction. */
 .claim-chip {
   display: inline-block; margin: 0 0 0 4px; padding: 0.5px 8px;
   border: 1px solid var(--line-strong); border-radius: 999px; background: #fff;
@@ -592,7 +592,7 @@ button.claim-chip:hover { background: var(--hover); }
 .claim-chip.claim-chip-conflict,
 .claim-chip.claim-chip-refuted,
 .claim-chip.claim-chip-withdrawn { color: var(--danger-text); border-color: var(--danger-line); background: var(--danger-bg); }
-/* 证据面板：单条关键断言的展示。 */
+/* Evidence panel: Display of a single key assertion. */
 .claim-check-meta { display: block; margin-bottom: 8px; }
 .claim-error { margin: 8px 0; padding: 8px 11px; background: var(--danger-bg); border: 1px solid var(--danger-line); border-radius: 9px; font-size: 13px; white-space: pre-wrap; }
 .claim-entry { border-left: 3px solid var(--line-strong); }
@@ -612,10 +612,12 @@ button.claim-chip:hover { background: var(--hover); }
 .claim-rewrite { color: var(--text-soft); }
 .claim-fail { color: var(--danger-text); }
 
-/* ── 回答顶部的核查状态（窗口 2）─────────────────────────────────────────── */
-/* 位于回答正文上方：整体核查状态一眼可辨，最需要注意的原句直接列出（点击打开
-   证据面板并定位到该断言）。绿＝全部有依据，琥珀＝待核实，红棕＝冲突/反驳/失败，
-   灰＝未抽取到声明。 */
+/* ── Answer top verification status (Window 2) ─────────────────────────── */
+/* Located above the answer body: The overall verification status is clear at a glance, and the original
+ * sentences requiring the most attention are directly listed (click to open the evidence panel and locate
+ * the assertion). Green = Fully supported, Amber = Pending verification, Red-brown =
+ * Conflict/Refuted/Failed, Gray = No claims extracted.
+ */
 .claim-top { margin: 0 0 10px; padding: 9px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--chrome); }
 .claim-top-title { margin: 0; font-size: 13.5px; font-weight: 620; line-height: 1.5; }
 .claim-top-error { margin: 4px 0 0; font-size: 12px; color: var(--danger-text); word-break: break-word; }
@@ -644,7 +646,7 @@ button.claim-chip:hover { background: var(--hover); }
 .claim-top-verified { border-color: #c9e5d4; background: #f7fcf9; }
 .claim-top-verified .claim-top-title { color: #15803d; }
 .claim-top-none .claim-top-title { color: var(--muted); font-weight: 550; }
-/* 证据面板：全部通过时的核查范围说明（「均有依据」只覆盖已核查的 N 条）。 */
+/* Evidence panel: Explanation of the verification scope when all pass ("All supported" only covers the N verified items). */
 .claim-scope-note { display: block; margin-bottom: 8px; font-size: 12px; color: #15803d; }
 
 /* ── Small screens ─────────────────────────────────────────────────────── */
@@ -802,7 +804,7 @@ button.claim-chip:hover { background: var(--hover); }
 .claim-flag.claim-flag-conflict,
 .claim-flag.claim-flag-refuted,
 .claim-flag.claim-flag-withdrawn { background: var(--danger-bg); }
-/* 状态徽章（回答内联 + 证据行摘要共用）：绿色＝有依据，琥珀＝待确认，红棕＝冲突/反驳/撤回。 */
+/* Status badge (shared between answer inline + evidence row summary): Green = Supported, Amber = To be confirmed, Red-brown = Conflict/Refuted/Withdrawn. */
 .claim-chip {
   display: inline-block; margin: 0 0 0 4px; padding: 0.5px 8px;
   border: 1px solid var(--line-strong); border-radius: 999px; background: #fff;
@@ -817,7 +819,7 @@ button.claim-chip:hover { background: var(--hover); }
 .claim-chip.claim-chip-conflict,
 .claim-chip.claim-chip-refuted,
 .claim-chip.claim-chip-withdrawn { color: var(--danger-text); border-color: var(--danger-line); background: var(--danger-bg); }
-/* 证据面板：单条关键断言的展示。 */
+/* Evidence panel: Display of a single key assertion. */
 .claim-check-meta { display: block; margin-bottom: 8px; }
 .claim-error { margin: 8px 0; padding: 8px 11px; background: var(--danger-bg); border: 1px solid var(--danger-line); border-radius: 9px; font-size: 13px; white-space: pre-wrap; }
 .claim-entry { border-left: 3px solid var(--line-strong); }

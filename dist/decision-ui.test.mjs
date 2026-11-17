@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createDecisionUI } from './decision-ui.js';
 
-// 用最小假 DOM 驱动真实决策卡 UI：确认改期后，卡片要能看到原时间、新时间
-// （回执）和实际结果，并能找到对应待办（「查看待办」按钮）。
+// Drive real decision card UI with a minimal mock DOM: after confirming rescheduling, the card must show
+// the original time, new time
+// (receipt), and actual result, and provide a way to locate the corresponding todo ("View Todo" button).
 function harness() {
   const calls = { jumpToTask: [] };
   const element = (tag, text = '', className = '') => {

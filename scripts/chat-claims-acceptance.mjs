@@ -1,24 +1,32 @@
-// 窗口 3 · 聊天回答的关键断言核查 · 端到端验收
+// Window 3 - Key assertion verification for chat responses - End-to-end acceptance
 //
-//   每次聊天回答后，Daymark 把回答里影响决定的关键说法（客户意向 / 签约 / 报价 /
-//   交付）和「本轮实际检索到的记录」逐条对照，在回答旁标出缺乏依据的断言：
-//   证据不足 / 来源冲突 / 核查失败 / 有依据，并给出逐字引文与来源原文入口。
-//   核查不修改回答、不阻塞发送路径；失败只记 claimCheck.error。
+// After each chat response, Daymark compares the key decision-influencing statements in the response
+// (customer intent / signing / quotation / delivery) item by item with the "actual records retrieved in
+// this round", and flags assertions lacking basis next to the response:
+// Insufficient evidence / Source conflict / Verification failed / Grounded, and provides verbatim quotes
+// along with source text entry points.
+// Verification does not modify the response and does not block the sending path; failures are only
+// recorded in claimCheck.error.
 //
-//   核心验收（任务书场景）：
-//     来源只说「愿意签约」而回答却说「合同已签署」→ 即使附了真实逐字引文，
-//     「签约」结论仍标「证据不足 · 待确认」；
-//     补入一条已签署合同记录后再问 → 同一说法转为「有依据」，指向该记录；
-//     再补一条相反记录（客户暂缓签约、合同未签署）→ 转为「来源冲突」，双方原文可比对。
-//   另验收：核查请求确实携带本轮检索到的记录；核查失败（模型输出无法解析）不丢回答；
-//   会话与模型选择保持不变（trace.attemptedModel / claimCheck.model）。
+// Core acceptance (task specification scenarios):
+// Source says only "willing to sign" while response says "contract signed" -> even with a real verbatim
+// quote attached, the "signing" conclusion is still flagged as "Insufficient evidence · Pending
+// confirmation";
+// Adding a signed contract record and asking again -> the same statement changes to "Grounded", pointing
+// to that record;
+// Adding a conflicting record (customer temporarily delays signing, contract not signed) -> changes to
+// "Source conflict", with source texts from both sides comparable.
+// Additional acceptance: verification requests indeed carry the records retrieved in this round;
+// verification failure (model output unparseable) does not drop the response;
+// Session and model selection remain unchanged (trace.attemptedModel / claimCheck.model).
 //
-//   运行方式：
-//     node scripts/chat-claims-acceptance.mjs          # 全部断言，退出码 0/1
+// Usage:
+// node scripts/chat-claims-acceptance.mjs # All assertions, exit code 0/1
 //
-// 与既有验收脚本同一手法：临时目录 + 专用端口启动真实服务（工作树字节级拷贝，
-// 仅替换 src/models.mjs 为本地 mock 目录以隔离真实模型端点），模型请求打到本地
-// 确定性 mock（回复队列 / 核查队列分开，多取/错取即记 FAIL）。
+// Same approach as existing acceptance scripts: temporary directory + dedicated port to start the real
+// service (byte-level copy of working tree, replacing only src/models.mjs with the local mock directory to
+// isolate real model endpoints), model requests hit the local deterministic mock (response queue /
+// verification queue separated, extra or incorrect fetches are recorded as FAIL).
 
 import { spawn } from 'node:child_process';
 import { cpSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -35,12 +43,13 @@ const BASE = 'http://127.0.0.1:' + PORT;
 const PROJECT = '客户 A';
 
 // ---------------------------------------------------------------------------
-// 预设语料
+// Preset corpus
 // ---------------------------------------------------------------------------
 const REC_INTENT = '客户表示愿意签约，期待合同文本。';
 const REC_CONTRACT = '2026-11-12 双方已签署合同，合同文本已归档。';
 const REC_CONFLICT = '客户暂缓签约。合同未签署。需重新评估。';
-// 回答故意把「愿意签约」说成「合同已签署」——验收断言：核查必须标出这条缺乏依据。
+// The response deliberately states "willing to sign" as "contract signed" -- acceptance assertion:
+// verification must flag this unsupported statement.
 const ANSWER = '客户愿意签约；合同已签署。';
 
 const checkClaim = (items, missing, rewrite) => JSON.stringify({ claims: [{
@@ -49,8 +58,9 @@ const checkClaim = (items, missing, rewrite) => JSON.stringify({ claims: [{
 const item = (evidenceId, stance, quote, note) => ({ evidenceId, stance, quote, note, revises: [] });
 
 // ---------------------------------------------------------------------------
-// 确定性 mock 模型：聊天回复与关键断言核查分列两个队列（队列顺序＝流程顺序，
-// 多取/错取即 FAIL）；核查请求按提示开头路由，绝不消耗回复队列。
+// Deterministic mock model: chat responses and key assertion verifications are separated into two queues
+// (queue order = process order, extra or incorrect fetches are recorded as FAIL); verification requests
+// are routed by prompt prefix and never consume the response queue.
 // ---------------------------------------------------------------------------
 const chatQ = [];
 const checkQ = [];
@@ -86,10 +96,11 @@ function makeMock() {
 }
 
 // ---------------------------------------------------------------------------
-// 临时工作目录：工作树字节级拷贝，仅替换 src/models.mjs 为本地 mock 目录。
+// Temporary working directory: byte-level copy of the working tree, replacing only src/models.mjs with the
+// local mock directory.
 // ---------------------------------------------------------------------------
 const MOCK_MODELS = `// 测试模型目录（chat-claims 验收窗口）：单一本地 mock 模型，指向脚本启动的
-// 确定性 mock 服务。替换工作树目录仅用于隔离真实端点；被测代码不受影响。
+// Deterministic mock provider. The temporary checkout isolates real endpoints. The code under test is unchanged.
 const BASE = process.env.OPENAI_BASE_URL ?? 'http://127.0.0.1:0/v1';
 export const MODELS = [{ id: 'mock-model', name: 'Mock Model', base: BASE, keyEnv: 'MOCK_API_KEY', fallbackKey: 'mock', timeout: 15000, efforts: {} }];
 export const modelById = id => (typeof id === 'string' && MODELS.find(entry => entry.id === id)) || null;
@@ -119,7 +130,7 @@ function buildWorkDir() {
 }
 
 // ---------------------------------------------------------------------------
-// 结果记录 + 客户端
+// Result recording + client
 // ---------------------------------------------------------------------------
 const results = [];
 function record(name, status, detail = '') {
@@ -150,7 +161,7 @@ const checkRequest = () => {
 const userJson = req => { try { return JSON.parse((req?.messages ?? []).find(m => m.role === 'user')?.content ?? '{}'); } catch { return {}; } };
 
 // ---------------------------------------------------------------------------
-// 启动
+// Start
 // ---------------------------------------------------------------------------
 const mock = makeMock();
 const workDir = buildWorkDir();
@@ -192,7 +203,8 @@ record('save the intent record (客户愿意签约)', intentRec.ok ? 'PASS' : 'F
 const rec1Id = (await state()).memory.find(r => r.body === REC_INTENT)?.id;
 
 // ---------------------------------------------------------------------------
-// 1) 核心验收：来源只说「愿意签约」，回答说「合同已签署」→ 签约断言待确认
+// 1) Core acceptance: source says only "willing to sign", response says "contract signed" -> signing
+// assertion pending confirmation
 // ---------------------------------------------------------------------------
 console.log('\n1) 来源只说「愿意签约」，回答却说「合同已签署」');
 chatQ.push({ answer: ANSWER, facts: [{ id: rec1Id, quote: '愿意签约' }], inferences: [], unknowns: [],
@@ -217,7 +229,7 @@ record('the neutral intent quote is recorded (intent is not a completed fact)',
 record('the check records its prompt version and model',
   reply?.review?.claimCheck?.prompt === 'chat-claims-v1' && reply?.review?.claimCheck?.model === 'mock-model' ? 'PASS' : 'FAIL',
   'prompt=' + reply?.review?.claimCheck?.prompt + ' model=' + reply?.review?.claimCheck?.model);
-// 核查请求确实携带本轮检索到的记录（用户 JSON 里的 sources）。
+// Verify that the request actually carries the records retrieved in this round (sources in the user JSON).
 const check1 = checkRequest();
 const check1Sources = userJson(check1)?.sources ?? [];
 record('the check request carries the records retrieved this round',
@@ -227,7 +239,8 @@ record('the check request checks the exact answer text',
   userJson(check1)?.answer === ANSWER && userJson(check1)?.mode === 'chat' ? 'PASS' : 'FAIL');
 
 // ---------------------------------------------------------------------------
-// 2) 补入已签署合同记录 → 同一说法转为「有依据」，指向该记录
+// 2) Supplement with signed contract records -> Convert the same statement to "supported", pointing to the
+// record
 // ---------------------------------------------------------------------------
 console.log('\n2) 补入已签署合同记录');
 const contractRec = await api('/api/memory', { kind: 'source', scope: PROJECT, body: REC_CONTRACT, source: '合同归档' });
@@ -255,7 +268,7 @@ record('retrieval kept both records in the trace',
     ? 'PASS' : 'FAIL', JSON.stringify(reply?.review?.trace?.retrieved ?? []));
 
 // ---------------------------------------------------------------------------
-// 3) 补入相反记录 → 「来源冲突」，双方原文可比对
+// 3) Supplement with contrary records -> "Source conflict", original texts from both sides can be compared
 // ---------------------------------------------------------------------------
 console.log('\n3) 补入相反记录：客户暂缓签约');
 const conflictRec = await api('/api/memory', { kind: 'source', scope: PROJECT, body: REC_CONFLICT, source: '客户回复' });
@@ -281,7 +294,8 @@ record('both sides are kept for comparison',
   JSON.stringify(reply?.review?.claimCheck?.claims?.[0]?.conflict ?? {}));
 
 // ---------------------------------------------------------------------------
-// 4) 核查失败不阻塞：模型输出无法解析 → claimCheck.error=parse_failed，回答照常落库
+// 4) Verification failure is non-blocking: model output cannot be parsed -> claimCheck.error=parse_failed,
+// answer is stored as usual
 // ---------------------------------------------------------------------------
 console.log('\n4) 核查失败不阻塞回答');
 chatQ.push({ answer: ANSWER, facts: [{ id: rec1Id, quote: '愿意签约' }], inferences: [], unknowns: [],
@@ -297,7 +311,7 @@ record('the failure is recorded as parse_failed',
 record('the stored answer is unchanged', reply?.body === ANSWER ? 'PASS' : 'FAIL');
 
 // ---------------------------------------------------------------------------
-// 5) 保留会话与模型选择
+// 5) Retain session and model selection
 // ---------------------------------------------------------------------------
 console.log('\n5) 会话与模型选择保持不变');
 st = await state();

@@ -4,10 +4,10 @@
 // choice returned to the conversation through POST /api/decision.
 //
 // The card keeps three claims visually separate (mirroring the server
-// receipts): a selection is only "你已选择" (nothing written yet); a
-// successful confirm is "本地日历已更新" / "本地长期偏好已更新"; and a
-// counterparty time proposal stays labeled 未确认 until the owner confirms.
-// When the server pauses a confirm (确认时重查 found the live state changed),
+// receipts): a selection is only "You have selected" (nothing written yet); a
+// successful confirm is "Local calendar updated" / "Local long-term preferences updated"; and a
+// counterparty time proposal stays labeled Unconfirmed until the owner confirms.
+// When the server pauses a confirm (recheck upon confirm found the live state changed),
 // the card shows decision.recheck.reason plus the refreshed options, so the
 // owner continues from the same card.
 export function createDecisionUI({ t, element, action, request, fetchResult, language, openSources, copyText, fillComposer, jumpToCalendar, jumpToTask }) {
@@ -122,7 +122,8 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
     const head = element('div', '', 'decision-head');
     head.append(element('span', t(kindLabels[decision.kind] ?? '请确认'), 'decision-kind'));
     head.append(element('strong', decision.title));
-    // 状态四选一，必须能当场区分：已应用 / 失败 / 暂缓（确认时重查拦截）/ 已选待确认。
+    // One of four mutually exclusive states, must be instantly distinguishable: Applied / Failed /
+    // Deferred (intercepted by recheck upon confirm) / Selected, pending confirmation.
     const status = applied ? t('已确认')
       : decision.status === 'failed' ? t('确认失败')
       : stale ? t('暂缓')
@@ -136,7 +137,7 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
       const row = element('p', t('相关记录') + ' · ', 'decision-records');
       for (const record of decision.records) {
         row.append(element('span', '#' + record.id + ' · ' + t(recordLabels[record.kind] ?? record.kind) +
-          (record.scope ? ' · ' + t(record.scope === '*' ? '全局' : record.scope) : '') +
+          (record.scope ? ' · ' + (record.scope === '*' ? t('全局') : record.scope) : '') +
           (record.source ? ' · ' + record.source : ''), 'decision-record'));
       }
       section.append(row);
@@ -159,12 +160,12 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
       actions.append(confirm);
     }
     // A selection is recorded but writes nothing: the receipt wording stays
-    // separate from the "本地日历已更新" that only a successful confirm shows.
+    // separate from the "Local calendar updated" that only a successful confirm shows.
     if (decision.choice && !applied && !stale) {
       const chosen = (decision.options ?? []).find(item => item.id === decision.choice.option_id);
       actions.append(element('p', t('你已选择：') + (chosen?.label ?? decision.choice.option_id) + t('（尚未确认，本地数据未变更）'), 'decision-note'));
     }
-    // 确认时重查 found the live state changed: the write was paused and the
+    // recheck upon confirm found the live state changed: the write was paused and the
     // card's options were refreshed — the owner continues from this card.
     if (stale) {
       actions.append(element('p', t('情况已变化 · ') + decision.recheck.reason, 'decision-stale'));
@@ -172,7 +173,8 @@ export function createDecisionUI({ t, element, action, request, fetchResult, lan
     if (decision.choice?.receipt) {
       actions.append(element('p', (applied ? '✓ ' : '× ') + decision.choice.receipt, applied ? 'decision-ok' : 'decision-err'));
     }
-    // 已确认的改期：从回执直接找到对应待办（原时间见卡片「当前已确认」与回执）。
+    // Confirmed rescheduling: directly locate the corresponding todo from the receipt (original time can
+    // be seen on the card under "Currently Confirmed" and in the receipt).
     if (applied && jumpToTask) {
       const chosen = (decision.options ?? []).find(item => item.id === decision.choice?.option_id);
       if (chosen?.effect?.kind === 'task' && chosen.effect.payload?.id != null) {

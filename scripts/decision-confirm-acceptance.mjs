@@ -1,14 +1,21 @@
-// Acceptance flow for decision-card CONFIRM EXECUTION (决策确认与实际结果一致):
+// Acceptance flow for decision-card CONFIRM EXECUTION:
 // one valid confirmation per card applies the change exactly once, and the
 // receipt always describes the write that actually happened.
 //
-//   1) 日历改期：选择（已选待确认）→ 确认（已应用，回执=原时间/新时间/实际结果）→ 重试 409；
-//   2) 长期偏好更新：确认一次写入一次（修订链完整，回执=新记录）→ 重试 409；
-//   3) 双击/两标签页并发确认（task 与 memory 两条路径）：一次有效变更 + 对应回执；
-//   4) 写入成功但回执保存失败：从既有记录（task_audit / memory 行）恢复回执，不重复写入；
-//   5) 旧卡因日历冲突暂缓：不写入，卡片刷新且「当前实际生效」= 实际安排，重确认只写一次；
-//   6) 旧卡因规则修订暂缓：重锚定到现行版本，后续回答以实际生效偏好为准；
-//   7) 失败状态：写入报错=确认失败（无写入），卡片仍可用其他选项。
+// 1) Calendar rescheduling: select (selected pending confirmation) -> confirm (applied, receipt = original
+// time / new time / actual result) -> retry 409;
+// 2) Long-term preference update: confirm once, write once (revision chain complete, receipt = new record)
+// -> retry 409;
+// 3) Double-click / concurrent confirmation in two tabs (task and memory paths): one valid change +
+// corresponding receipt;
+// 4) Write successful but receipt save failed: restore receipt from existing records (task_audit / memory
+// rows), do not write repeatedly;
+// 5) Old card postponed due to calendar conflict: not written, card refreshed and "currently actually in
+// effect" = actual arrangement, re-confirmation writes only once;
+// 6) Old card postponed due to rule revision: re-anchor to the current version, subsequent answers will be
+// based on the actually effective preference;
+// 7) Failure state: write error = confirmation failed (no write), card remains available with other
+// options.
 //
 //   node scripts/decision-confirm-acceptance.mjs
 //
@@ -444,7 +451,7 @@ record('that receipt is the single actual change (the paused attempt left no rec
 // ---------------------------------------------------------------------------
 console.log('\n6) 旧卡因规则修订暂缓：重锚定到现行版本，后续回答以实际生效偏好为准');
 state = (await api('/api/state')).data;
-// A fresh, deterministic rule anchor (the 周报 rule was superseded in 3b).
+// A fresh, deterministic rule anchor (the weekly report rule was superseded in 3b).
 const rule6Save = await api('/api/memory-impact', {
   kind: 'rule', scope: 'DIC2026', body: '对外文档附中文摘要', replaces: null,
 });

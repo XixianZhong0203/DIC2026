@@ -1,22 +1,34 @@
-// 发送档案（send-archive 窗口）· 端到端验收
+// Send archive (send-archive window) · End-to-end acceptance
 //
-// 验收线：随机抽一条模拟发送，之后再改来源，仍能从旧档案还原当时的批准依据。
-//   1) 准备两条可发送线索（客户 B、客户 C）：分析（逐字引文）→ 补入客户确认来源
-//      → 存草稿 → 草稿声明核查通过（支持引文逐字出自来源）；
-//   2) 随机抽一条：展开来源原文（来源打开记录）→ 模拟发送 → 冻结发送档案
-//      （已发送项目的批准依据与批准时间取自 approved 审计——当时基于什么批准的）；
-//   3) 之后再给已发送线索新增一条来源（活动核查随之重跑、活动状态变化）；
-//   4) 导出旧档案：当时的草稿正文与哈希、来源快照全文、逐条声明的担保原句与理由、
-//      核查模型/思考档位/提示版本、来源打开记录、批准依据与批准时间都仍是发送时刻的值；
-//      导出经 X-Archive-Integrity 头报告完整性（verified）；
-//   5) 档案只插入不更新：改动前后的导出字节一致；未被抽中的线索没有档案、也未发送；
-//   6) 完整性：存档 digest 绑定存储字节——篡改档案体 → mismatch（导出仍 200 留证、
-//      state 同步上报），恢复原字节 → verified；
-//   7) 换用不同模型配置（第二台服务器共享同一数据目录，默认模型 id 换成 mock-model-2）：
-//      新核查记录与新档案记新模型，旧档案的模型信息保持核查时刻的值（不回填）。
+// Acceptance line: randomly select a lead for simulated sending, then modify sources afterwards; verify
+// that the approval basis at the time of sending can still be restored from the old archive.
+// 1) Prepare two sendable leads (Client B, Client C): Analysis (verbatim citations) -> Add client
+// confirmation source
+// -> Save draft -> Draft declaration passes verification (supports verbatim citations from sources);
+// 2) Randomly select one: Expand source original text (source open log) -> Simulate send -> Freeze send
+// archive
+// (Approval basis and approval time for sent items are taken from the approved audit—what it was approved
+// on at the time);
+// 3) Afterwards, add a new source to the sent lead (activity verification reruns accordingly, activity
+// status changes);
+// 4) Export old archive: draft body and hash at the time, full source snapshot text, guaranteed original
+// sentences and reasons for each claim,
+// verification model/thinking tier/prompt version, source open log, approval basis and approval time
+// remain the values at the time of sending;
+// Export reports integrity via X-Archive-Integrity header (verified);
+// 5) Archive is insert-only: exported bytes before and after changes are identical; unselected leads have
+// no archive and are not sent;
+// 6) Integrity: archive digest binds to stored bytes — tamper with archive body -> mismatch (export still
+// returns 200 for evidence retention,
+// state syncs reported), restore original bytes -> verified;
+// 7) Switch to a different model configuration (second server shares the same data directory, default
+// model ID changed to mock-model-2):
+// New verification records and new archives record the new model, while the model information of old
+// archives retains the value at the time of verification (no backfilling).
 //
-// 模型请求打到本地确定性 mock（真实服务从临时工作目录启动，src/models.mjs 替换为
-// mock 目录以隔离真实端点；被测代码与工作树一致）。
+// Model requests hit the local deterministic mock (real service starts from a temporary working directory,
+// src/models.mjs is replaced with the mock directory to isolate real endpoints; tested code is consistent
+// with the working tree).
 //
 //   node scripts/send-archive-acceptance.mjs
 
@@ -38,7 +50,8 @@ const base = 'http://127.0.0.1:' + port;
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 
 // ---------------------------------------------------------------------------
-// 两条可发送线索的语料（phrase 逐字出自证据与确认来源；声明逐字出自草稿正文）
+// Corpus for two sendable leads (phrases are verbatim from evidence and confirmation sources; claims are
+// verbatim from the draft body).
 // ---------------------------------------------------------------------------
 const FACTS = [
   {
@@ -70,7 +83,7 @@ const factByEvidence = text => FACTS.find(fact => text.includes(fact.evidence));
 const factByDraft = body => FACTS.find(fact => fact.draftBody === body);
 
 // ---------------------------------------------------------------------------
-// 结果记录
+// Result record
 // ---------------------------------------------------------------------------
 const results = [];
 function record(name, status, detail = '') {
@@ -82,7 +95,8 @@ const failed = () => results.filter(r => r.status === 'FAIL').length;
 const skipped = () => results.filter(r => r.status === 'SKIPPED').length;
 
 // ---------------------------------------------------------------------------
-// 确定性 mock 模型：回答由请求内容确定；S2 加入后核查不再成立（发送门槛会拦）。
+// Deterministic mock model: responses are determined by the request content; after S2 is added,
+// verification no longer holds (sending gate blocks it).
 // ---------------------------------------------------------------------------
 const modelRequests = [];
 const mock = createServer((req, res) => {
@@ -107,7 +121,8 @@ const mock = createServer((req, res) => {
     } else if (system.includes('你是声明核查器')) {
       const mode = userObj.mode === 'draft' ? 'draft' : 'analysis';
       if (sources.length > 2) {
-        // S2 加入后：活动核查重跑，声明不再有依据（missing 与 rewrite 都非空 → 状态 unknown）。
+        // After S2 is added: activity verification reruns, claims no longer have basis (both missing and
+        // rewrite are non-empty -> status unknown).
         canned = mode === 'draft'
           ? JSON.stringify({ claims: [{ id: '对外承诺', dimension: '对外承诺', text: fact.phrase, items: [],
             missing: '客户暂缓确认，时间待重新核对。', rewrite: fact.laterRewrite }] })
@@ -115,8 +130,9 @@ const mock = createServer((req, res) => {
             id: d, dimension: d, text: d, status: 'unknown', items: [],
             missing: '客户暂缓确认。', rewrite: '' })) });
       } else {
-        // 来源 ID 是 lead_sources 的全局行号（各线索各自的「S1」编号不同）：
-        // 支持引文落在该线索自己添加的确认来源上（非 E1 的那条）。
+        // The source ID is the global row number in lead_sources (each lead has its own 'S1' numbering):
+        // Supports citations falling on the confirmed source added by the lead itself (the one that is not
+        // E1).
         const supporting = sources.find(source => source.id !== 'E1') ?? sources[0];
         canned = mode === 'draft'
           ? JSON.stringify({ claims: [{ id: '对外承诺', dimension: '对外承诺', text: fact.phrase,
@@ -127,7 +143,7 @@ const mock = createServer((req, res) => {
             items: [{ evidenceId: supporting.id, stance: 'supports', quote: fact.phrase, note: '来源逐字支持。' }],
             missing: '', rewrite: '' })) });
       }
-    } else if (system.includes('Return JSON with status')) {
+    } else if (/Return JSON with status|只返回 JSON 对象，字段 status/.test(system)) {
       canned = JSON.stringify({ status: 'supported', quote: fact.phrase,
         reason: fact.label + ' 来源逐字确认。', unknown: '', conflict: '', clarification: '', suggestedReply: '' });
     } else {
@@ -140,11 +156,13 @@ const mock = createServer((req, res) => {
 await mock.listen(mockPort, '127.0.0.1');
 
 // ---------------------------------------------------------------------------
-// 临时工作目录：工作树字节级拷贝（server.mjs + src/ + package.json），仅替换
-// src/models.mjs 为本地 mock 目录；被测档案/发送代码与工作树完全一致。
+// Temporary working directory: byte-level copy of the work tree (server.mjs + src/ + package.json),
+// replacing only
+// src/models.mjs with the local mock directory; the tested profile/dispatch code is completely identical
+// to the work tree.
 // ---------------------------------------------------------------------------
 const MOCK_MODELS = `// 测试模型目录（send-archive 验收窗口）：单一本地 mock 模型，指向脚本启动的
-// 确定性 mock 服务。替换工作树目录仅用于隔离真实端点；被测代码不受影响。
+// Deterministic mock provider. The temporary checkout isolates real endpoints. The code under test is unchanged.
 const BASE = process.env.OPENAI_BASE_URL ?? 'http://127.0.0.1:0/v1';
 export const MODELS = [{ id: '%ID%', name: 'Mock Model', base: BASE, keyEnv: 'MOCK_API_KEY', fallbackKey: 'mock', timeout: 15000, efforts: {} }];
 export const modelById = id => (typeof id === 'string' && MODELS.find(entry => entry.id === id)) || null;
@@ -212,7 +230,7 @@ if (!up) {
 console.log('\nAcceptance: 发送档案（mock 模型，确定性）——随机抽一条模拟发送，再改来源，旧档案还原批准依据');
 
 // ---------------------------------------------------------------------------
-// 1) 准备两条可发送线索
+// 1) Prepare two dispatchable leads
 // ---------------------------------------------------------------------------
 console.log('\n1) 两条可发送线索（分析 + 客户确认来源 + 草稿 + 声明核查通过）');
 const leadIds = {};
@@ -248,7 +266,7 @@ for (const fact of FACTS) {
 }
 
 // ---------------------------------------------------------------------------
-// 2) 随机抽一条：展开来源（打开记录）→ 模拟发送 → 冻结档案
+// 2) Randomly pick one: expand source (open record) -> simulate dispatch -> freeze profile
 // ---------------------------------------------------------------------------
 console.log('\n2) 随机抽一条模拟发送并冻结档案');
 const picked = FACTS[Math.floor(Math.random() * FACTS.length)];
@@ -256,7 +274,8 @@ const other = FACTS.find(fact => fact !== picked);
 record('pick one lead at random for the simulated send', 'PASS',
   picked.label + ' picked, ' + other.label + ' left alone');
 let pickedItem = leadOf(st, picked.label);
-// 来源 ID 是 lead_sources 的全局行号：取该线索自己的确认来源（发送前唯一一条）。
+// Source ID is the global row number of lead_sources: take the lead's own confirmed source (the only one
+// before dispatch).
 const s1 = 'S' + (pickedItem.sources ?? []).at(-1)?.id;
 const viewed = await api('/api/opportunity-review-view', { id: leadIds[picked.label], source_id: s1 });
 record('expanding the source records the viewing action', viewed.ok ? 'PASS' : 'FAIL', viewed.error ?? '');
@@ -275,7 +294,7 @@ record('state carries the archive for the sent lead',
   JSON.stringify(archivedItem?.archives?.map(archive => archive.archiveId)));
 
 // ---------------------------------------------------------------------------
-// 3) 导出档案（改动前留底），之后再改来源
+// 3) Export profile (keep a backup before changes), then modify the source
 // ---------------------------------------------------------------------------
 console.log('\n3) 导出档案，然后修改来源');
 const exportBefore = await fetch(base + '/api/opportunity-archive/' + archiveId);
@@ -285,7 +304,8 @@ record('export serves the stored archive with a download name',
     'attachment; filename="daymark-send-archive-' + archiveId + '.json"' ? 'PASS' : 'FAIL',
   exportBefore.headers.get('content-disposition') ?? String(exportBefore.status));
 
-// 之后再改来源：给已发送线索新增一条（不同的）来源 → 活动核查重跑、活动状态变化。
+// Modify source afterwards: add a new (different) source to the dispatched lead -> rerun activity
+// verification, activity status changes.
 const changed = await api('/api/opportunity-source', {
   id: leadIds[picked.label], name: picked.label + ' 补充（11 月 15 日）', date: '2026-11-15',
   kind: 'customer', text: picked.laterSourceText, language: 'zh-CN',
@@ -298,7 +318,7 @@ record('the live verification re-runs and no longer holds',
   'live claim status=' + live?.claims?.claims?.[0]?.status + ', evidence set changed');
 
 // ---------------------------------------------------------------------------
-// 4) 旧档案还原当时的批准依据
+// 4) Restore old profile to the approval basis at that time
 // ---------------------------------------------------------------------------
 console.log('\n4) 旧档案还原当时的批准依据');
 const exportAfter = await fetch(base + '/api/opportunity-archive/' + archiveId);
@@ -356,7 +376,8 @@ record('the un-picked lead has no archive and was not sent',
   leadOf(st, other.label)?.archives?.length === 0 && leadOf(st, other.label)?.sent === 0 ? 'PASS' : 'FAIL');
 
 // ---------------------------------------------------------------------------
-// 5) 完整性：篡改档案被检出（mismatch，导出仍 200 留证）；恢复原字节 → verified
+// 5) Integrity: tampering with the profile is detected (mismatch, export still returns 200 for evidence);
+// restore original bytes -> verified
 // ---------------------------------------------------------------------------
 console.log('\n5) 篡改档案 → mismatch；恢复原字节 → verified');
 const { DatabaseSync } = await import('node:sqlite');
@@ -380,8 +401,10 @@ record('restoring the original bytes restores the verified status',
   exportRestored.headers.get('x-archive-integrity') === 'verified' ? 'PASS' : 'FAIL');
 
 // ---------------------------------------------------------------------------
-// 6) 换用不同模型配置（第二台服务器，同库同 mock，默认模型 id 换成 mock-model-2）：
-//    新核查记录与新档案记新模型；旧档案的模型信息保持核查时刻的值。
+// 6) Switch to a different model configuration (second server, same DB and mock, default model ID changed
+// to mock-model-2):
+// New verification record and new profile record the new model; model information in the old profile
+// retains the value at the verification moment.
 // ---------------------------------------------------------------------------
 console.log('\n6) 换用不同模型配置：新档案记新配置，旧档案保持核查时刻的记录');
 server.kill('SIGTERM');
@@ -393,7 +416,8 @@ cpSync(path.join(root, 'src'), path.join(workDir2, 'src'), { recursive: true });
 copyFileSync(path.join(root, 'server.mjs'), path.join(workDir2, 'server.mjs'));
 copyFileSync(path.join(root, 'package.json'), path.join(workDir2, 'package.json'));
 writeFileSync(path.join(workDir2, 'src', 'models.mjs'), mockModelsFile('mock-model-2'));
-// 同一数据目录（共享 DB 与旧档案）、同一 mock 服务：只有默认模型 id 变化——模拟模型配置变更。
+// Same data directory (shared DB and old profile), same mock service: only the default model ID changes -
+// simulating a model configuration change.
 const server2 = spawn(process.execPath, ['server.mjs'], {
   cwd: workDir2,
   env: { ...process.env, PORT: String(port2), DAYMARK_DATA_DIR: dataDir,
@@ -410,8 +434,9 @@ for (let i = 0; i < 100 && !up2; i++) {
 }
 record('a second server runs with a different default model (mock-model-2)', up2 ? 'PASS' : 'FAIL');
 const otherId = leadIds[other.label];
-// 未抽中的线索：再存一遍同一正文 → 新草稿版本（mock 按正文匹配，重查仍通过）；
-// 新核查记录随新配置落库。
+// Unselected leads: save the same body text again -> new draft version (mock matches by body text,
+// re-verification still passes);
+// New verification record is saved to the database with the new configuration.
 const redrafted = await api2('/api/opportunity-draft', {
   id: otherId, recipient: other.label.replace(/[^a-z]/gi, '').toLowerCase() + '@client.test', body: other.draftBody,
 });
@@ -444,7 +469,7 @@ server2.kill('SIGTERM');
 await rm(workDir2, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
-// 汇总 + 留档
+// Summary + Archiving
 // ---------------------------------------------------------------------------
 console.log('\nSummary: ' + passed() + ' passed, ' + skipped() + ' skipped, ' + failed() + ' failed');
 const summary = {

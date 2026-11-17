@@ -1,4 +1,4 @@
-// Task action receipts (待办操作留痕).
+// Task action receipts.
 //
 // Code ownership (aligned with the server window): this module owns the
 // task_audit table, before/after snapshots, the linked-source field, and the

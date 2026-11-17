@@ -1,32 +1,48 @@
-// 当前草稿核查器小规模评测 runner（评测代码；不修改任何产品文件）。
+// Current draft checker small-scale evaluation runner (evaluation code; does not modify any product
+// files).
 //
-// 驱动真实产品代码路径（src/opportunity/opportunities.mjs 的 opportunityWorkflow）：
+// Drives the real product code path (opportunityWorkflow in src/opportunity/opportunities.mjs):
 //   /api/opportunity → /api/opportunity-source* → /api/opportunity-draft → /api/opportunity-claims (target=draft)
-// 即服务器暴露的同一套草稿核查路径；模型依赖只有 complete()，请求契约与 server.mjs 一致
-// （同样的 body 字段、同样的超时策略：本地 90s / 远程 18s，可用 --timeout-ms 覆盖）。
+// Namely, the same draft verification path exposed by the server; the only model dependency is complete(),
+// and the request contract is consistent with server.mjs
+// (same body fields, same timeout policy: local 90s / remote 18s, which can be overridden by
+// --timeout-ms).
 //
-// 对每个配置的模型：
-//   1. 接口冒烟检查（一次小请求）——接口未就绪的模型记为「待测」，不阻塞其他模型；
-//   2. 按固定顺序跑全部固定案例（evaluation/draft-verification/cases.mjs），每案例全新工作流（:memory: DB）；
-//   3. 按同一套评分规则计分，每项指标都记分子/分母：
-//      - 问题声明提取：人工标注的问题声明中，模型抽到多少条（声明文本匹配）；
-//      - 提取后判定正确：已抽到的问题声明中，产品层最终判定与人工期望判定一致多少条；
-//      - 正常声明误标：已抽到的正常声明（期望 supported）中，被判为不支持（误标）多少条；
-//      - 案例解析或请求失败：案例中模型输出不可解析或模型请求失败多少条。
-//      补充记录（不计入主四项）：问题声明被判 supported（放行风险）、正常声明抽取覆盖。
+// For each configured model:
+// 1. API smoke check (a single small request) - models with unready APIs are marked as "Pending Test",
+// without blocking other models;
+// 2. Run all fixed cases in a fixed order (evaluation/draft-verification/cases.mjs), with a fresh workflow
+// for each case (:memory: DB);
+// 3. Score according to the same set of scoring rules, recording the numerator/denominator for each
+// metric:
+// - Issue statement extraction: How many statements the model extracted out of the human-annotated issue
+// statements (statement text matching);
+// - Post-extraction judgment correctness: Among the extracted issue statements, how many matched the
+// product-level final judgment with the human expected judgment;
+// - False positive on normal statements: Among the extracted normal statements (expected supported), how
+// many were judged as unsupported (false positives);
+// - Case parsing or request failure: How many cases had unmodel-parsable outputs or model request
+// failures.
+// Additional records (not counted in the main four metrics): Issue statements judged as supported (release
+// risk), normal statement extraction coverage.
 //
-// 报告记录模型名、产品代码版本（git HEAD + 脏文件 + 关键文件哈希）与样本规模（案例数/声明数）。
-// 原始模型输出与 trace 写入 evaluation/draft-verification/output/（不提交仓库，留在本地）。
+// The report records the model name, product code version (git HEAD + dirty files + key file hashes), and
+// sample size (number of cases/statements).
+// Raw model outputs and traces are written to evaluation/draft-verification/output/ (not committed to the
+// repository, kept locally).
 //
-// 用法：
+// Usage:
 //   OPENAI_BASE_URL=... OPENAI_API_KEY=... node evaluation/draft-verification/run.mjs
 //   node evaluation/draft-verification/run.mjs --base-url <url> --api-key-file <file>
-//   node evaluation/draft-verification/run.mjs --smoke-only        # 只做接口就绪检查
-//   node evaluation/draft-verification/run.mjs --model <id> ...    # 覆盖 models.json 的模型列表
-//   可选：--timeout-ms <n>（默认 本地 90s / 远程 18s，与产品一致）、--max-tokens <n>（默认 2048；
-//   27B 思考型部署需要更大值，如 8192，否则思考会占满预算导致正文为空）。
+// node evaluation/draft-verification/run.mjs --smoke-only # Perform API readiness check only
+// node evaluation/draft-verification/run.mjs --model <id> ... # Override the model list in models.json
+// Optional: --timeout-ms <n> (default local 90s / remote 18s, consistent with product), --max-tokens <n>
+// (default 2048;
+// 27B thinking-type deployments require a larger value, such as 8192, otherwise thinking will exhaust the
+// budget and result in empty body text).
 //
-// 判定结果是数据，不是 runner 失败；runner 只在控制项失败（案例自检、端点缺失、无就绪模型）时退出 1。
+// Judgment results are data, not runner failures; the runner only exits with 1 on control item failures
+// (case self-test, missing endpoint, no ready models).
 
 import { DatabaseSync } from 'node:sqlite';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -65,7 +81,7 @@ function parseArgs(argv) {
   return args;
 }
 
-// --- 代码版本记录（同一版本：跨模型对比要求同一份产品代码） ---
+// --- Code Version Log (Same version: cross-model comparison requires the same product code) ---
 const versionedFiles = ['src/opportunity/claims.mjs', 'src/opportunity/opportunities.mjs',
   'src/alignment/alignment.mjs', 'server.mjs',
   'evaluation/draft-verification/run.mjs', 'evaluation/draft-verification/models.json'];
@@ -81,7 +97,7 @@ function codeVersion() {
   return { gitHead, dirtyFiles, fileHashes: Object.fromEntries([...versionedFiles.map(f => [f, hash(f)]), ...(!args.smokeOnly ? [['localCases', hash(casesPath)]] : [])]) };
 }
 
-// --- 端点与模型访问（与 server.mjs complete() 同一请求契约） ---
+// --- Endpoint and Model Access (Same request contract as server.mjs complete()) ---
 const args = parseArgs(process.argv.slice(2));
 const casesPath = args.cases ? resolvePath(args.cases) : join(evalDir, 'cases.mjs');
 if (!args.smokeOnly && !existsSync(casesPath)) {
@@ -103,7 +119,7 @@ const timeoutMs = args.timeoutMs ?? (localModel ? 90000 : 18000);
 
 function callFail(status, message) { throw Object.assign(new Error(message), { status }); }
 
-// 产品契约的请求（模型 ID 可换；body 字段与 server.mjs 完全一致）
+// Product contract request (Model ID is swappable; body fields are identical to server.mjs)
 async function productComplete(modelId, messages) {
   const response = await fetch(baseUrl + '/chat/completions', {
     method: 'POST', redirect: 'error',
@@ -118,7 +134,8 @@ async function productComplete(modelId, messages) {
   return raw;
 }
 
-// 接口冒烟检查：一次小请求，确认模型接口就绪（与生产契约分离，固定 90s 超时）
+// API smoke check: a small request to confirm the model endpoint is ready (separated from the production
+// contract, with a fixed 90s timeout)
 async function smoke(modelId) {
   const t0 = Date.now();
   try {
@@ -139,7 +156,7 @@ async function smoke(modelId) {
   }
 }
 
-// --- 工作流驱动（每案例全新 :memory: 工作流，互不串扰） ---
+// --- Workflow driven (each case uses a fresh :memory: workflow, isolated from each other) ---
 function failFn(status, message) { callFail(status, message); }
 function requiredFn(value, length) {
   if (typeof value !== 'string' || !value.trim() || value.length > length) failFn(400, '请检查输入内容。');
@@ -174,7 +191,8 @@ async function runCase(modelId, c) {
     }
     call(w, 'opportunity-draft', { id, recipient: c.recipient, body: c.body });
     const draftId = w.state().opportunities[0].draft_id;
-    // mutation 无返回值：核查结果存于 opportunities.claims_review（state 解析为 claims）。
+    // Mutation returns no value: review results are stored in opportunities.claims_review (state parsed as
+    // claims).
     await call(w, 'opportunity-claims', { id, target: 'draft', draft_id: draftId, language: 'zh' });
     const review = w.state().opportunities[0].claims;
     return { case: c, review, error: null, calls };
@@ -183,9 +201,11 @@ async function runCase(modelId, c) {
   }
 }
 
-// --- 评分（所有模型同一规则） ---
+// --- Scoring (same rules for all models) ---
 const norm = s => String(s ?? '').replace(/\s+/g, '');
-// 声明匹配：模型抽出的声明 text（须逐字出自草稿正文）与人工标注文本，双向包含即算抽到；多条时取重叠最长。
+// Claim matching: the claim text extracted by the model (must be verbatim from the draft body) and the
+// manually annotated text. Bidirectional containment counts as a successful extraction; when multiple
+// exist, the one with the longest overlap is taken.
 function matchModelClaim(modelClaims, expectedText) {
   const b = norm(expectedText);
   if (!b) return null;
@@ -200,7 +220,8 @@ function matchModelClaim(modelClaims, expectedText) {
   }
   return best ? best.claim : null;
 }
-// 发送门槛语义：只有 supported 可放行；refuted/unknown/conflict/founder_only/unconfirmed/incomplete 一律拦截。
+// Sending threshold semantics: only 'supported' is allowed to pass; 'refuted', 'unknown', 'conflict',
+// 'founder_only', 'unconfirmed', and 'incomplete' are strictly blocked.
 const PASSING = new Set(['supported']);
 
 function scoreCase(modelId, run) {
@@ -275,7 +296,7 @@ function modelMetrics(casesScored) {
   };
 }
 
-// --- 报告与控制台 ---
+// --- Reports and Console ---
 function printTable(title, headers, rows) {
   console.log(`\n### ${title}`);
   console.log('| ' + headers.join(' | ') + ' |');

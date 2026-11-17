@@ -1,7 +1,7 @@
 // Acceptance flow for long-term memory save + conflict handling.
 //
-//   save 「默认英文、周五交付」 → new chat in the same project →
-//   「这次用中文」 must NOT change the default preference →
+// save "default to English, deliver on Friday" → new chat in the same project →
+// "use Chinese this time" must NOT change the default preference →
 //   a customer proposing Tuesday must NOT auto-reschedule or auto-save →
 //   after the owner accepts, a new conversation retrieves the accepted rule
 //   (with its original confirmation text) → scoped retrieval across projects
@@ -146,9 +146,11 @@ console.log('\n3) Send-like operations keep checking the current authorization')
   else {
     const draft = await api('/api/opportunity-draft', { id: item.id, recipient: 'client@example.com', body: '您好，关于新数据源的接入。' });
     const draftId = (draft.data.opportunities ?? [])[0]?.draft_id;
-    // 复核与真实界面一致：绑定当前草稿版本（review form carries the current
-    // draft id）。未绑定草稿版本的复核不能放行发送（send gate 按现行规则校验），
-    // 该期望在 review-draft 绑定规则并入 main 后更新（264aef5 早于 993f91e）。
+    // Review matches real interface: binds to current draft version (review form carries the current
+    // draft id). Reviews not bound to a draft version cannot pass the send gate (send gate validates per
+    // current rules).
+    // This expectation will be updated after the review-draft binding rules are merged into main (264aef5
+    // predates 993f91e).
     const reviewed = await api('/api/opportunity-review', { id: item.id, analysis_id: null, draft_id: draftId, resolution: '人工核对：收件人与内容无误。' });
     if (!draft.ok || !reviewed.ok || !draftId) {
       record('send allowed while delegation is per-approval (draft + human review present)', 'FAIL',

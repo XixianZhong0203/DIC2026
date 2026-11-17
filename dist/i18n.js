@@ -376,8 +376,10 @@ const english = {
   "请求内容不正确。": "Invalid request body.",
   "Daymark 暂时无法处理这项请求。": "Daymark could not process this request.",
   "无法连接到 Daymark，请确认本地服务已启动。": "Could not connect to Daymark. Make sure the local server is running.",
-  // 声明核查（claim-verification 分支）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for claim verification (claim-verification branch). Append only to the end of the english
+  // object;
+  // when merging other concurrent windows, use this comment's position as the reference and do not modify
+  // existing keys above.
   "来源": "Sources",
   "证据原文": "Evidence original",
   "客户记录": "Customer record",
@@ -426,19 +428,22 @@ const english = {
   "声明核查完成": "Claims checked",
   "声明核查失败": "Claims check failed",
   "还没有已保存的草稿。": "No draft has been saved yet.",
-  // 人工复核失效（review-expiry）新增键。与上方规则相同：只追加在末尾，不改动既有键。
+  // New keys for manual review expiry (review-expiry). Same rule as above: append only to the end, do not
+  // modify existing keys.
   "复核已过期": "Review expired",
   "草稿变了": "The draft changed",
   "来源变了": "The sources changed",
   "复核缺少来源版本": "The review has no source version",
   "人工核实已过期": "Human review expired",
   "请重新核查，或针对当前草稿记录人工复核结论。": "Verify again, or record a human review for the current draft.",
-  // 声明提取覆盖边界（claim-coverage）新增键：同样只追加在末尾。
+  // New keys for claim extraction coverage boundary (claim-coverage): likewise, append only to the end.
   "本次核查范围": "Verification scope",
   "未提取到声明": "No claims extracted",
   "本次核查未提取到任何声明，实际核查范围为空，不能视为核查通过。": "No claims were extracted, so this verification covered nothing and cannot count as passed.",
-  // 待办操作留痕与回执（audit 分支）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for todo operation auditing and receipts (audit branch). Append only to the end of the
+  // english object;
+  // when merging other concurrent windows, use this comment's position as the reference and do not modify
+  // existing keys above.
   "待办操作记录": "Task activity log",
   "创建": "Created",
   "修改": "Updated",
@@ -450,16 +455,20 @@ const english = {
   "经决策卡": "Via decision card",
   "消息": "Message",
   "查看待办": "View task",
-  // 决策卡「确认时重查」（decision 窗口）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for decision card "recheck upon confirm" (decision window). Append only to the end of the
+  // english object;
+  // when merging other concurrent windows, use this comment's position as the reference and do not modify
+  // existing keys above.
   "新时间提议（未确认）": "New-time proposal (not yet confirmed)",
   "新要求（待你决定）": "New request (awaiting your decision)",
   "缺口（待核实）": "Open question (needs evidence)",
   "你已选择：": "You selected: ",
   "（尚未确认，本地数据未变更）": " (not confirmed yet; nothing has changed locally)",
   "情况已变化 · ": "Situation changed · ",
-  // 工作区与对话切换（workspace-switching 分支）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键（含声明核查块）。
+  // New keys for workspace and chat switching (workspace-switching branch). Append only to the end of the
+  // english object;
+  // when merging other concurrent windows, use this comment's position as the reference and do not modify
+  // existing keys above (including the claim verification block).
   "工作区": "Workspace",
   "切换工作区": "Switch workspace",
   "在此工作区新建对话": "New conversation in this workspace",
@@ -479,7 +488,7 @@ const english = {
   "在当前工作区继续": "Continue in the current workspace",
   "取消": "Cancel",
   "实际使用工作区": "Workspace actually used",
-  // 工作台 / 项目 / 会话 terminology.
+  // Workbench / project / session terminology.
   "新建会话": "New session",
   "工作台": "Workbench",
   "会话": "Sessions",
@@ -526,8 +535,10 @@ const english = {
   "以下是可能受影响的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review potentially affected rules and preferences. Replace, keep both, or use the change in this session.",
   "仅用于本次会话": "Use once in this session",
   "以下是同一范围内的旧偏好或规则。请确认这次是替换、补充，还是仅用于本次会话。": "Review existing rules and preferences in this scope. Replace one, keep both, or use the new request once.",
-  // 跨工作区上下文隔离（workspace-isolation 分支）新增键。只追加在 english
-  // 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for cross-workspace context isolation (workspace-isolation branch). Append only to the end of
+  // the english
+  // object; when merging other concurrent windows, use this comment's position as the reference and do not
+  // modify existing keys above.
   "跨工作区不能直接并入：旧对话的报价、承诺和决策卡不会跟着历史一起移动。请在目标工作区开新对话，或明确带入需要的记录。": "A cross-workspace merge is refused: the old chat's quotes, promises, and decision cards do not move with its history. Open a new conversation in the target workspace, or import the records you need.",
   "带消息的会话不能直接跨工作区移动：历史会带着旧报价、承诺和决策卡进入新工作区。请在目标工作区开新对话，或明确带入需要的记录。": "A session with messages cannot be moved across workspaces: its history would bring old quotes, promises, and decision cards into the new workspace. Open a new conversation there, or import the records you need.",
   "找不到要带入的记录。": "The record to import could not be found.",
@@ -545,15 +556,18 @@ const english = {
   "请先选择要带入的记录。": "Select the records to import first.",
   "已带入 {n} 条记录，保留了原工作区与出处。": "Imported {n} record(s), keeping the original workspace and source.",
   "没有其他工作区可以带入记录。": "There is no other workspace to import records from.",
-  // 人工复核来源记录（review-source-record 窗口）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for manual review source records (review-source-record window). Append only to the end of the
+  // english object;
+  // when merging other concurrent windows, use this comment's position as the reference and do not modify
+  // existing keys above.
   "已展开来源": "Sources opened",
   "尚未展开来源": "No sources opened yet",
   "展开来源原文": "Opened source original",
   "展开来源原文会记录下来，保存复核时随结论写入审计。": "Opened sources are recorded; saving the review writes them to the audit with your conclusion.",
   "来源不属于当前线索，请刷新后重试。": "The source does not belong to the current lead. Refresh and try again.",
-  // 证据不足时怎么说、怎么继续（evidence-answer 窗口）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for how to respond and how to proceed when evidence is insufficient (evidence-answer window).
+  // Append only to the end of the english object; when merging other parallel windows, use this comment
+  // position as the reference and do not modify existing keys above.
   "当前回答": "Current answer",
   "证据充分 · 结论有边界": "Sufficient · bounded conclusion",
   "证据不足 · 先说清缺口": "Insufficient · names the gap",
@@ -567,11 +581,13 @@ const english = {
   "查看来源": "View sources",
   "补资料": "Add a source",
   "采用澄清问题": "Use the clarification question",
-  // 回答卡把 founder_only / unconfirmed 声明列入待核实项（evidence-answer follow-up 窗口）新增键。
-  // 只追加在 english 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for answer cards listing founder_only / unconfirmed statements as items to be verified
+  // (evidence-answer follow-up window). Append only to the end of the english object; when merging other
+  // parallel windows, use this comment position as the reference and do not modify existing keys above.
   "待核实": "Pending verification",
-  // 逐条人工复核（per-claim-review 窗口）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for item-by-item manual review (per-claim-review window). Append only to the end of the
+  // english object; when merging other parallel windows, use this comment position as the reference and do
+  // not modify existing keys above.
   "已打开": "Opened",
   "尚未打开来源": "No sources opened yet",
   "模型核查失败": "Model verification failed",
@@ -596,16 +612,18 @@ const english = {
   "中": "Medium",
   "高": "High",
   "思考": "Thinking",
-  // 声明核查待处理项（claim-verification 窗口）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for claim verification pending items (claim-verification window). Append only to the end of
+  // the english object; when merging other parallel windows, use this comment position as the reference
+  // and do not modify existing keys above.
   "仍有待处理项": "Pending items remain",
   "占位符未处理": "Unresolved placeholder",
   "未被抽取的高风险句": "High-risk clause not extracted",
   "重复声明已忽略": "Duplicate claim ignored",
   "声明原文为空": "Claim text is empty",
   "声明截断了否定词，语义可能反转": "Claim truncates a negation; its meaning may be inverted",
-  // 发送档案（send-archive 窗口）新增键。只追加在 english 对象末尾；
-  // 其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for send archive (send-archive window). Append only to the end of the english object; when
+  // merging other parallel windows, use this comment position as the reference and do not modify existing
+  // keys above.
   "发送档案": "Send archive",
   "冻结当前状态为发送档案": "Freeze the current state as a send archive",
   "还没有发送档案。冻结会把当前草稿、来源、核查与批准状态存为不可变快照；发送后来源再怎么改，档案里仍是当时批准的原文。": "No send archive yet. Freezing stores the current draft, sources, verification, and approval state as an immutable snapshot; later source edits cannot change what was approved.",
@@ -629,8 +647,9 @@ const english = {
   "逐条担保理由": "Per-claim justification",
   "查看记录": "Viewing record",
   "导出发送档案": "Export send archive",
-  // 核查与草稿覆盖（claim-verification 窗口，窗口 1 发送门槛）新增键。
-  // 只追加在 english 对象末尾；其他并行窗口合并时以本注释位置为准，不要改动上方既有键。
+  // New keys for verification and draft override (claim-verification window, window 1 send threshold).
+  // Append only to the end of the english object; when merging other parallel windows, use this comment
+  // position as the reference and do not modify existing keys above.
   "高风险句未被覆盖": "Uncovered high-risk clauses",
   "上一版仍有未处理声明": "Unresolved claim from an earlier draft",
   "已复核上一版保留声明": "Reviewed claims carried over from an earlier draft",
@@ -710,19 +729,89 @@ const english = {
   "核查范围：本轮已核查的 {n} 条关键断言均有依据，回答中其他说法不在本次核查范围内。": "Scope: the {n} claims verified this turn are all grounded; other statements in the answer are outside this verification run.",
   "回答实际引用的记录": "Records cited by the answer",
   "已删除旧声明": "Confirmed removal of the previous claim",
-  "已核查 {n} 条，均有依据": "Verified {n} claim(s), all grounded",
+  "已抽取并核查 {n} 条关键断言，均有依据；覆盖范围仅限已抽取的关键断言": "Extracted and verified {n} key claims, all grounded; coverage is limited to the extracted claims",
   "本轮提供给模型的记录": "Records provided to the model this turn",
   "核查失败": "Verification failed",
   "通用（所有项目）": "General (all projects)",
   "例如：客户 A": "For example, Customer A",
   "当前改写状态与核对结论不一致，请刷新后重试。": "This review decision does not match the current draft. Refresh and try again.",
+  // Keys for English-first completeness of the opportunity UI (approval status, source identity, evidence
+  // labels, blocked reasons): every phrase rendered through t() in dist/opportunity-ui.js has an entry.
+  "初始来源身份已改": "Initial source identity changed",
+  "客户原文／外部记录": "Customer original / external record",
+  "创始人陈述": "Founder statement",
+  "来源未确认": "Unconfirmed source",
+  "由创始人提供，待独立核实": "Founder-provided, needs independent verification",
+  "来源未确认，待核实": "Unconfirmed source, needs verification",
+  "引文缺少关键上下文（截掉了原文的否定/条件/限定）": "The quote is missing key context (a negation, condition, or qualifier was cut from the original)",
+  "引文在原文中出现多次且含义不同，需更完整的引文": "The quote appears more than once in the source with different meanings; a more complete quote is needed",
+  "声明仅由创始人提供": "Claims are founder-provided only",
+  "声明来源未确认": "Claim sources are unconfirmed",
+  "确认来源身份": "Confirm source identity",
+  "来源类型（客户来源 / 创始人提供）由你录入；声明的证据状态只看实际支持该声明的引文，一条无关的客户引文不会改变它。": "Source type (customer source / founder-provided) is what you enter; a claim's evidence status depends only on the citations that actually support it — one irrelevant customer quote does not change it.",
+  "客户来源支持": "Supported by customer source",
+  "可补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或针对当前草稿与来源记录人工复核结论，再批准发送。": "Add an independent source (such as a customer contract, payment, or delivery record) and verify again, rewrite it as a grounded statement, or record a manual review for the current draft and sources before approving the send.",
+  "请先确认这段来源的身份（客户原文／外部记录、创始人陈述、来源未确认），再补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或针对当前草稿与来源记录人工复核结论，再批准发送。": "First confirm this source's identity (customer original / external record, founder statement, or unconfirmed source), then add an independent source (such as a customer contract, payment, or delivery record) and verify again, rewrite it as a grounded statement, or record a manual review for the current draft and sources before approving the send.",
+  "创始人逐条担保": "Founder per-claim guarantee",
+  "待处理 {n} 条": "{n} flagged claim(s) pending",
+  "还有 {n} 条被标记声明待处理。": "{n} flagged claim(s) still need handling.",
+  // API error messages returned by the server (fail() in server.mjs and src/opportunity) that were not in
+  // this dictionary yet: in English mode they leaked Chinese through the notice area.
+  "此模型不支持该思考强度。": "This model does not support that thinking tier.",
+  "未配置模型，无法使用对话。": "No model is configured, so chat is unavailable.",
+  "模型不存在，请刷新后重试。": "This model does not exist. Refresh and try again.",
+  "请先核对改写是否表达同一事实。": "First review whether the rewrite states the same fact.",
+  "草稿声明尚未核查，请先核查关键声明。": "Draft claims are not verified yet. Verify the key claims first.",
+  "核查已过期（草稿或来源已变更），请重新核查后确认。": "Verification is stale (the draft or sources changed). Verify again before confirming.",
+  "声明核查未完成，请重新核查后确认。": "Claim verification is incomplete. Verify again before confirming.",
+  "这条声明不在当前核查的被标记声明中，请刷新后重试。": "This claim is not among the flagged claims of the current verification. Refresh and try again.",
+  "来源已变更，请重新核对后确认。": "The sources have changed. Review again before confirming.",
+  "请先明确草稿中需要担保的改写句。": "First identify the rewritten sentence in the draft to guarantee.",
+  "请选择要处理的声明。": "Select the claim to handle.",
+  "这版草稿已批准发送，重复批准不会产生新的发送。": "This draft was already approved and sent; approving again produces no new send.",
+  "风险声明已改写或删除，请重新核查当前草稿后再批准。": "A flagged claim was rewritten or deleted. Verify the current draft again before approving.",
+  "声明核查包含重复声明 ID，请重新核查。": "Claim verification contains duplicate claim IDs. Verify again.",
+  "草稿声明核查已过期（草稿或来源已变更）。请重新核查关键声明，或针对当前草稿记录人工复核结论。": "Draft claim verification is stale (the draft or sources changed). Verify the key claims again, or record a manual review for the current draft.",
+  "声明核查未完成。请重新核查关键声明，或针对当前草稿记录人工复核结论。": "Claim verification is incomplete. Verify the key claims again, or record a manual review for the current draft.",
+  "草稿声明核查未提取到任何声明，实际核查范围为空。请重新核查，或针对当前草稿记录人工复核结论。": "Draft claim verification extracted no claims, so the actual verification scope is empty. Verify again, or record a manual review for the current draft.",
+  "草稿声明尚未核查。请先核查关键声明，或针对当前草稿记录人工复核结论。": "Draft claims are not verified yet. Verify the key claims, or record a manual review for the current draft.",
+  "这次发送没有当时保存的档案。": "This send has no archive saved at that time.",
 };
 
 export function translate(language, phrase) {
   if (language !== 'en') return phrase;
-  // 模型服务错误可能带上游说明（如免费池额度用尽）：翻译固定前缀，原文附上。
+  // Model service errors may include upstream descriptions (e.g., free tier quota exhausted): translate
+  // the fixed prefix and attach the original text.
   const status = /^模型服务返回 HTTP (\d+)。请检查模型、凭证和账户配置。(?: 上游：(.+))?$/s.exec(phrase);
   if (status) return english['模型服务返回 HTTP {status}。请检查模型、凭证和账户配置。'].replace('{status}', status[1]) +
     (status[2] ? ' Upstream: ' + status[2] : '');
+  // Send-gate rejections embed a dynamic list of claims/placeholders between a fixed prefix and a fixed
+  // closing sentence: translate both fixed parts and keep the interpolated list (record text, which must
+  // stay verbatim) as-is.
+  for (const [zhPrefix, zhSuffix, enPrefix, enSuffix] of [
+    ['上一版仍有未处理声明：', '', 'Unresolved claim(s) from an earlier draft: ', ''],
+    ['草稿正文仍有未确认的占位符：', '。请落实后再批准发送。',
+      'The draft body still has unresolved placeholders: ', '. Resolve them before approving the send.'],
+    ['以下高风险句未被任何已抽取声明覆盖（模型可能漏抽）：',
+      '。请重新核查或改写，确认没有遗漏后再批准发送，或针对当前草稿与来源记录人工复核结论。',
+      'These high-risk sentences are not covered by any extracted claim (the model may have missed some): ',
+      '. Verify again or rewrite to confirm nothing is missed before approving the send, or record a manual review for the current draft and sources.'],
+    ['以下声明仅由创始人提供，待独立核实：',
+      '。请补入独立来源（如客户合同、付款或交付记录）后重新核查，或改写为有依据的说法，或逐条记录担保，再批准发送。',
+      'These claims are founder-provided only and need independent verification: ',
+      '. Add an independent source (such as a customer contract, payment, or delivery record) and verify again, rewrite them as grounded statements, or record a per-claim guarantee before approving the send.'],
+    ['以下声明的来源未确认：',
+      '。请补入可核实的来源，或确认初始来源身份后重新核查，或改写为有依据的说法，或逐条记录担保，再批准发送。',
+      'The sources of these claims are unconfirmed: ',
+      '. Add verifiable sources, confirm the initial source identity and verify again, rewrite them as grounded statements, or record a per-claim guarantee before approving the send.'],
+    ['以下声明核查未通过：', '。请改写后重新核查，或对该声明逐条记录担保。',
+      'These claims failed verification: ',
+      '. Rewrite and verify again, or record a per-claim guarantee for each.'],
+  ]) {
+    if (phrase.startsWith(zhPrefix) && phrase.endsWith(zhSuffix) &&
+        phrase.length >= zhPrefix.length + zhSuffix.length) {
+      return enPrefix + phrase.slice(zhPrefix.length, phrase.length - zhSuffix.length) + enSuffix;
+    }
+  }
   return Object.hasOwn(english, phrase) ? english[phrase] : phrase;
 }

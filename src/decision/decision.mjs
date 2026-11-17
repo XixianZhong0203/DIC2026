@@ -7,7 +7,7 @@
 //   src/memory/* — long-term memory extraction, project scope, and the
 //     old-vs-new memory conflict judgment.
 //
-// Shared routes (aligned with the task-log window, which owns 待办日志):
+// Shared routes (aligned with the task-log window, which owns To-Do Log):
 //   recheckDecision only READS tasks and memory. The actual writes still go
 //   through the existing routes — /api/task (revision-gated) and /api/memory
 //   (snapshot-gated) — whose contracts are unchanged. /api/decision calls
@@ -42,10 +42,10 @@
 //   status: 'open' (awaiting selection) -> 'choosing' (selected, awaiting
 //     confirm) -> 'applied' | 'failed'. A confirm that the confirm-time
 //     recheck pauses is NOT applied: the status returns to 'open' and
-//     recheck.stale=true marks it 暂缓 (paused) until the owner re-confirms a
+// recheck.stale=true marks it Paused until the owner re-confirms a
 //     refreshed option. The four conversation states are therefore:
-//     已选待确认 ('choosing'), 已应用 ('applied'), 暂缓 (recheck.stale),
-//     失败 ('failed'); decisionContext reports each of them distinctly.
+// Selected Pending Confirmation ('choosing'), Applied ('applied'), Paused (recheck.stale), Failed
+// ('failed'); decisionContext reports each of them distinctly.
 //   anchor: the long-term memory record the card's memory options are anchored
 //     on (preference cards only); recheck re-validates it at confirm time.
 //   recheck: null | { at, stale, reason } — set by the server when a confirm
@@ -53,12 +53,12 @@
 //   choice: { option_id, at, receipt, temporary?, temporary_text? }
 //
 // Receipt wording distinguishes three claims that must never be conflated:
-//   我方选了某个时间 (the owner selected an option — recorded, nothing written)
-//   本地日历已更新 (the local write actually happened)
-//   客户已确认 (a claim about the counterparty — only ever stated by saved
+// the owner selected an option - recorded, nothing written
+// the local write actually happened
+// a claim about the counterparty - only ever stated by saved
 //     records, never inferred from a local selection or write)
-// A time merely proposed by the counterparty stays a proposal (卡片里的
-// proposal 行标注「未确认」) until the owner confirms and the write succeeds.
+// A time merely proposed by the counterparty stays a proposal (the proposal row in the card is marked
+// "Unconfirmed") until the owner confirms and the write succeeds.
 
 import { rankRecords } from '../chat/local-chat.mjs';
 import { memoryCandidates, scopeMatches } from '../memory/memory-impact.mjs';
@@ -439,7 +439,7 @@ export function detectDecision({ question, review, tasks = [], memories = [], sc
 }
 
 // ---------------------------------------------------------------------------
-// Confirm-time recheck (确认时重查):
+// Confirm-time recheck:
 //
 // Before a card effect is applied, re-read the live workspace state and
 // compare it with what the card was generated against. If the relevant state
@@ -600,13 +600,13 @@ function memoryRecheck({ decision, option, memories }) {
 //
 // Every line states the card's STATE, so the model never treats an unapplied
 // selection as a confirmed change:
-//   已选待确认 (selected, not confirmed) — nothing was written yet;
-//   已应用 (applied) — the local write actually happened (receipt = the actual
+// Selected Pending Confirmation - nothing was written yet;
+// Applied - the local write actually happened (receipt = the actual
 //     result, e.g. old/new time or the new record id);
-//   暂缓未生效 (paused) — the confirm was held back because the live state
+// Paused - the confirm was held back because the live state
 //     changed; the line restates what is actually effective (decision.current
 //     is refreshed in place by the confirm route when it pauses the card);
-//   确认失败 (failed) — the write errored; nothing changed.
+// Confirmation failed (failed) - the write errored; nothing changed.
 // Follow-ups must resolve to the live arrangement, not to a paused or failed
 // card's proposal.
 // ---------------------------------------------------------------------------

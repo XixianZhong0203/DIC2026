@@ -18,7 +18,8 @@ const item = (evidenceId, stance, quote, note) => ({ evidenceId, stance, quote, 
 const claim = (over) => ({
   id: '签约', dimension: '签约', text: '合同已签署', items: [], missing: '', rewrite: '', ...over,
 });
-// 聊天核查的调用口径：声明文本必须逐字出自回答，来源身份为 workspace。
+// Chat check invocation criteria: Claim text must be verbatim from the answer, and source identity must be
+// workspace.
 const verify = (parsedClaims, records = RECORDS) => verifyClaims(
   parseClaimReport(JSON.stringify({ claims: parsedClaims }), { mode: 'chat' }).claims,
   chatClaimSources(records), { body: ANSWER, identity: 'workspace' });
@@ -41,8 +42,8 @@ test('the chat-check prompt is routed apart from the lead/draft verifier', () =>
   const system = systemMsg.content;
   const parsed = JSON.parse(userMsg.content);
   assert.equal(system.startsWith('你是聊天回答的声明核查器'), true);
-  // 既有验收 mock 与 evaluation/round2.mjs 按这两个开头路由线索/草稿核查器；
-  // 聊天核查不得被它们误判（提示刻意不共用开头）。
+  // Existing acceptance mocks and evaluation/round2.mjs route lead/draft checkers based on these two
+  // beginnings; chat checks must not be misjudged by them (prompts deliberately do not share beginnings).
   assert.ok(!system.includes('你是声明核查器'), 'zh prompt must not start like the lead verifier');
   assert.ok(!system.includes('claim verifier'), 'zh prompt must not contain the English routing phrase');
   assert.deepEqual(parsed, { mode: 'chat', dimensions: CHAT_CLAIM_DIMENSIONS, answer: ANSWER, sources: SOURCES });

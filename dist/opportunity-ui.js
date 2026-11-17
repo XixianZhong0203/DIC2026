@@ -23,9 +23,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   };
 
   const sourceKindLabels = { evidence: '证据原文', customer: '客户记录', founder: '创始人提供' };
-  // 初始来源的身份（用户录入，决定其引文能如何支持声明；改判后核查指纹变化，旧核查自动过期）。
+  // Initial source identity (entered by the user, determines how its citations can support claims; after a
+  // reclassification, verification fingerprints change and previous verifications automatically expire).
   const evidenceKindLabels = { customer: '客户原文／外部记录', founder: '创始人陈述', unconfirmed: '来源未确认' };
-  // 人工复核过期的原因（由服务端 reviewStale 给出）：明确是草稿变了还是来源变了。
+  // Reason for manual review expiration (provided by the server reviewStale): explicitly specifies whether
+  // the draft or the source changed.
   const reviewStaleLabels = { draft_changed: '草稿变了', source_changed: '来源变了', review_unbound: '复核缺少来源版本' };
   const reviewStaleText = item => (item.reviewStale ?? []).map(code => t(reviewStaleLabels[code] ?? code)).join('、');
   const claimStatusLabels = { supported: '支持', refuted: '反驳', unknown: '证据不足', conflict: '来源冲突', incomplete: '未完成核查',
@@ -43,7 +45,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     claims_founder_only: '声明仅由创始人提供', claims_unconfirmed: '声明来源未确认',
     claims_placeholders: '占位符未处理', claims_uncovered: '高风险句未被覆盖', claims_pending: '仍有待处理项',
     claims_previous_unresolved: '上一版仍有未处理声明', claims_recheck_after_edit: '风险声明改写后需重新核查' };
-  // 该机会最近一条活动记录：发送被拦截后在草稿区当场显示拦截原因（活动记录同步刷新）。
+  // Latest activity record for this opportunity: when sending is blocked, the block reason is displayed
+  // directly in the draft area (the activity record refreshes synchronously).
   function latestBlocked(audit, itemId) {
     const rows = (audit ?? []).filter(row => row.opportunity === itemId);
     const latest = rows[0];
@@ -59,12 +62,16 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return wrapper;
   }
 
-  // 人工复核来源记录：当前草稿 + 当前来源集合下，创始人已打开哪些来源原文。
-  // 服务端（item.reviewViewed）是权威状态；本地集合用于即时显示，并在整页重渲染后
-  // 把打开过的原文重新展开，阅读不中断。草稿或来源变化 → 新绑定 → 从空开始；
-  // 旧查看记录只留在审计历史里，不会带到新复核上。展开记录在复核表单里显示为「已打开」。
+  // Manually reviewed source records: under the current draft + current source set, which source originals
+  // have been opened by the founder.
+  // The server (item.reviewViewed) is the authoritative state; the local set is used for instant display,
+  // and after a full-page re-render,
+  // previously opened originals are re-expanded to ensure uninterrupted reading. Draft or source changes
+  // -> new binding -> starts from empty;
+  // old view records remain only in the audit history and are not carried over to the new review.
+  // Expansion records are displayed as "Opened" in the review form.
   const recordViewSource = viewSource ?? (() => Promise.resolve());
-  const viewed = new Map(); // 机会 id -> { binding, ids: Set }
+  const viewed = new Map(); // Opportunity id -> { binding, ids: Set }
   const viewedBinding = item =>
     (item.reviewViewed?.draftId ?? item.draft_id ?? 'none') + '·' + (item.reviewViewed?.evidence ?? 'none');
   function viewedState(item) {
@@ -86,7 +93,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         .map(sourceId => t(sourceName(item, sourceId))).join('、')
       : t('尚未打开来源');
   }
-  const viewLines = new Map(); // 机会 id -> Set<复核区状态行>
+  const viewLines = new Map(); // Opportunity id -> Set<review area status row>
   function reviewViewLine(item) {
     const line = element('small', reviewedText(item), 'muted');
     if (!viewLines.has(item.id)) viewLines.set(item.id, new Set());
@@ -98,23 +105,26 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     if (state.ids.has(sourceId)) return;
     state.ids.add(sourceId);
     for (const line of viewLines.get(item.id) ?? []) line.textContent = reviewedText(item);
-    void recordViewSource(item.id, sourceId); // 服务端记录查看动作（静默，不打断阅读）
+    void recordViewSource(item.id, sourceId); // Server records viewing action (silent, does not interrupt reading)
   }
-  // 绑定「可展开来源原文」的元素：展开时记录来源 ID，重渲染后保持展开。
+  // Bind elements for "expandable source originals": record the source ID upon expansion and maintain the
+  // expanded state after re-rendering.
   function viewableDetails(item, sourceId, node) {
     node.addEventListener('toggle', () => { if (node.open) recordView(item, sourceId); });
     if (viewedState(item).ids.has(sourceId)) node.open = true;
     return node;
   }
-  // 已保存的人工核实结论 + 当前查看状态行。
+  // Saved manual verification conclusion + current viewing status row.
   function reviewedBlock(item) {
     const block = element('details', '');
     block.append(element('summary', t('人工核实')), element('p', item.review), reviewViewLine(item));
     return block;
   }
 
-  // 初始来源：身份（客户原文／外部记录、创始人陈述、来源未确认）由用户录入，
-  // 决定这段原文的引文能如何支持声明；改判身份会改变核查指纹，已有核查自动过期重跑。
+  // Initial source: Identity (customer original/external record, founder statement, unconfirmed source) is
+  // entered by the user,
+  // determining how citations of this original can support claims; reclassifying the identity changes the
+  // verification fingerprint, and existing verifications automatically expire and re-run.
   function disclosureControls(item, sourceId, sourceText) {
     const rule = (item.disclosureRules ?? []).find(row => row.source_id === sourceId);
     const form = element('form', '');
@@ -179,12 +189,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return block;
   }
 
-  // refs 让卡片上的其他区块（当前回答的下一步动作）拿到来源区与草稿正文的节点。
+  // refs allow other blocks on the card (next actions of the current answer) to access the nodes of the
+  // source area and the draft text.
   function sourceBlock(item, refs) {
     const block = element('details', '');
     const sources = item.sources ?? [];
     block.append(element('summary', t('来源') + ' · ' + (1 + sources.length)));
-    // sourceById 让复核表单的「查看证据」入口能直接打开问题声明引用的来源原文。
+    // sourceById allows the "View Evidence" entry in the review form to directly open the source originals
+    // referenced by the problem statement.
     const sourceById = new Map();
     const remember = (sourceId, node) => { sourceById.set(sourceId, node); return node; };
     block.append(remember('E1', viewableDetails(item, 'E1',
@@ -196,7 +208,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       source.append(disclosureControls(item, id, row.text));
       block.append(remember(id, viewableDetails(item, id, source)));
     }
-    // 来源类型标签由用户录入；证据状态只按实际支持声明的引文判定，与来源数量无关。
+    // Source type labels are entered by the user; evidence status is determined solely by citations that
+    // actually support the claim, regardless of the number of sources.
     block.append(element('small', t('来源类型（客户来源 / 创始人提供）由你录入；声明的证据状态只看实际支持该声明的引文，一条无关的客户引文不会改变它。')));
     const form = element('form', '');
     const name = element('input', '');
@@ -233,7 +246,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   function claimSection(claim, item, embedActions = true) {
     const article = element('article', '', 'entry');
     article.append(element('strong', (claim.dimension ? t(claim.dimension) + ' · ' : '') + (claim.text || t('模型未返回声明原文'))));
-    // 支持的声明按支持引文的来源身份标注：只有客户来源引文支持才算「客户来源支持」。
+    // Supported claims are labeled according to the source identity of the supporting citations: only when
+    // supported by customer source citations is it considered "customer source supported".
     const customerSupport = claim.status === 'supported' &&
       (claim.conflict ? (claim.conflict.supports ?? []) : (claim.items ?? []))
         .some(entry => entry.valid && entry.stance === 'supports' && entry.source?.kind === 'customer');
@@ -254,7 +268,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       block.append(element('summary', summary),
         element('p', entry.quote + (entry.note ? '（' + entry.note + '）' : '')));
       if (entry.source.text) block.append(element('p', t('来源原文') + ' · ' + entry.source.text));
-      // 只有展示来源原文的展开项才计为「展开来源」；引文摘录不算。
+      // Only expanded items displaying source originals are counted as "expanded sources"; citation
+      // excerpts are not.
       return entry.source.text ? viewableDetails(item, entry.source.id, block) : block;
     };
     if (claim.conflict) {
@@ -265,7 +280,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     if (claim.missing) article.append(element('p', t('缺少信息') + ' · ' + claim.missing, 'attention'));
     if (claim.rewrite) {
       article.append(element('p', t('建议改写') + ' · ' + claim.rewrite));
-      // 复核表单里的逐条条目自带改写/删除/担保入口（claimReviewSection），不重复给按钮。
+      // Each item in the review form has its own rewrite/delete/guarantee entry (claimReviewSection); do
+      // not duplicate buttons.
       if (embedActions && item.draft_id && claim.text && (item.body ?? '').includes(claim.text)) {
         article.append(action(t('采用改写并重新核查'), async () => {
           await request('opportunity-draft', { id: item.id, recipient: item.recipient,
@@ -275,7 +291,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
     }
     for (const reason of new Set((claim.failedChecks ?? []).map(check => check.reason))) {
-      // 引文上下文问题带结构化 detail（被截子句 + 原因），随标签一起展示原文与原因。
+      // Citation context issues carry structured detail (truncated clause + reason); display the original
+      // text and reason alongside the tag.
       const check = (claim.failedChecks ?? []).find(entry => entry.reason === reason);
       article.append(element('small', t(checkReasonLabels[reason] ?? reason) +
         (check?.detail ? ' · ' + check.detail : '')));
@@ -283,12 +300,16 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return article;
   }
 
-  // 待处理项：核查完成后、发送前仍必须落实的内容——
-  // 1. 草稿正文里遗留的方括号占位符（[待确认：…] 等，draftChecks.placeholders）；
-  // 2. 未被任何已抽取声明覆盖的高风险句（一句里有两项承诺、模型只抽到一项，draftChecks.unextracted）；
-  // 3. 解析告警（如重复声明 ID，warnings）。
-  // 展示上三者都列为待处理项；但「当前状态」只按会被窗口 1 门槛拦截的前两类判定
-  // （重复声明已保留第一条核查，不影响该声明的判定，不阻断发送），与 /api/opportunity-send 一致。
+  // Pending items: items that must be resolved after verification and before sending --
+  // 1. Square bracket placeholders remaining in the draft body ([To be confirmed: ...],
+  // draftChecks.placeholders);
+  // 2. High-risk sentences not covered by any extracted claims (a sentence contains two commitments, but
+  // the model only extracted one, draftChecks.unextracted);
+  // 3. Parsing warnings (such as duplicate claim IDs, warnings).
+  // Visually, all three are listed as pending items; however, the 'current status' is determined only by
+  // the first two categories that will be intercepted by the window 1 threshold
+  // (duplicate claims retain the first verification, do not affect the determination of that claim, and do
+  // not block sending), consistent with /api/opportunity-send.
   const pendingCheckLabels = { duplicate_claim_id: '重复声明已忽略' };
   function pendingItems(review) {
     const items = [];
@@ -318,11 +339,16 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return wrap;
   }
 
-  // 发送档案（send-archive 窗口）：一次（模拟）发送的不可变快照——当时的草稿、
-  // 来源全文、逐条声明判定与引文、查看记录、核查模型/提示版本、批准依据与批准时间
-  // 都内嵌在档案里；发送后来源再怎么改，档案仍能还原「当时基于什么批准了什么」。
-  // 发送时刻的自动写入由窗口 1 在 /api/opportunity-send 内接入（共用同一构建器）；
-  // 这里提供手动冻结入口（opportunity-archive）与导出链接（/api/opportunity-archive/:id）。
+  // Send archive (send-archive window): an immutable snapshot of a (simulated) send -- the draft at that
+  // time,
+  // source full text, itemized claim determinations and citations, view logs, verification model/prompt
+  // versions, approval basis, and approval time
+  // are all embedded in the archive; no matter how the source changes after sending, the archive can still
+  // restore 'what was approved based on what at that time'.
+  // Automatic writing at the moment of sending is integrated by window 1 within /api/opportunity-send
+  // (sharing the same builder);
+  // this provides a manual freeze entry (opportunity-archive) and an export link
+  // (/api/opportunity-archive/:id).
   const archiveBasisLabels = { human_review: '人工复核', human_guarantee: '创始人逐条担保', model_supported: '声明核查通过', pending: '未达发送门槛' };
   function archiveTier(title, entries, empty) {
     const block = element('details', '');
@@ -337,9 +363,12 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     }
     return block;
   }
-  // 核查配置行：展示核查记录在核查时刻落下的实际配置。
-  // 旧记录缺 model 字段 → 整行显示「未记录」（不用渲染时刻的当前配置补写历史）；
-  // 记录里 effort=null → 「端点默认」档位（核查路径从不逐请求发送 reasoning_effort）。
+  // Verification configuration row: displays the actual configuration recorded at the time of the
+  // verification log.
+  // Old records missing the model field -> the entire row displays 'Unrecorded' (do not use the current
+  // configuration at render time to rewrite history);
+  // Record has effort=null -> 'Endpoint default' tier (the verification path never sends reasoning_effort
+  // per request).
   const effortLabels = { low: '低', medium: '中', high: '高' };
   function checkConfigText(record) {
     if (!record || record.model == null) return t('未记录');
@@ -357,7 +386,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const entry = element('details', '');
     const approval = archive.approval ?? {};
     const basis = t(archiveBasisLabels[approval.basis] ?? approval.basis ?? 'pending');
-    // 档案字节被改成非法 JSON 时 state 附带最小占位（archiveId + integrity）：时间显示「未记录」。
+    // When archive bytes are modified to illegal JSON, the state comes with a minimal placeholder
+    // (archiveId + integrity): the time displays 'Unrecorded'.
     entry.append(element('summary', (archive.sentAt ? new Date(archive.sentAt).toLocaleString(language()) : t('未记录')) +
       ' · ' + basis + (archive.sent ? ' · ' + t('已发送') : '')));
     entry.append(element('p',
@@ -367,10 +397,12 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       entry.append(element('small', t('披露范围') + ' · ' + disclosure.sourceName + ' · ' +
         disclosure.allowedRecipient + ' · ' + disclosure.excerpt));
     }
-    // 核查配置取档案内嵌的 verification 块（核查时刻写下的实际值，旧档案不补写）。
+    // The verification configuration fetches the verification block embedded in the archive (actual values
+    // recorded at the time of verification, old archives are not backfilled).
     entry.append(element('small', checkConfigText(archive.verification ?? {})));
-    // 完整性：存档 digest 与存储字节重算的比对结果（服务端 state 附带）；
-    // mismatch 高亮：档案内容与批准记录不一致。
+    // Integrity: comparison result between the archived digest and recalculated storage bytes (provided
+    // with the server-side state);
+    // Mismatch highlight: archive content is inconsistent with approval records.
     const integrity = archive.integrity ?? null;
     if (integrity) {
       entry.append(element('small',
@@ -379,10 +411,12 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           : t('无完整性记录')),
         integrity.status === 'mismatch' ? 'attention' : undefined));
     }
-    // 三档来源（都读档案内嵌快照，与活动来源无关）：
-    // 1. 提供给模型的来源 = 核查输入全集（含全文）；
-    // 2. 回答引用的来源 = 分析引文所出（E1）+ 结构化回答明指的来源；
-    // 3. 核查判定支持该声明的来源 = 每条声明里 stance=supports 的有效引文所在来源。
+    // Three tiers of sources (all read the archive-embedded snapshot, unrelated to active sources):
+    // 1. Sources provided to the model = verification input complete set (including full text);
+    // 2. Answer-referenced sources = sources where analysis citations originate (E1) + sources explicitly
+    // pointed out by the structured answer;
+    // 3. Verification determination supporting sources = sources where valid citations with
+    // stance=supports reside for each claim.
     const snapshot = (archive.sources ?? []).map(source => ({
       id: source.id, name: source.source, kind: source.kind, date: source.date, text: source.text,
     }));
@@ -452,12 +486,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         t(item.kind === 'lead' ? '分析后自动核查，或在保存草稿后点「核查关键声明」。' : '分析后自动核查。')));
       return block;
     }
-    // 待处理项置顶：先于过期/错误提示，保证一眼看到「还有事没做完」。
+    // Pending items pinned to the top: displayed before expiration/error messages to ensure at a glance
+    // that 'there is still work to be done'.
     const pending = pendingChecksBlock(review);
     if (pending) block.append(pending);
     if (item.claimsStale) block.append(element('p', t('核查已过期：来源或草稿已变更，请重新核查。'), 'attention'));
     if (review.error) block.append(element('p', t('模型请求失败') + ' · ' + review.error, 'attention'));
-    // 实际核查范围：列出本次真正核查过的声明；为空时明确提示范围是空的，避免被当成"核查通过"。
+    // Actual verification scope: lists the claims actually verified this time; when empty, explicitly
+    // prompts that the scope is empty to avoid being mistaken for 'verification passed'.
     const scope = (review.claims ?? []).map(claim =>
       (claim.dimension ? t(claim.dimension) + '：' : '') + (claim.text || t('模型未返回声明原文')));
     if (!review.error) block.append(element('small', t('本次核查范围') + ' · ' +
@@ -476,9 +512,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return block;
   }
 
-  // —— 逐条人工复核（per-claim review）——
-  // 当前草稿核查中被标记（未获客户来源支持）的声明。
-  // 核查不存在、失败、过期或实际核查范围为空时返回空——此时保留整体人工复核路径。
+  // -- Per-claim manual review --
+  // Claims flagged during the current draft verification (not supported by customer sources).
+  // Returns empty when verification does not exist, fails, has expired, or the actual verification scope
+  // is empty -- at this point, the overall manual review path is retained.
   const coverageCategoryLabels = {
     fact: '已完成事实', commitment: '对外承诺', date: '日期承诺（含委婉表述）',
     conditional: '附带条件的批准或交付', figure: '数字与业绩',
@@ -500,7 +537,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       placeholders: checks.placeholders ?? [],
     };
   }
-  // 定位原文：在草稿正文里选中未进入核查的片段（真实浏览器 DOM 用 setSelectionRange）。
+  // Locate original text: select the segment in the draft body that did not enter verification (real
+  // browser DOM uses setSelectionRange).
   function focusDraftFragment(refs, item, fragment) {
     const body = refs.draftBody;
     if (!body) return;
@@ -521,7 +559,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const total = missed.length + placeholders.length;
     block.append(element('strong', t('覆盖扫描') + ' · ' +
       (total ? t('发现未进入核查的原文') + ' · ' + total : t('未发现漏抽'))));
-    // 本次核查范围：模型实际抽取的声明原文（进入核查的部分）；为空时明确提示。
+    // Current verification scope: original text of claims actually extracted by the model (the part
+    // entering verification); explicitly prompt when empty.
     block.append(element('small', t('本次核查范围') + ' · ' +
       ((coverage.claims ?? []).length ? (coverage.claims).join('；') : t('未提取到声明')), 'muted'));
     for (const entry of missed) {
@@ -553,11 +592,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     if (!(review.claims ?? []).length) return [];
     return (review.claims ?? []).filter(claim => claim.status !== 'supported');
   }
-  // 一条声明是否已有逐条担保（服务端 state().claimResolutions 已按当前草稿 + 来源版本过滤）。
+  // Whether a claim already has per-claim guarantees (server-side state().claimResolutions has been
+  // filtered by current draft + source version).
   const isGuaranteed = (item, claim) => (item.claimResolutions ?? []).some(row =>
     row.claimId === claim.id && row.claimText === claim.text);
-  // 与发送门槛一致的本地镜像：可批准 = 绑定当前草稿与来源的人工复核，
-  // 或草稿核查新鲜、范围非空、每条被标记声明都有逐条担保（或全部获支持）。
+  // A local mirror consistent with the sending threshold: approvable = manual review binding the current
+  // draft and sources,
+  // or draft verification is fresh, scope is non-empty, and every flagged claim has a per-claim guarantee
+  // (or is fully supported).
   function previousFlaggedClaims(item) {
     const rows = item.previousUnresolvedClaims ?? item.previousClaims ?? item.carryoverClaims ?? [];
     const list = Array.isArray(rows) ? rows : [];
@@ -599,9 +641,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     }
     return review.claims.every(claim => claim.status === 'supported' || isGuaranteed(item, claim));
   }
-  // 一条被标记声明的逐条复核条目：原句、判定、依据（复用 claimSection 的展示），
-  // 「查看证据」入口放在问题声明旁（打开对应来源原文即计入「已打开」记录），
-  // 以及创始人的处理：改写 / 删除（都保存新草稿并重新核查）、或保留这条声明并记录担保理由。
+  // A flagged claim item requiring line-by-line review: original sentence, verdict, and basis (reusing the
+  // claimSection presentation). The "View Evidence" entry is placed next to the issue claim (opening the
+  // corresponding source text counts as an "opened" record), along with founder actions: rewrite/delete
+  // (both save a new draft and trigger re-verification), or keep this claim and record a vouching
+  // justification.
   function claimReviewSection(claim, item, refs, previous = null) {
     const article = claimSection(claim, item, false);
     const citedEntries = claim.conflict
@@ -610,10 +654,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const openEvidence = action(t('查看证据'), () => {
       if (refs.sourceDetails) refs.sourceDetails.open = true;
       const sourceIds = [...new Set(citedEntries.filter(entry => entry.source).map(entry => entry.source.id))];
-      // 声明没有引文时，回到初始来源原文（E1）核对。
+      // When a claim lacks citations, fall back to the initial source text (E1) for verification.
       for (const sourceId of sourceIds.length ? sourceIds : ['E1']) {
         const node = refs.sourceById?.get(sourceId);
-        if (node && !node.open) node.open = true; // toggle 事件记录「已打开」
+        if (node && !node.open) node.open = true; // The toggle event records "opened".
       }
     });
     const resolution = previous ? previousGuarantee(item, claim)
@@ -637,7 +681,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           ' · ' + new Date(review.at).toLocaleString(language()), 'muted'));
       }
       if (!inBody && !review && ['ambiguous', 'different_fact', 'absent'].includes(verdict)) {
-        // 无法确定改写后是否仍是同一事实：给出原句与候选新句，由创始人核对。
+        // When it cannot be determined whether a rewritten statement remains the same fact: display both
+        // the original sentence and candidate new sentence for the founder to review.
         article.append(element('p', t('无法确定改写后是否仍是同一事实，请核对原句与新句后选择：'), 'attention'));
         for (const candidate of (previous.match?.candidates ?? []).slice(0, 5)) {
           article.append(element('small', t('原句') + ' · ' + claim.text + ' → ' + t('新句') + ' · ' + candidate.sentence));
@@ -664,7 +709,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         return article;
       }
       if (!inBody && verdict === 'same_fact') {
-        // 近义改写仍是同一事实：原风险仍需处理——重新核查改写后的说法，或针对旧原句逐条担保。
+        // If a synonymous rewrite still represents the same fact, the original risk must still be
+        // addressed: re-verify the rewritten statement, or vouch for the old original sentence line by
+        // line.
         article.append(element('p', t('上一版声明被近义改写，仍是同一事实，原风险仍需处理。请重新核查改写后的说法，或针对当前草稿与来源逐条担保。'), 'attention'));
         for (const candidate of (previous.match?.candidates ?? []).slice(0, 5)) {
           if (candidate.relation !== 'same_fact' && !review) continue;
@@ -686,12 +733,13 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       }
     }
     const reverify = async nextBody => {
-      // 改写/删除：保存新草稿版本（正文变化产生新草稿 ID），再重新核查。
+      // Rewrite/Delete: save a new draft version (body text changes generate a new draft ID), then
+      // re-verify.
       await request('opportunity-draft', { id: item.id, recipient: item.recipient, body: nextBody });
       await request('opportunity-claims', { id: item.id, target: 'draft', language: language() });
     };
     const rows = element('div', '');
-    // 改写：原句替换为新说法（默认带入建议改写）。
+    // Rewrite: replace the original sentence with the new statement (defaulting to the suggested rewrite).
     const rewrite = element('input', '');
     rewrite.maxLength = 4000;
     rewrite.value = claim.rewrite ?? '';
@@ -702,13 +750,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       const next = (item.body ?? '').replaceAll(claim.text, rewrite.value);
       if (next.trim()) await reverify(next);
     }));
-    // 删除：从正文移除原句。
+    // Delete: remove the original sentence from the body text.
     const deleteRow = element('div', '');
     deleteRow.append(action(t('删除此句并重新核查'), async () => {
       const next = (item.body ?? '').replaceAll(claim.text, '');
       if (next.trim()) await reverify(next);
     }));
-    // 担保：保留这条声明，明确记录「我已核实并愿意承担这条说法」+ 理由。
+    // Vouch: keep this claim and explicitly record "I have verified this and am willing to take
+    // responsibility for this statement" + justification.
     const reason = element('input', '');
     reason.maxLength = 2000;
     reason.placeholder = t('记录担保理由');
@@ -727,9 +776,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return article;
   }
 
-  // 当前回答：证据不足时怎么说、怎么继续。措辞与边界由服务端 evidenceAnswer 确定性决定，
-  // 这里只负责展示，并把「下一步」接到卡片上已有的入口——查看来源 / 补资料 / 采用澄清问题
-  // （对应决策卡的 view / source / draft 三个选项），失败时给出重试。
+  // Current answer: instructions on what to say and how to proceed when evidence is insufficient. Wording
+  // and boundaries are deterministically determined by the server's evidenceAnswer. This component only
+  // handles rendering and connects the "next step" to existing card entries—view source / provide
+  // materials / adopt clarification question (corresponding to the view / source / draft three options of
+  // the decision card), providing a retry option on failure.
   const answerSituationLabels = {
     sufficient: '证据充分 · 结论有边界',
     insufficient: '证据不足 · 先说清缺口',
@@ -759,8 +810,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           (entry.quote ? ' · ' + entry.quote : ''), entry.text));
       }
     }
-    // 待核实项：仅创始人陈述／来源未确认的已提取声明（evidenceAnswer.pending）。
-    // 措辞复用声明状态标签，与声明核查区一致；结论只到已支持的部分，这里不被省略。
+    // Pending verification items: extracted claims consisting solely of founder statements or unconfirmed
+    // sources (evidenceAnswer.pending). Wording reuses the claim status badge, consistent with the claim
+    // verification section; conclusions are limited to the supported portion and are not omitted here.
     if (answer.pending?.length) {
       const pendingText = answer.pending.map(entry =>
         (entry.dimension ? t(entry.dimension) + '：' : '') + (entry.text || t('模型未返回声明原文'))
@@ -791,9 +843,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     return block;
   }
 
-  // 当前状态：从创始人批准视角看已保存草稿的发送门槛状态。
-  // 需要处理 / 核查过期 / 待批准；尚无草稿或尚无针对草稿的核查记录时给出前置状态。
-  // 人工复核结论绑定当前草稿与当前来源版本：复核过期（草稿变了或来源变了）时不再显示待批准。
+  // Current status: the dispatch threshold status of the saved draft from the perspective of founder
+  // approval. Requires action / verification expired / pending approval; pre-status is shown when there is
+  // no draft or no verification record for the draft. Manual review conclusions are bound to the current
+  // draft and current source version: when verification expires (draft or source changed), pending
+  // approval is no longer displayed.
   function approvalStatus(item) {
     if (!item.draft_id) return { label: '尚未保存草稿', tone: 'muted' };
     if (item.disclosureConflicts?.length) return { label: '当前收件人无权收到草稿中的受限内容。', tone: 'attention' };
@@ -810,15 +864,17 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     if (item.claimsStale) return { label: '核查过期', tone: 'attention' };
     const claims = review.claims ?? [];
     if (review.error || !claims.length) return { label: '需要处理', tone: 'attention' };
-    // 逐条人工复核：被标记声明全部有逐条担保时即为待批准（与发送门槛一致）。
+    // Line-by-line manual review: considered pending approval when all flagged claims have line-by-line
+    // vouching (consistent with the dispatch threshold).
     const unhandled = claims.filter(claim => claim.status !== 'supported' && !isGuaranteed(item, claim));
-    if (unhandled.length) return { label: '待处理 ' + unhandled.length + ' 条', tone: 'attention' };
+    if (unhandled.length) return { label: t('待处理 {n} 条').replace('{n}', String(unhandled.length)), tone: 'attention' };
     const pending = pendingChecks(review).length;
     if (pending) return { label: '仍有待处理项', tone: 'attention', count: pending };
     return { label: '待批准', tone: 'muted' };
   }
 
-  // 有问题的声明：显示在草稿与批准按钮旁，给出原句、依据（引文或缺口）、建议改写和采用动作。
+  // Problematic claims: displayed next to the draft and approval buttons, providing the original sentence,
+  // basis (citation or gap), suggested rewrite, and adoption action.
   function attentionClaims(item) {
     const review = item.claims;
     if (!review || review.target !== 'draft') return null;
@@ -842,7 +898,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     const card = element('article', '', 'entry');
     card.setAttribute('data-opportunity-id', item.id);
     card.append(element('small', t(labels[item.kind])), element('h3', item.title));
-    // 初始来源的出处 + 身份（客户原文／创始人陈述／未确认）：改判身份会让旧核查自动过期重跑。
+    // Initial source origin + identity (customer original text / founder statement / unconfirmed):
+    // changing the identity will automatically invalidate the old verification and re-run it.
     card.append(originBlock(item));
     const refs = { sourceDetails: null, sourceText: null, sourceById: new Map(), draftBody: null };
     card.append(sourceBlock(item, refs));
@@ -860,15 +917,18 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(details(t('模型原始输出'), result.raw));
       if (item.review) card.append(reviewedBlock(item));
     }
-    // 人工复核结论绑定到当前草稿版本与当前来源版本：草稿换新版本或来源变化后，
-    // 旧复核不能解锁当前草稿的发送门禁，表单重新出现，供针对当前草稿与来源记录结论。
+    // Manual review conclusions are bound to the current draft version and current source version: when
+    // the draft is updated to a new version or the source changes, old verifications cannot unlock the
+    // current draft's dispatch gate, and the form reappears to record conclusions for the current draft
+    // and source.
     const reviewCurrent = Boolean(item.review) && item.review_draft === item.draft_id && !item.reviewStale;
     const flagged = flaggedClaims(item);
     if (previousFlags(item).length || flagged.length || (!item.review && (result ? result.status !== 'supported' : item.kind === 'lead')) ||
       (item.draft_id && !reviewCurrent)) {
       const reviewForm = element('form', '');
-      // 复核区显示当前查看状态：已打开哪些来源 / 尚未打开来源。
-      // 这里记录的是查看动作，结论仍由创始人自己写下。
+      // The review area displays the current viewing status: which sources are opened / which sources are
+      // not yet opened.
+      // This records the viewing action, while the conclusion is still written by the founder.
       reviewForm.append(reviewViewLine(item),
         element('small', t('展开来源原文会记录下来，保存复核时随结论写入审计。'), 'muted'));
       const retained = previousFlags(item);
@@ -878,13 +938,15 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           ' · ' + (pending || retained.length), pending ? 'attention' : 'muted'));
         for (const flag of retained) reviewForm.append(claimReviewSection(claimForFlag(flag), item, refs, flag));
       }
-      // 逐条人工复核：当前草稿核查中被标记的声明，逐条给出原句、判定、依据与处理入口。
+      // Item-by-item manual review: For currently flagged claims in the draft verification, provide the
+      // original sentence, verdict, basis, and processing entry one by one.
       if (flagged.length) {
         reviewForm.append(element('small', t('有问题的声明') + ' · ' + flagged.length +
           ' · ' + t('逐条处理：改写或删除后重新核查，或保留并记录担保理由。'), 'attention'));
         for (const claim of flagged) reviewForm.append(claimReviewSection(claim, item, refs));
       } else if (item.draft_id && item.claims?.target === 'draft') {
-        // 模型核查失败或未提取到声明：明确显示实际核查范围，保留下方的人工复核路径。
+        // Model verification failed or no claims extracted: Clearly display the actual verification scope,
+        // while retaining the manual review path below.
         if (item.claims.error) {
           reviewForm.append(element('p', t('模型核查失败') + ' · ' + item.claims.error +
             ' · ' + t('实际核查范围：0 条声明（核查未完成）。请重新核查，或在下方记录人工复核结论。'), 'attention'));
@@ -909,7 +971,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       card.append(reviewForm);
     }
     card.append(claimsBlock(item));
-    // 发送档案：不可变快照（三档来源 + 批准上下文 + 导出），与活动来源无关。
+    // Send archive: Immutable snapshot (three-tier sources + approval context + export), independent of
+    // active sources.
     card.append(archivesBlock(item));
     const analysisForm = element('form', '');
     const question = element('input', '');
@@ -973,8 +1036,9 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         item.reviewStale ? 'attention' : 'muted'), reviewViewLine(item));
       if (item.draft_id) {
         editor.open = true;
-        // 待处理项置顶到草稿区：优先于已保存版本正文与「有问题的声明」。
-        // 只针对针对草稿的核查结果；已发送的机会不再展示。
+        // Pin pending items to the top of the draft area: Prioritized over the saved version body and
+        // "flagged claims".
+        // Applies only to verification results of the draft; sent opportunities no longer display them.
         const pending = !item.sent && item.claims?.target === 'draft' ? pendingChecksBlock(item.claims) : null;
         if (pending) editor.append(pending);
         editor.append(details(t('待审核的已保存版本') + ' · ' + item.recipient, item.body));
@@ -983,7 +1047,8 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         } else {
           const attention = attentionClaims(item);
           if (attention) editor.append(attention);
-          // 发送被拦截：拦截原因 + 最新活动记录在草稿区当场显示。
+          // Sending intercepted: Interception reason + latest activity log are displayed directly in the
+          // draft area.
           const lastBlock = latestBlocked(audit, item.id);
           if (lastBlock) {
             editor.append(element('p', t('操作被拦截') + ' · ' + t(blockedReasons[lastBlock.reason] ?? lastBlock.reason) + ' · ' + new Date(lastBlock.time).toLocaleString(language()), 'attention'))
@@ -1004,10 +1069,11 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
           } else if (!item.review && !result && !sendable(item)) {
             editor.append(element('p', t('还没有分析，也没有人工复核。请先用模型分析，或先记录人工核实结果，再批准发送。'), 'attention'));
           } else if (!sendable(item)) {
-            // 逐条人工复核：被标记声明未全部处理（或核查未完成/过期/范围为空）时不显示批准。
+            // Item-by-item manual review: Approval is hidden if flagged claims are not fully processed (or
+            // verification is incomplete/expired/scope is empty).
             const unhandled = flaggedClaims(item).filter(claim => !isGuaranteed(item, claim));
             if (unhandled.length) {
-              editor.append(element('p', t('还有 ' + unhandled.length + ' 条被标记声明待处理。') +
+              editor.append(element('p', t('还有 {n} 条被标记声明待处理。').replace('{n}', String(unhandled.length)) +
                 t('逐条改写、删除或记录担保后，再批准发送。'), 'attention'));
             } else if (item.claims?.error) {
               editor.append(element('p', t('模型核查失败') + ' · ' + item.claims.error +
@@ -1050,11 +1116,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       let summary = t(labels[event.action] ?? event.action) + reason + ' · ' + new Date(event.time).toLocaleString(language());
       let note = '';
       if (event.action === 'review_source_viewed' && detail.name) {
-        // 查看动作随来源名称记录，一眼看出当时展开的是哪条原文。
+        // Viewing actions are recorded along with the source name, making it easy to see at a glance which
+        // original text was expanded at the time.
         summary = t(labels.review_source_viewed) + ' · ' + detail.name + ' · ' + new Date(event.time).toLocaleString(language());
       } else if (event.action === 'human_reviewed' && Array.isArray(detail.viewed)) {
-        // 保存复核时已把已打开来源、草稿 ID、来源版本与结论写入审计；摘要标明已打开哪些来源。
-        // 功能上线前的旧记录没有 viewed 字段，不标注，避免误读。
+        // When saving the review, opened sources, draft ID, source version, and conclusions have been
+        // written to the audit; the summary indicates which sources were opened.
+        // Old records prior to feature launch lack the viewed field and are not marked to prevent
+        // misinterpretation.
         note = detail.viewed.length
           ? t('已打开') + ' · ' + (detail.viewedNames ?? []).join('、')
           : t('尚未打开来源');

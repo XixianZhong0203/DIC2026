@@ -1,31 +1,41 @@
-// 聊天回答的关键断言核查（窗口 3：在聊天回答旁标出缺乏依据的关键断言）。
+// Key assertion check for chat answers (window 3: highlight key assertions lacking grounds beside the chat
+// answer).
 //
-// 每次聊天回答后，把回答里影响决定的关键说法（客户意向 / 签约 / 报价 / 交付）
-// 和「本轮实际检索到的记录」逐条对照，复用 src/opportunity/claims.mjs 的
-// FEVER 式判定核心（parseClaimReport / resolveClaim / verifyClaims）：
-//   - 声明 text 必须逐字出自回答（resolveClaim 的 body 校验，reason=claim_not_in_draft）；
-//   - 引文必须逐字出自来源原文（含截断否定词 / 条件 / 歧义片段检查）；
-//   - 对"已完成"事实，客户只表达意愿（愿意签约）记 neutral，不能算支持；
-//   - 证据不足 / 来源冲突 / 核查失败 / 有依据 四种状态由 resolveClaim 判定。
+// After each chat answer, compare the key statements in the answer that affect decisions (customer intent
+// / signing / quotation / delivery) item by item with "the records actually retrieved in this round",
+// reusing the FEVER-style judgment core from src/opportunity/claims.mjs (parseClaimReport / resolveClaim /
+// verifyClaims):
+// - The claim text must be verbatim from the answer (body check in resolveClaim,
+// reason=claim_not_in_draft);
+// - Citations must be verbatim from the source text (including truncation of negative words / conditions /
+// ambiguous fragment checks);
+// - For "completed" facts, if the customer only expresses intent (willing to sign), it is recorded as
+// neutral and cannot count as support;
+// - The four states of insufficient evidence / source conflict / check failure / grounded are determined
+// by resolveClaim.
 //
-// 聊天核查的来源身份口径（identity='workspace'，在 resolveClaim 中处理）：
-// 工作区记录就是本轮回答的证据基础，任何一条有效支持引文都算「有依据」；
-// 线索/草稿流程仍按用户录入的来源身份（customer / founder / 未确认）判定。
+// Source identity criteria for chat checks (identity='workspace', handled in resolveClaim): Workspace
+// records serve as the evidence base for this round's answer, and any valid supporting citation counts as
+// "grounded"; lead/draft flows are still judged according to the user-entered source identity (customer /
+// founder / unconfirmed).
 //
-// 提示版本（稳定标识，供存档与追溯）：
+// Prompt version (stable identifier for archiving and tracing):
 export const CHAT_CLAIMS_PROMPT_VERSION = 'chat-claims-v1';
 
-// 回答顶部状态（窗口 2）：由后端核查结果生成，供回答正文上方一眼区分本轮核查的
-// 整体结论。状态按严重度依次判定（先命中先赢）：
-//   failed    核查失败（核查请求/解析抛错，error 记录原因，claims 为空）；
-//   refuted   证据反驳（有声明被来源直接反驳）；
-//   conflict  发现证据冲突（有声明处于来源冲突，需先比较记录）；
-//   attention 有关键说法待核实（有声明证据不足 unknown 或未完成核查 incomplete）；
-//   verified  已核查 N 条，均有依据（至少一条声明且全部 supported；N = total，
-//             「均有依据」的范围是这 N 条已核查声明，不覆盖回答中未被抽取的其他说法）；
-//   none      本轮未抽取到可核查声明（无错误且无声明）。
-// flagged 列出全部未通过（非 supported）的声明、按严重度排序（反驳 < 冲突 <
-// 证据不足 < 未完成核查），供顶部直接列出最需要注意的原句、逐句跳到核查结果。
+// Answer top status (window 2): Generated from the backend check results, allowing users to distinguish
+// the overall conclusion of the current check at a glance above the answer body. States are determined in
+// order of severity (first hit wins):
+// failed Check failed (check request/parsing threw an error, error logs the reason, claims is empty);
+// refuted Evidence refuted (a claim is directly refuted by the source);
+// conflict Evidence conflict found (a claim is in source conflict, records must be compared first);
+// attention Key statements pending verification (claims have insufficient evidence unknown or incomplete
+// verification);
+// verified N claims checked, all grounded (at least one claim and all supported; N = total, the scope of
+// "all grounded" covers these N checked claims, excluding other statements in the answer not extracted);
+// none No checkable claims extracted in this round (no errors and no claims).
+// flagged Lists all unpassed (non-supported) claims, sorted by severity (refuted < conflict < insufficient
+// evidence < incomplete verification), allowing the top section to directly list the original sentences
+// requiring the most attention and jump to the check results sentence by sentence.
 export const CLAIM_TOP_STATUSES = ['failed', 'refuted', 'conflict', 'attention', 'verified', 'none'];
 const CLAIM_SEVERITY = { refuted: 0, conflict: 1, unknown: 2, incomplete: 3 };
 
@@ -34,8 +44,9 @@ export function chatClaimSummary(claims = [], error = null) {
     .filter(claim => claim && typeof claim === 'object' && typeof claim.status === 'string');
   let status;
   if (error) {
-    // 核查失败时没有可靠的逐条结论，顶部只报「核查失败」，不再列出原句（与后端
-    // 失败分支只传 [] 一致）。
+    // When a check fails, there are no reliable itemized conclusions, so the top section only reports
+    // "Check failed" and no longer lists the original sentences (consistent with the backend failure
+    // branch only passing []).
     status = 'failed';
     return { status, total: list.length, flagged: [] };
   }
@@ -50,10 +61,11 @@ export function chatClaimSummary(claims = [], error = null) {
   return { status, total: list.length, flagged };
 }
 
-// 先只覆盖四个影响决定的维度。
+// Initially cover only the four dimensions affecting decisions.
 export const CHAT_CLAIM_DIMENSIONS = ['客户意向', '签约', '报价', '交付'];
 
-// 把工作区记忆行映射成核查来源（id 用字符串行号，与线索来源 ID 同口径）。
+// Map workspace memory rows to check sources (id uses string row number, sharing the same criteria as lead
+// source IDs).
 export function chatClaimSources(records) {
   return (records ?? []).map(record => ({
     id: String(record.id),
@@ -63,9 +75,10 @@ export function chatClaimSources(records) {
   }));
 }
 
-// mode:'chat' 抽取提示：声明必须逐字出自回答（不是草稿）。
-// 刻意不与线索/草稿核查器共用开头（「你是声明核查器」/ "claim verifier"），
-// 现有验收 mock 与 evaluation/round2.mjs 按这些开头路由，聊天核查不能被误路由。
+// mode:'chat' extraction prompt: The claim must be verbatim from the answer (not the draft). Deliberately
+// not sharing the beginning ("You are a claim verifier" / "claim verifier") with lead/draft checkers, as
+// existing acceptance mocks and evaluation/round2.mjs route based on these beginnings, and chat checks
+// must not be misrouted.
 export function chatClaimMessages({ answer, dimensions = CHAT_CLAIM_DIMENSIONS, sources = [], language }) {
   const en = language === 'en';
   const dims = dimensions.join(' / ');
