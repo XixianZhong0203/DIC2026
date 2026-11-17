@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { memoryCandidates, verifiedQuotes, scopeMatches, recordsInScope, normalizeCandidates } from './memory-impact.mjs';
+import { memoryCandidates, verifiedQuotes, scopeMatches, recordsInScope, normalizeCandidates,
+  effectiveAppliesTo, normalizeAppliesTo, recordProvenance } from './memory-impact.mjs';
 import { GLOBAL_SCOPE } from '../policy/policy.mjs';
 
 const rows = [
@@ -73,4 +74,37 @@ test('extracted customer records stay in the current project despite model scope
     { content: '所有项目采用中文', kind: 'preference', scope: '*', status: 'confirmed' },
   ], { project: '本项目' });
   assert.deepEqual(candidates.map(candidate => candidate.scope), ['本项目', '本项目', '本项目', GLOBAL_SCOPE]);
+});
+
+test('effectiveAppliesTo prefers the explicit value and otherwise derives it from scope', () => {
+  assert.equal(effectiveAppliesTo({ applies_to: '*', scope: '客户 A' }), '*');
+  assert.equal(effectiveAppliesTo({ applies_to: '客户 A', scope: '*' }), '客户 A');
+  // 旧数据（applies_to 为空）按 scope 推导：全局 → '*'，项目 → 自身项目。
+  assert.equal(effectiveAppliesTo({ applies_to: '', scope: '客户 A' }), '客户 A');
+  assert.equal(effectiveAppliesTo({ applies_to: '', scope: '*' }), '*');
+  assert.equal(effectiveAppliesTo({ applies_to: '', scope: '' }), '*');
+  assert.equal(effectiveAppliesTo({}), '*');
+});
+
+test('normalizeAppliesTo accepts "*" and concrete names, and drops out-of-bounds values', () => {
+  assert.equal(normalizeAppliesTo('  客户 A  '), '客户 A');
+  assert.equal(normalizeAppliesTo('global'), '*');
+  assert.equal(normalizeAppliesTo(''), '');
+  assert.equal(normalizeAppliesTo(null), '');
+  assert.equal(normalizeAppliesTo(123), '');
+  assert.equal(normalizeAppliesTo('x'.repeat(101)), '');
+});
+
+test('recordProvenance always carries applies_to and origin only when it differs from scope', () => {
+  // 在他处创建的全局记录（从客户 A 会话保存）：applies_to 按 scope 推导为 '*'，
+  // 原项目与客户 A 不同，带 origin。
+  assert.deepEqual(recordProvenance({
+    id: 1, kind: 'rule', scope: '*', body: '谈判流程', source: '客户 A 项目会议',
+    applies_to: '', origin_scope: '客户 A',
+  }), { id: 1, kind: 'rule', scope: '*', body: '谈判流程', source: '客户 A 项目会议', applies_to: '*', origin: '客户 A' });
+  // 普通记录：适用对象显式等于自身项目，原项目与 scope 相同 —— 不添 origin 噪音。
+  assert.deepEqual(recordProvenance({
+    id: 2, kind: 'fact', scope: '客户 A', body: '折扣', source: '客户 A 合同',
+    applies_to: '客户 A', origin_scope: '客户 A',
+  }), { id: 2, kind: 'fact', scope: '客户 A', body: '折扣', source: '客户 A 合同', applies_to: '客户 A' });
 });

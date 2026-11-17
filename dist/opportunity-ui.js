@@ -633,10 +633,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
       const review = previous.rewriteReview ?? null;
       if (review) {
         article.append(element('p', t('改写核对已记录') + ' · ' +
-          t(review.verdict === 'same_fact' ? '同一事实' : '不同事实') + ' · ' + review.note +
+          t(review.verdict === 'deleted' ? '已删除旧声明' : review.verdict === 'same_fact' ? '同一事实' : '不同事实') + ' · ' + review.note +
           ' · ' + new Date(review.at).toLocaleString(language()), 'muted'));
       }
-      if (!inBody && verdict === 'ambiguous') {
+      if (!inBody && !review && ['ambiguous', 'different_fact', 'absent'].includes(verdict)) {
         // 无法确定改写后是否仍是同一事实：给出原句与候选新句，由创始人核对。
         article.append(element('p', t('无法确定改写后是否仍是同一事实，请核对原句与新句后选择：'), 'attention'));
         for (const candidate of (previous.match?.candidates ?? []).slice(0, 5)) {
@@ -648,16 +648,16 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
         note.setAttribute('aria-label', note.placeholder);
         const rows = element('div', '');
         rows.append(note,
-          action(t('是同一事实（保留标记）'), async () => {
+          ...(verdict === 'ambiguous' ? [action(t('是同一事实（保留标记）'), async () => {
             if (note.value.trim()) await request('opportunity-claim-rewrite-review', {
               id: item.id, draft_id: item.draft_id, claim_id: previous.claimId ?? claim.id,
               claim_text: claim.text, ...(item.claimEvidenceHash ? { evidence_hash: item.claimEvidenceHash } : {}), verdict: 'same_fact', note: note.value,
             });
-          }),
-          action(t('不是同一事实（解除标记）'), async () => {
+          })] : []),
+          action(t(verdict === 'absent' ? '已删除旧声明' : '不是同一事实（解除标记）'), async () => {
             if (note.value.trim()) await request('opportunity-claim-rewrite-review', {
               id: item.id, draft_id: item.draft_id, claim_id: previous.claimId ?? claim.id,
-              claim_text: claim.text, ...(item.claimEvidenceHash ? { evidence_hash: item.claimEvidenceHash } : {}), verdict: 'different_fact', note: note.value,
+              claim_text: claim.text, ...(item.claimEvidenceHash ? { evidence_hash: item.claimEvidenceHash } : {}), verdict: verdict === 'absent' ? 'deleted' : 'different_fact', note: note.value,
             });
           }));
         article.append(rows);

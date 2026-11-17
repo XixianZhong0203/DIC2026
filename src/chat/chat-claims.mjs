@@ -15,6 +15,41 @@
 // 提示版本（稳定标识，供存档与追溯）：
 export const CHAT_CLAIMS_PROMPT_VERSION = 'chat-claims-v1';
 
+// 回答顶部状态（窗口 2）：由后端核查结果生成，供回答正文上方一眼区分本轮核查的
+// 整体结论。状态按严重度依次判定（先命中先赢）：
+//   failed    核查失败（核查请求/解析抛错，error 记录原因，claims 为空）；
+//   refuted   证据反驳（有声明被来源直接反驳）；
+//   conflict  发现证据冲突（有声明处于来源冲突，需先比较记录）；
+//   attention 有关键说法待核实（有声明证据不足 unknown 或未完成核查 incomplete）；
+//   verified  已核查 N 条，均有依据（至少一条声明且全部 supported；N = total，
+//             「均有依据」的范围是这 N 条已核查声明，不覆盖回答中未被抽取的其他说法）；
+//   none      本轮未抽取到可核查声明（无错误且无声明）。
+// flagged 列出全部未通过（非 supported）的声明、按严重度排序（反驳 < 冲突 <
+// 证据不足 < 未完成核查），供顶部直接列出最需要注意的原句、逐句跳到核查结果。
+export const CLAIM_TOP_STATUSES = ['failed', 'refuted', 'conflict', 'attention', 'verified', 'none'];
+const CLAIM_SEVERITY = { refuted: 0, conflict: 1, unknown: 2, incomplete: 3 };
+
+export function chatClaimSummary(claims = [], error = null) {
+  const list = (Array.isArray(claims) ? claims : [])
+    .filter(claim => claim && typeof claim === 'object' && typeof claim.status === 'string');
+  let status;
+  if (error) {
+    // 核查失败时没有可靠的逐条结论，顶部只报「核查失败」，不再列出原句（与后端
+    // 失败分支只传 [] 一致）。
+    status = 'failed';
+    return { status, total: list.length, flagged: [] };
+  }
+  if (list.some(claim => claim.status === 'refuted')) status = 'refuted';
+  else if (list.some(claim => claim.status === 'conflict')) status = 'conflict';
+  else if (list.every(claim => claim.status === 'supported')) status = list.length ? 'verified' : 'none';
+  else status = 'attention';
+  const flagged = list
+    .filter(claim => claim.status !== 'supported')
+    .sort((a, b) => (CLAIM_SEVERITY[a.status] ?? 9) - (CLAIM_SEVERITY[b.status] ?? 9))
+    .map(claim => ({ id: claim.id, dimension: claim.dimension, text: claim.text, status: claim.status }));
+  return { status, total: list.length, flagged };
+}
+
 // 先只覆盖四个影响决定的维度。
 export const CHAT_CLAIM_DIMENSIONS = ['客户意向', '签约', '报价', '交付'];
 

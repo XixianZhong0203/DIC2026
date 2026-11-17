@@ -2,6 +2,8 @@ import { createOpportunityUI } from '/opportunity-ui.js';
 import { createDecisionUI } from '/decision-ui.js';
 import { GLOBAL_SCOPE, demoReport } from '/policy.mjs';
 import { translate } from '/i18n.js';
+import { chatClaimSummary } from '/chat-claims.mjs';
+import { claimTopTitle } from '/claim-top.mjs';
 
 let language = localStorage.getItem('daymark-language') === 'zh-CN' ? 'zh-CN' : 'en';
 const t = phrase => translate(language, phrase);
@@ -294,6 +296,40 @@ const claimCheckReasonLabel = check => t({
   claim_not_in_draft: '声明未在回答中逐字出现',
   quote_missing_context: '引文缺少关键上下文', quote_ambiguous: '同一片段多处出现且含义不同',
 }[check.reason] ?? check.reason);
+
+// 窗口 2：回答顶部状态。优先读后端随回答写入的 summary（claimCheck.summary，
+// 由后端核查结果生成、前后端口径一致）；旧消息没有 summary 字段时，用与后端
+// 共用的同一判定函数（/chat-claims.mjs）在客户端补算，口径不漂移。
+function claimTopSummary(check) {
+  if (!check || !(Array.isArray(check.claims) || check.error)) return null;
+  if (check.summary && typeof check.summary.status === 'string') return check.summary;
+  return chatClaimSummary(check.claims ?? [], check.error ?? null);
+}
+
+// 顶部标题文案走共享纯函数（/claim-top.mjs），与单元测试共用同一份 status→文案映射。
+const claimTopLabel = summary => claimTopTitle(summary, t);
+
+// 渲染回答正文上方的顶部状态：整体状态 + 最需要注意的原句（点击打开证据面板、
+// 定位到该断言，面板里列出支持/反驳的逐字引文与来源原文）。回答正文与现有的
+// 逐条标记（正文内联高亮 + 证据行徽章）保持不变。无核查结果（旧消息）返回 null。
+function renderClaimTop(review) {
+  const check = review?.claimCheck;
+  const summary = claimTopSummary(check);
+  if (!summary) return null;
+  const top = element('div', '', 'claim-top claim-top-' + summary.status);
+  top.append(element('p', claimTopLabel(summary), 'claim-top-title'));
+  if (summary.status === 'failed' && check.error) top.append(element('p', check.error, 'claim-top-error'));
+  for (const claim of summary.flagged) {
+    const button = element('button', '', 'claim-top-claim claim-top-claim-' + claim.status);
+    button.type = 'button';
+    button.title = claim.text;
+    button.append(element('span', '「' + claim.text + '」', 'claim-top-claim-text'),
+      element('span', claimStatusLabel(claim.status), 'claim-top-claim-status'));
+    button.onclick = () => openSources(review, claim.id);
+    top.append(button);
+  }
+  return top;
+}
 // 证据面板里的单条关键断言：状态 + 维度、声明原文、逐条引文（立场 + 引文 + 说明 +
 // 来源原文，来源原文优先取当前记忆行、记录已删时回退核查时保存的快照）、
 // 缺什么/能说什么、核查失败原因。focus 的条目高亮并滚动到视野内。
@@ -352,10 +388,60 @@ function annotateClaims(bodyEl, review) {
   }
 }
 
+// 共享记忆窗口：证据面板为记录标注来源归属——原项目（仅跨工作区带入的记录带
+// origin 字段）与适用对象（applies_to 恒带，'*' 显示为通用）。旧消息的检索
+// 结果没有新字段时不渲染，避免噪音。
+function provenanceLine(record) {
+  const parts = [];
+  if (record.origin) parts.push(t('原项目') + ' · ' + t(record.origin));
+  if (record.applies_to) parts.push(t('适用对象') + ' · ' +
+    (record.applies_to === GLOBAL_SCOPE ? t('通用（所有项目）') : t(record.applies_to)));
+  return parts.length ? element('small', parts.join(' · '), 'meta-note') : null;
+}
+
 function openSources(review, focusClaimId = null) {
-  visibleEvidence = review;
+  visibleEvidence = { review, focusClaimId };
   const body = get('source-content');
   body.replaceChildren();
+  const check = review.claimCheck;
+  const summary = claimTopSummary(check);
+  if (check && (check.claims?.length || check.error)) {
+    body.append(element('h3', t('关键断言')));
+    body.append(element('small', t('核查模型') + ' · ' + check.model + ' · ' + check.prompt +
+      ' · ' + new Date(check.at).toLocaleString(language), 'claim-check-meta'));
+    if (summary?.status === 'verified') {
+      // 全部通过时写清范围：「均有依据」只覆盖本轮已核查的 N 条关键断言，
+      // 不等于回答里的所有说法都经过核查。
+      body.append(element('small', t('核查范围：本轮已核查的 {n} 条关键断言均有依据，回答中其他说法不在本次核查范围内。').replace('{n}', String(summary.total)), 'claim-scope-note'));
+    }
+    if (check.error) body.append(element('p', t('断言核查失败') + ' · ' + check.error, 'claim-error'));
+    for (const claim of check.claims ?? []) renderClaimEntry(body, claim, claim.id === focusClaimId);
+  }
+  // 两类记录分开列：回答实际引用的记录（模型明确指明、作为回答依据）与本轮提供给
+  // 模型的记录（检索到的全部资料：模型见过但未必引用）；核查判为支持/反驳的
+  // 逐字引文与来源原文在上方「关键断言」里逐条列出。
+  if (review.cited?.length) body.append(element('h3', t('回答实际引用的记录')));
+  for (const record of review.cited ?? []) {
+    const source = element('details', '', 'entry');
+    source.append(element('summary', '#' + record.id + ' · ' + (record.scope === GLOBAL_SCOPE ? t('全局') : (record.scope || t('未分组'))) + ' · ' + t(record.source)), element('p', t(record.body)));
+    const provenance = provenanceLine(record);
+    if (provenance) source.append(provenance);
+    body.append(source);
+  }
+  const retrieved = review.trace?.retrieved ?? [];
+  if (retrieved.length) {
+    body.append(element('h3', t('本轮提供给模型的记录') + ' · ' + retrieved.length));
+    for (const record of retrieved) {
+      const source = element('details', '', 'entry');
+      source.append(element('summary', '#' + record.id + ' · ' + (record.scope === GLOBAL_SCOPE ? t('全局') : (record.scope || t('未分组'))) + ' · ' + t(record.source) + ' · ' + record.kind));
+      // 与断言引文同一口径：原文优先取当前记忆行（修订过则展示最新原文），记录已删时提示缺失。
+      const live = (current?.memory ?? []).find(row => String(row.id) === String(record.id));
+      source.append(element('p', live ? t(live.body) : t('记录已缺失')));
+      const provenance = provenanceLine(record);
+      if (provenance) source.append(provenance);
+      body.append(source);
+    }
+  }
   for (const [label, items] of [['来源原文', review.facts], ['基于资料的推断', review.inferences], ['仍待核实', review.unknowns]]) {
     if (!items?.length) continue;
     body.append(element('h3', t(label)));
@@ -365,12 +451,6 @@ function openSources(review, focusClaimId = null) {
       else row.append(element('small', '#' + item.id + ' · ' + item.source), element('p', item.quote));
       body.append(row);
     }
-  }
-  if (review.cited?.length) body.append(element('h3', t('引用记录')));
-  for (const record of review.cited ?? []) {
-    const source = element('details', '', 'entry');
-    source.append(element('summary', '#' + record.id + ' · ' + (record.scope === GLOBAL_SCOPE ? t('全局') : (record.scope || t('未分组'))) + ' · ' + t(record.source)), element('p', t(record.body)));
-    body.append(source);
   }
   if (review.trace) {
     const trace = element('details', '', 'entry');
@@ -389,18 +469,8 @@ function openSources(review, focusClaimId = null) {
       const effortLabel = review.trace.modelEffort && EFFORT_LABELS[review.trace.modelEffort] ? t(EFFORT_LABELS[review.trace.modelEffort]) : '';
       trace.append(element('p', t('调用模型') + ' · ' + review.trace.attemptedModel + (effortLabel ? ' · ' + t('思考') + ' ' + effortLabel : '')));
     }
-    for (const record of review.trace.retrieved) {
-      trace.append(element('p', '#' + record.id + ' · ' + (record.scope || t('未分组')) + ' · ' + record.source + ' · ' + record.kind));
-    }
+    // 本轮提供给模型的记录已单列在上方「本轮提供给模型的记录」一节（含原文）。
     body.append(trace);
-  }
-  const check = review.claimCheck;
-  if (check && (check.claims?.length || check.error)) {
-    body.append(element('h3', t('关键断言')));
-    body.append(element('small', t('核查模型') + ' · ' + check.model + ' · ' + check.prompt +
-      ' · ' + new Date(check.at).toLocaleString(language), 'claim-check-meta'));
-    if (check.error) body.append(element('p', t('断言核查失败') + ' · ' + check.error, 'claim-error'));
-    for (const claim of check.claims ?? []) renderClaimEntry(body, claim, claim.id === focusClaimId);
   }
   if (!get('source-panel').open) get('source-panel').show();
 }
@@ -409,6 +479,7 @@ function clearRevision() {
   editing = null;
   resetMemoryReview();
   get('memoryForm').reset();
+  syncAppliesToMode('');
   get('revision').hidden = get('revision-original').hidden = get('cancel').hidden = true;
 }
 
@@ -562,6 +633,10 @@ function render() {
       }
       const card = element('article', '', 'message assistant');
       const main = element('div', '', 'message-main');
+      // 窗口 2：回答顶部状态（由后端核查结果生成）先于正文渲染，让一眼可见的
+      // 核查结论不被后面的肯定句盖过；原回复与逐条标记原样保留在正文里。
+      const claimTop = renderClaimTop(message.review);
+      if (claimTop) main.append(claimTop);
       const body = element('div', '', 'message-body');
       body.innerHTML = markdown(message.body);
       annotateClaims(body, message.review);
@@ -602,7 +677,7 @@ function render() {
       if (evidence.childElementCount) main.append(evidence);
       const actions = element('div', '', 'message-actions');
       if (message.review && (message.review.trace || message.review.cited?.length || message.review.facts?.length ||
-        message.review.inferences?.length || message.review.unknowns?.length)) {
+        message.review.inferences?.length || message.review.unknowns?.length || message.review.claimCheck)) {
         actions.append(iconButton('search', '核查依据', () => openSources(message.review)));
       }
       const copy = iconButton('copy', '复制', async () => {
@@ -634,8 +709,14 @@ function render() {
   const labels = { fact: '事实', preference: '偏好', rule: '已确认规则', proposal: '未确认提议', source: '原始资料' };
   get('memory').replaceChildren(...memory.map(record => {
     const card = element('article', '', 'entry');
+    // 共享记忆窗口：卡片头标注适用对象（显式保存时才显示）与原项目（跨工作区带入的副本）。
+    const appliesTo = record.applies_to
+      ? ' · ' + t('适用对象') + ' ' + (record.applies_to === GLOBAL_SCOPE ? t('通用（所有项目）') : t(record.applies_to)) : '';
+    const origin = record.origin_scope && record.origin_scope !== record.scope
+      ? ' · ' + t('原项目') + ' ' + t(record.origin_scope) : '';
     card.append(element('small', '#' + record.id + ' · ' + t(labels[record.kind]) + ' · ' + record.scope +
-      (record.superseded ? ' · ' + t('已被修订') : '') + (record.replaces ? ' · ' + t('修订 #') + record.replaces : '')));
+      (record.superseded ? ' · ' + t('已被修订') : '') + (record.replaces ? ' · ' + t('修订 #') + record.replaces : '') +
+      appliesTo + origin));
     card.append(element('p', t(record.body)), element('p', t('出处') + ' · ' + t(record.source), 'muted'));
     if (!record.superseded) card.append(action(t('修订'), () => {
       resetMemoryReview();
@@ -643,6 +724,7 @@ function render() {
       const form = get('memoryForm');
       for (const name of ['kind', 'scope', 'body']) form.elements[name].value = record[name];
       form.elements.source.value = '';
+      syncAppliesToMode(record.applies_to);
       get('revision').textContent = t('正在修订 #') + record.id;
       get('revision-original').textContent = record.body + '\n' + record.source;
       get('revision').hidden = get('revision-original').hidden = get('cancel').hidden = false;
@@ -1156,7 +1238,10 @@ function openImportPanel({ source = '', target = currentProjectScope() } = {}) {
       box.type = 'checkbox';
       box.value = record.id;
       const text = element('span', '', 'import-text');
-      text.append(element('small', '#' + record.id + ' · ' + t(labels[record.kind]) + ' · ' + record.source));
+      // 共享记忆窗口：标注这条记录会带入哪个适用对象（显式保存时才显示）。
+      const appliesTo = record.applies_to
+        ? ' · ' + t('适用对象') + ' ' + (record.applies_to === GLOBAL_SCOPE ? t('通用（所有项目）') : t(record.applies_to)) : '';
+      text.append(element('small', '#' + record.id + ' · ' + t(labels[record.kind]) + ' · ' + record.source + appliesTo));
       text.append(element('p', t(record.body)));
       row.append(box, text);
       list.append(row);
@@ -1707,6 +1792,7 @@ function startMemorySave({ kind, scope, body, source, message_id = null }) {
   const form = get('memoryForm');
   form.elements.kind.value = kind;
   syncScopeMode(scope);
+  syncAppliesToMode('');
   form.elements.body.value = body;
   form.elements.source.value = source;
   form.elements.message_id.value = message_id ?? '';
@@ -1721,8 +1807,20 @@ function syncScopeMode(scope) {
   else { mode.value = 'custom'; get('memoryForm').elements.scope.value = scope; }
   get('scope-custom').hidden = mode.value !== 'custom';
 }
+// 回填适用对象选择（shared-memory 窗口）：'*'＝通用、具体值＝自定义、
+// 空＝与适用范围一致（旧记录未显式记录适用对象）。
+function syncAppliesToMode(appliesTo) {
+  const mode = get('applies-to-mode');
+  if (appliesTo === GLOBAL_SCOPE) mode.value = GLOBAL_SCOPE;
+  else if (appliesTo) { mode.value = 'custom'; get('memoryForm').elements.applies_to.value = appliesTo; }
+  else mode.value = '';
+  get('applies-to-custom').hidden = mode.value !== 'custom';
+}
 get('scope-mode').addEventListener('change', () => {
   get('scope-custom').hidden = get('scope-mode').value !== 'custom';
+});
+get('applies-to-mode').addEventListener('change', () => {
+  get('applies-to-custom').hidden = get('applies-to-mode').value !== 'custom';
 });
 
 formAction('memoryForm', async (data, form) => {
@@ -1731,6 +1829,11 @@ formAction('memoryForm', async (data, form) => {
   const scopeMode = get('scope-mode').value;
   data.scope = scopeMode === 'custom' ? form.elements.scope.value.trim()
     : scopeMode === GLOBAL_SCOPE ? GLOBAL_SCOPE : currentProjectScope();
+  // 适用对象（shared-memory 窗口）：空＝与适用范围一致（读时按 scope 推导）；
+  // 通用（所有项目）落 '*'；自定义取输入值。
+  const appliesToMode = get('applies-to-mode').value;
+  data.applies_to = appliesToMode === GLOBAL_SCOPE ? GLOBAL_SCOPE
+    : appliesToMode === 'custom' ? form.elements.applies_to.value.trim() : '';
   data.message_id = data.message_id ? Number(data.message_id) : null;
   const previousKind = current.memory.find(record => record.id === editing)?.kind;
   if (![data.kind, previousKind].some(kind => ['preference', 'rule'].includes(kind))) return saveMemory(data, editing);
@@ -1741,6 +1844,7 @@ formAction('memoryForm', async (data, form) => {
   const recheck = Object.fromEntries(new FormData(form));
   recheck.scope = data.scope;
   recheck.message_id = data.message_id;
+  recheck.applies_to = data.applies_to;
   if (JSON.stringify(recheck) !== JSON.stringify(data) || editing !== replaces) return;
   const review = { data, replaces, candidates: result.impact, snapshot: result.snapshot };
   if (!result.impact.length) return saveMemory(data, replaces, review);
@@ -1837,7 +1941,7 @@ function applyLanguage() {
     else node.textContent = t(original);
   }
   showNotice(notice);
-  if (visibleEvidence) openSources(visibleEvidence);
+  if (visibleEvidence) openSources(visibleEvidence.review, visibleEvidence.focusClaimId);
   get('view-title').textContent = t(viewTitles[view]);
   renderTaskEditor();
   if (current) render();

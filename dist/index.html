@@ -248,6 +248,8 @@
       <label><span data-i18n>记录类型</span><select name="kind"><option value="fact" data-i18n>事实</option><option value="preference" data-i18n>偏好</option><option value="rule" data-i18n>已确认规则</option><option value="proposal" data-i18n>未确认提议</option><option value="source" data-i18n>原始资料</option></select></label>
       <label><span data-i18n>适用范围</span><select name="scope_mode" id="scope-mode"><option value="" data-i18n>当前项目</option><option value="*" data-i18n>全局（所有项目）</option><option value="custom" data-i18n>自定义</option></select></label>
       <label id="scope-custom" hidden><span data-i18n>自定义范围</span><input name="scope" value="DIC2026" required maxlength="100"></label>
+      <label><span data-i18n>适用对象</span><select name="applies_to_mode" id="applies-to-mode"><option value="" data-i18n>与适用范围一致</option><option value="*" data-i18n>通用（所有项目）</option><option value="custom" data-i18n>自定义适用对象</option></select></label>
+      <label id="applies-to-custom" hidden><span data-i18n>自定义适用对象</span><input name="applies_to" maxlength="100" data-placeholder placeholder="例如：客户 A"></label>
       <input type="hidden" name="message_id">
       <label><span data-i18n>记录</span><textarea name="body" required maxlength="4000" data-placeholder placeholder="例如：对外项目简介用英文"></textarea></label>
       <label><span data-i18n>出处</span><input name="source" required maxlength="500" data-placeholder placeholder="例如：11 月 10 日的项目讨论"></label>

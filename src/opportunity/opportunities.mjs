@@ -131,14 +131,15 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
   const pendingClaimFlags = (item, review, sources) => previousClaimFlags(item, review, sources).map(flag => {
     const rewriteReview = rewriteReviewFor(item, sources, flag);
     const effectiveVerdict = rewriteReview?.verdict ?? flag.match.verdict;
-    const same = flag.match.candidates.filter(candidate => candidate.relation === 'same_fact');
-    const revalidated = effectiveVerdict === 'same_fact' && same.length > 0 && verifiedDraft(item, review, sources) &&
-      same.every(candidate => review.claims.some(claim => claim.status === 'supported' &&
+    const candidates = flag.match.candidates;
+    const revalidated = ['same_fact', 'different_fact'].includes(flag.match.verdict) && candidates.length > 0 && verifiedDraft(item, review, sources) &&
+      candidates.every(candidate => review.claims.some(claim => claim.status === 'supported' &&
         claim.text?.trim().replace(/[。.!?！？]+$/, '') === candidate.sentence.trim().replace(/[。.!?！？]+$/, '')));
     const guaranteed = carriedGuarantee(currentGuarantees(item, sources), flag);
-    const handledBy = revalidated ? 'revalidated' : guaranteed ? 'guarantee' : null;
+    const handledBy = revalidated ? 'revalidated' : guaranteed ? 'guarantee'
+      : ['deleted', 'different_fact'].includes(rewriteReview?.verdict) ? 'review' : null;
     return { ...flag, rewriteReview, effectiveVerdict, handledBy,
-      pending: !handledBy && ['verbatim', 'same_fact', 'ambiguous'].includes(effectiveVerdict) };
+      pending: !handledBy };
   });
   const requiresCheckAfterRemoval = (item, review, sources) =>
     !(review?.target === 'draft' && !review.error && !claimsStale(item, review, sources)) &&
@@ -149,8 +150,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
     const flags = new Map(draftFlags(item).map(flag => [flag.text, flag]));
     if (!verifiedDraft(item, review, sources)) return [...flags.values()];
     for (const text of flags.keys()) {
-      if (['absent', 'different_fact'].includes(matchClaimRewrite(text, item.body ?? '').verdict) ||
-          review.claims.some(claim => claim.status === 'supported' && claim.text?.trim() === text) &&
+      if (review.claims.some(claim => claim.status === 'supported' && claim.text?.trim() === text) &&
           !review.claims.some(claim => claim.status !== 'supported' && claim.text?.trim() === text)) {
         flags.delete(text);
       }
@@ -433,7 +433,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         // 当前回答：结构化回答（已确认/缺少/下一步/指向来源）的解析结果；未分析时为 null。
         const answer = item.answer ? safeParse(item.answer) : null;
         const guarantees = currentGuarantees(item, sources);
-        const previous = pendingClaimFlags(item, claims, sources).filter(flag => ['verbatim', 'same_fact', 'ambiguous'].includes(flag.effectiveVerdict));
+        const previous = pendingClaimFlags(item, claims, sources);
         const covered = verifiedDraft(item, claims, sources) ? claims.claims.map(claim => claim.text) : [];
         const carryoverChecks = previous.length ? draftChecks(item.body ?? '',
           [...covered, ...previous.filter(flag => carriedGuarantee(guarantees, flag)).map(flag => carriedGuarantee(guarantees, flag)?.rewriteText ?? flag.text)]) : null;
@@ -663,7 +663,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const item = get(id);
         if (!item.draft_id) fail(409, '还没有已保存的草稿。');
         if (draft_id !== item.draft_id) fail(409, '草稿已变更，请重新核对后确认。');
-        if (!['same_fact', 'different_fact'].includes(verdict)) fail(400, '请选择核对结论。');
+        if (!['same_fact', 'different_fact', 'deleted'].includes(verdict)) fail(400, '请选择核对结论。');
         const content = String(claim_text ?? text ?? '').trim();
         if (!content) fail(400, '请选择要处理的声明。');
         const sourceRows = sourcesFor(id);
@@ -673,8 +673,11 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
         const row = previousClaimFlags(item, safeParse(item.claims_review), sourceRows).find(flag =>
           flag.claimText === content && (claim_id == null || flag.claimId === claim_id)) ?? null;
         if (!row) fail(409, '找不到这条声明，请刷新后重试。');
-        if (effectiveRewriteVerdict(item, sourceRows, row) !== 'ambiguous') {
-          fail(409, '这条声明不需要核对结论：它仍逐字出现在正文中，或已被判定为同一事实/不同事实。请刷新后重试。');
+        const match = effectiveRewriteVerdict(item, sourceRows, row);
+        if (match === 'verbatim' || match === 'same_fact' ||
+            (verdict === 'deleted' && match !== 'absent') ||
+            (verdict === 'same_fact' && match !== 'ambiguous')) {
+          fail(409, '当前改写状态与核对结论不一致，请刷新后重试。');
         }
         const entry = {
           claimId: row.claimId ?? claim_id ?? null,

@@ -570,6 +570,83 @@ summary { cursor: pointer; font-size: 13.5px; font-weight: 550; color: var(--tex
 .source-heading h2 { font-size: 15.5px; font-weight: 650; }
 .source-panel h3 { font-size: 14px; margin: 20px 0 8px; }
 
+/* ── 聊天回答的关键断言（窗口 3）──────────────────────────────────────────── */
+/* 回答正文里逐字标注的断言片段：底色随核查状态，点击片段后的状态徽章打开证据面板。 */
+.claim-flag { background: #fdf3e3; color: inherit; padding: 0 2px; border-radius: 3px; }
+.claim-flag.claim-flag-supported { background: #e8f5ee; }
+.claim-flag.claim-flag-conflict,
+.claim-flag.claim-flag-refuted,
+.claim-flag.claim-flag-withdrawn { background: var(--danger-bg); }
+/* 状态徽章（回答内联 + 证据行摘要共用）：绿色＝有依据，琥珀＝待确认，红棕＝冲突/反驳/撤回。 */
+.claim-chip {
+  display: inline-block; margin: 0 0 0 4px; padding: 0.5px 8px;
+  border: 1px solid var(--line-strong); border-radius: 999px; background: #fff;
+  font-size: 11.5px; font-weight: 550; line-height: 1.7; color: var(--text-soft);
+  vertical-align: baseline; white-space: nowrap;
+}
+button.claim-chip { cursor: pointer; }
+button.claim-chip:hover { background: var(--hover); }
+.claim-chip.claim-chip-supported { color: #15803d; border-color: #c9e5d4; background: #f7fcf9; }
+.claim-chip.claim-chip-unknown,
+.claim-chip.claim-chip-incomplete { color: #b45309; border-color: var(--danger-line); background: #fdfaf1; }
+.claim-chip.claim-chip-conflict,
+.claim-chip.claim-chip-refuted,
+.claim-chip.claim-chip-withdrawn { color: var(--danger-text); border-color: var(--danger-line); background: var(--danger-bg); }
+/* 证据面板：单条关键断言的展示。 */
+.claim-check-meta { display: block; margin-bottom: 8px; }
+.claim-error { margin: 8px 0; padding: 8px 11px; background: var(--danger-bg); border: 1px solid var(--danger-line); border-radius: 9px; font-size: 13px; white-space: pre-wrap; }
+.claim-entry { border-left: 3px solid var(--line-strong); }
+.claim-entry.claim-status-supported { border-left-color: #15803d; }
+.claim-entry.claim-status-unknown,
+.claim-entry.claim-status-incomplete { border-left-color: #b45309; }
+.claim-entry.claim-status-conflict,
+.claim-entry.claim-status-refuted,
+.claim-entry.claim-status-withdrawn { border-left-color: var(--danger-text); }
+.claim-entry.claim-focus { background: #f5f9ff; box-shadow: 0 0 0 1px var(--line-strong); }
+.claim-status { display: inline-block; margin-bottom: 4px; padding: 1.5px 9px; background: #f0f0ee; border-radius: 999px; font-size: 12px; font-weight: 550; color: var(--text-soft); }
+.claim-item { margin: 8px 0 0; padding: 7px 10px; background: #fafafa; border: 1px solid var(--line); border-radius: 9px; }
+.claim-item small { color: var(--muted); font-size: 12px; }
+.claim-item p { margin: 4px 0 0; font-size: 13px; line-height: 1.55; }
+.claim-original { background: #fff; border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px; white-space: pre-wrap; }
+.claim-missing { color: #b45309; }
+.claim-rewrite { color: var(--text-soft); }
+.claim-fail { color: var(--danger-text); }
+
+/* ── 回答顶部的核查状态（窗口 2）─────────────────────────────────────────── */
+/* 位于回答正文上方：整体核查状态一眼可辨，最需要注意的原句直接列出（点击打开
+   证据面板并定位到该断言）。绿＝全部有依据，琥珀＝待核实，红棕＝冲突/反驳/失败，
+   灰＝未抽取到声明。 */
+.claim-top { margin: 0 0 10px; padding: 9px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--chrome); }
+.claim-top-title { margin: 0; font-size: 13.5px; font-weight: 620; line-height: 1.5; }
+.claim-top-error { margin: 4px 0 0; font-size: 12px; color: var(--danger-text); word-break: break-word; }
+.claim-top-claim {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 8px; padding: 5px 10px;
+  border: 1px solid var(--line-strong); border-radius: 999px; background: #fff;
+  font-size: 12.5px; font-weight: 550; line-height: 1.6; color: var(--text-soft);
+  cursor: pointer; text-align: left;
+}
+.claim-top-claim:hover { background: var(--hover); }
+.claim-top-claim-text { min-width: 0; overflow-wrap: anywhere; }
+.claim-top-claim-status { flex: none; font-size: 11.5px; opacity: .8; }
+.claim-top-claim.claim-top-claim-unknown,
+.claim-top-claim.claim-top-claim-incomplete { color: #b45309; border-color: var(--danger-line); }
+.claim-top-claim.claim-top-claim-conflict,
+.claim-top-claim.claim-top-claim-refuted,
+.claim-top-claim.claim-top-claim-withdrawn { color: var(--danger-text); border-color: var(--danger-line); background: var(--danger-bg); }
+.claim-top-failed,
+.claim-top-conflict,
+.claim-top-refuted { border-color: var(--danger-line); background: var(--danger-bg); }
+.claim-top-failed .claim-top-title,
+.claim-top-conflict .claim-top-title,
+.claim-top-refuted .claim-top-title { color: var(--danger-text); }
+.claim-top-attention { border-color: var(--danger-line); background: #fdfaf1; }
+.claim-top-attention .claim-top-title { color: #b45309; }
+.claim-top-verified { border-color: #c9e5d4; background: #f7fcf9; }
+.claim-top-verified .claim-top-title { color: #15803d; }
+.claim-top-none .claim-top-title { color: var(--muted); font-weight: 550; }
+/* 证据面板：全部通过时的核查范围说明（「均有依据」只覆盖已核查的 N 条）。 */
+.claim-scope-note { display: block; margin-bottom: 8px; font-size: 12px; color: #15803d; }
+
 /* ── Small screens ─────────────────────────────────────────────────────── */
 @media (max-width: 860px) {
   .grid { grid-template-columns: 1fr; }

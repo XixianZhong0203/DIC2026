@@ -698,7 +698,24 @@ const english = {
   "请选择核对结论。": "Please choose a review verdict.",
   "找不到这条声明，请刷新后重试。": "This claim cannot be found. Please refresh and retry.",
   "这条声明不需要核对结论：它仍逐字出现在正文中，或已被判定为同一事实/不同事实。请刷新后重试。": "This claim does not need a review verdict: it still appears verbatim in the body, or it has already been judged the same or a different fact. Please refresh and retry.",
-  "无法确定改写后是否仍是同一事实：请先完成改写核对，或改写/删除原句后重新核查。": "It cannot be determined whether the rewrite is still the same fact: complete the rewrite review first, or rewrite/delete the original sentence and re-verify."
+  "无法确定改写后是否仍是同一事实：请先完成改写核对，或改写/删除原句后重新核查。": "It cannot be determined whether the rewrite is still the same fact: complete the rewrite review first, or rewrite/delete the original sentence and re-verify.",
+  "适用对象": "Applies to",
+  "原项目": "Original project",
+  "与适用范围一致": "Same as scope",
+  "自定义适用对象": "Custom applies-to",
+  "发现证据冲突": "Conflicting evidence found",
+  "有关键说法待核实": "Key statements need verification",
+  "证据反驳": "Evidence refutes the answer",
+  "本轮未抽取到可核查声明": "No verifiable claims extracted this turn",
+  "核查范围：本轮已核查的 {n} 条关键断言均有依据，回答中其他说法不在本次核查范围内。": "Scope: the {n} claims verified this turn are all grounded; other statements in the answer are outside this verification run.",
+  "回答实际引用的记录": "Records cited by the answer",
+  "已删除旧声明": "Confirmed removal of the previous claim",
+  "已核查 {n} 条，均有依据": "Verified {n} claim(s), all grounded",
+  "本轮提供给模型的记录": "Records provided to the model this turn",
+  "核查失败": "Verification failed",
+  "通用（所有项目）": "General (all projects)",
+  "例如：客户 A": "For example, Customer A",
+  "当前改写状态与核对结论不一致，请刷新后重试。": "This review decision does not match the current draft. Refresh and try again.",
 };
 
 export function translate(language, phrase) {
