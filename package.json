@@ -2,6 +2,6 @@
   "name": "daymark",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node --env-file-if-exists=.env server.mjs", "test": "node --test" },
+  "scripts": { "start": "node --env-file-if-exists=.env server.mjs", "test": "node --test", "tts": "node --env-file-if-exists=.env scripts/gemini-tts.mjs" },
   "engines": { "node": ">=24" }
 }

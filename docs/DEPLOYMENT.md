@@ -28,3 +28,16 @@ The [README draft pilot](../README.md#pilot-findings) reports results for Gemini
 | Lead analysis and claim verification | Lead analysis can include the question and lead evidence. Claim verification uses the relevant source originals and either the prior lead assessment or the saved outreach draft, including its recipient. |
 
 For a hosted endpoint, these request fields leave the machine. Daymark checks the assembled request for explicitly protected verbatim excerpts before calling a hosted endpoint. A matching excerpt blocks the request. This check depends on the protection rules the founder has added and on exact text matching. Paraphrases and unmarked information may still be sent. The GPT bridge is treated as hosted because it forwards requests. [Model request and workflow code](../server.mjs) · [Outreach verification](../src/opportunity/opportunities.mjs)
+
+
+## Gemini text-to-speech
+
+The optional speech tool uses `gemini-3.8-flash-tts` through Google's native Interactions API and reads `GEMINI_API_KEY` from the local `.env` file. Run it from the project directory with a UTF-8 text file.
+
+```sh
+npm run tts -- narration.txt narration.wav Kore "Clear, calm English narration"
+```
+
+Chinese and English input are supported. The optional final argument controls delivery style. The command writes a WAV file and refuses to overwrite an existing file. It sends the explicitly supplied text and style to Google. This command operates independently of the conversation model picker and does not retrieve workspace records or apply workspace disclosure rules. Select the text file accordingly.
+
+A short English generation request succeeded with the configured Gemini key. Transport checks also exercised bilingual input, missing audio, and upstream HTTP errors. The generated sample stays outside the repository. [Google TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation)
