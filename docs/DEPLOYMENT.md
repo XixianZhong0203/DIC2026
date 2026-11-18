@@ -12,6 +12,8 @@ We chose Qwen 3.8 27B via LiteLLM, Gemini 3.5 Flash-Lite, GPT via a local bridge
 
 For the team’s Gemini integration, set `GEMINI_API_KEY`. For the optional GPT connection, sign in to the Codex CLI, run `node scripts/local-gpt-bridge.mjs` separately, set `DAYMARK_CODEX_PICKER=1`, and restart Daymark. The local GPT bridge forwards requests to OpenAI. For a Node certificate validation error on macOS, `NODE_USE_SYSTEM_CA=1` enables the system trust store.
 
+With `GEMINI_API_KEY` configured, Gemini 4 Hydrogen (`gemini-4-hydrogen`) appears in the conversation model picker after restarting Daymark. Chat instructions support general questions, writing, translation, and coding outside the project, while keeping project factual claims subject to evidence requirements.
+
 The model selected in the composer handles that conversation’s chat replies. Topic detection, memory extraction and review, lead analysis, claim verification, and evaluations use the configured default model. If both chat and these workflows need on-device inference, configure the default endpoint accordingly.
 
 ## What we measured
@@ -41,3 +43,18 @@ npm run tts -- narration.txt narration.wav Kore "Clear, calm English narration"
 Chinese and English input are supported. The optional final argument controls delivery style. The command writes a WAV file and refuses to overwrite an existing file. It sends the explicitly supplied text and style to Google. This command operates independently of the conversation model picker and does not retrieve workspace records or apply workspace disclosure rules. Select the text file accordingly.
 
 A short English generation request succeeded with the configured Gemini key. Transport checks also exercised bilingual input, missing audio, and upstream HTTP errors. The generated sample stays outside the repository. [Google TTS documentation](https://ai.google.dev/gemini-api/docs/speech-generation)
+
+## Gemini live translation and embeddings
+
+These optional tools use the same local `GEMINI_API_KEY`. Run them from the project directory. They send only the files explicitly supplied to Google and do not retrieve workspace memories or apply workspace disclosure rules.
+
+```sh
+npm run translate-audio -- input.pcm translated.pcm en
+npm run embed -- input.txt embedding.json
+```
+
+Live translation uses `gemini-3.5-live-translate-preview` and the native WebSocket protocol. Supply raw little-endian PCM16 mono audio at 16 kHz. The tool streams it at playback speed, writes translated raw PCM16 mono audio at 24 kHz, and prints translated transcripts to the terminal. Use `zh` for Chinese or `en` for English. This release exposes an audio-file streaming command. Browser microphone capture is outside this implementation. [Live translation protocol](https://ai.google.dev/gemini-api/docs/live-api/live-translate)
+
+The embedding command uses `gemini-embedding-2` to convert UTF-8 text into a JSON vector with its model and dimension count. Workspace retrieval continues to use its existing ranking. Both commands require a new output path. [Embedding API](https://ai.google.dev/gemini-api/docs/embeddings)
+
+Hydrogen, live translation, and Embedding 2 received offline configuration and protocol checks. No live connectivity or model-quality tests were requested for this integration.

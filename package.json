@@ -2,6 +2,6 @@
   "name": "daymark",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node --env-file-if-exists=.env server.mjs", "test": "node --test", "tts": "node --env-file-if-exists=.env scripts/gemini-tts.mjs" },
+  "scripts": { "start": "node --env-file-if-exists=.env server.mjs", "test": "node --test", "tts": "node --env-file-if-exists=.env scripts/gemini-tts.mjs", "embed": "node --env-file-if-exists=.env scripts/gemini-embed.mjs", "translate-audio": "node --env-file-if-exists=.env scripts/gemini-live-translate.mjs" },
   "engines": { "node": ">=24" }
 }

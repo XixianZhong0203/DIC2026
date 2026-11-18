@@ -46,4 +46,8 @@ test('the chat prompt works without decision context', () => {
   assert.ok(!en.includes('User choices on decision cards'));
   assert.ok(!zh.includes('用户在决策卡中的选择'));
   assert.ok(en.includes('"verified":false'));
+  assert.ok(en.includes('even when unrelated to this workspace'));
+  assert.ok(en.includes('Never invent memory citations'));
+  assert.ok(zh.includes('即使问题与当前工作区无关'));
+  assert.ok(zh.includes('不得编造记忆引用'));
 });

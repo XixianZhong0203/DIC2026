@@ -34,6 +34,13 @@ export const MODELS = [
     efforts: { low: 'low', medium: 'medium', high: 'xhigh' },
   },
   ...(process.env.GEMINI_API_KEY?.trim() ? [{
+    id: 'gemini-4-hydrogen',
+    name: 'Gemini 4 Hydrogen',
+    base: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    keyEnv: 'GEMINI_API_KEY',
+    timeout: 90000,
+    efforts: {},
+  }, {
     id: 'gemini-3.5-flash-lite',
     name: 'Gemini 3.5 Flash-Lite',
     base: 'https://generativelanguage.googleapis.com/v1beta/openai',
