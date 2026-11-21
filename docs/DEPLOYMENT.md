@@ -58,3 +58,15 @@ Live translation uses `gemini-3.5-live-translate-preview` and the native WebSock
 The embedding command uses `gemini-embedding-2` to convert UTF-8 text into a JSON vector with its model and dimension count. Workspace retrieval continues to use its existing ranking. Both commands require a new output path. [Embedding API](https://ai.google.dev/gemini-api/docs/embeddings)
 
 Hydrogen, live translation, and Embedding 2 received offline configuration and protocol checks. No live connectivity or model-quality tests were requested for this integration.
+
+
+## In-browser model selection and embedding playground
+
+The composer model menu groups chat models by provider, supports search, and shows the selected model and its available thinking levels. Choosing a model updates the current conversation. Choose **Gemini Embedding 2** in the Google group of the model chooser to submit arbitrary English or Chinese text directly to the embedding API.
+
+The playground displays vector dimensions, input character count, elapsed request time, and a preview of the first 12 values. Download exports the complete vector as JSON. Only the text entered in the playground is submitted. The endpoint applies existing protected-excerpt checks before sending it to Google. A configured `GEMINI_API_KEY` is required. The embedding tool is independent of the conversation model and workspace retrieval.
+
+
+The thinking control is a stepped slider using only the current chat model's supported tiers. Models without configurable thinking omit this control. Gemma 4 31B (`gemma-4-31b-it`) joins Hydrogen and Flash-Lite in the Google chat group and uses Google's native text API. [Gemma API documentation](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api)
+
+The Google group in the same model chooser lists Gemini 3.8 Flash TTS, Gemini 3.5 Live Translate, and Gemini Embedding 2 alongside the Google chat models. Selecting a speech or embedding model opens its dedicated panel. TTS accepts text, a voice, and optional delivery instructions, then provides playback and WAV download. Live Translate accepts an uploaded recording up to 30 seconds in mono 16-bit PCM WAV at 16 kHz, streams it to the Live API, and returns translated playback, transcript, and WAV download. Browser microphone capture remains outside this file-upload interface. Audio files are explicitly sent by the user and are not inspected for semantic disclosure. The text-based tools apply protected-excerpt checks.

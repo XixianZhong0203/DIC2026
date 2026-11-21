@@ -41,10 +41,10 @@ test('draft mode instructs extraction of decision-relevant statements; analysis 
 });
 
 test('a verbatim supporting quote establishes support and nothing more', () => {
-  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
+  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户已在本季度签约。' }];
   const [claim] = verifyClaims([{
     id: '签约状态', dimension: '签约状态', text: '客户已确认签约', status: 'supported',
-    items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '表达签约意向' }],
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '已在本季度签约', note: '明确陈述已完成签约' }],
     missing: '', rewrite: '',
   }], sources);
   assert.equal(claim.status, 'supported');
@@ -765,10 +765,10 @@ test('a model-asserted supported status without any supporting items is never su
 // produce false passes
 
 test('extra fields on the report, a claim, or an item do not change the verdict', () => {
-  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户表示希望在本季度签约。' }];
+  const sources = [{ id: 'S1', source: '6 月邮件', date: '2026-06-20', kind: 'customer', text: '客户已在本季度签约。' }];
   const base = {
     id: '签约状态', dimension: '签约状态', text: '客户已确认签约', status: 'supported',
-    items: [{ evidenceId: 'S1', stance: 'supports', quote: '希望在本季度签约', note: '表达签约意向' }],
+    items: [{ evidenceId: 'S1', stance: 'supports', quote: '已在本季度签约', note: '明确陈述签约完成' }],
     missing: '', rewrite: '',
   };
   // Model outputs extra fields: Top-level notes/model names, confidence and reasoning on claims, and
@@ -967,7 +967,7 @@ test('acceptance: Chinese fragments cut from 尚未签署 / 需经董事会批�
 
 test('acceptance: complete, unambiguous quotes stating the fact still support the claim', () => {
   const positives = [
-    { text: 'The contract is signed.', quote: 'signed' },
+    { text: 'The contract is signed.', quote: 'The contract is signed.' },
     { text: '客户已于 7 月 5 日签署合同。', quote: '签署合同' },
     { text: '合同已签署。', quote: '已签署' },
   ];

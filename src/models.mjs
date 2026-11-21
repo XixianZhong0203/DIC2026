@@ -41,6 +41,14 @@ export const MODELS = [
     timeout: 90000,
     efforts: {},
   }, {
+    id: 'gemma-4-31b-it',
+    name: 'Gemma 4 31B',
+    nativeGemini: true,
+    base: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    keyEnv: 'GEMINI_API_KEY',
+    timeout: 90000,
+    efforts: {},
+  }, {
     id: 'gemini-3.5-flash-lite',
     name: 'Gemini 3.5 Flash-Lite',
     base: 'https://generativelanguage.googleapis.com/v1beta/openai',
@@ -72,7 +80,7 @@ if (customEndpoint) {
   if (!MODELS[index]?.codex) {
     const local = ['127.0.0.1', 'localhost', '[::1]'].includes(customEndpoint.hostname);
     const entry = { ...MODELS[index], id: customModel, name: MODELS[index]?.name ?? customModel,
-      base: customEndpoint.href, keyEnv: 'OPENAI_API_KEY', fallbackKey: undefined, local,
+      base: customEndpoint.href, keyEnv: 'OPENAI_API_KEY', fallbackKey: undefined, nativeGemini: false, local,
       timeout: local ? 90000 : 18000 };
     if (index < 0) MODELS.push(entry);
     else MODELS[index] = entry;
@@ -80,6 +88,13 @@ if (customEndpoint) {
 }
 
 export const modelById = id => (typeof id === 'string' && MODELS.find(entry => entry.id === id)) || null;
+export const modelProvider = entry => {
+  if (entry.codex) return 'OpenAI';
+  if (entry.base.includes('generativelanguage.googleapis.com')) return 'Google';
+  if (entry.base.includes('opencode.ai')) return 'OpenCode';
+  if (entry.id.toLowerCase().includes('qwen')) return 'Qwen';
+  return 'Custom';
+};
 // Default model: if .env's MODEL_ID hits the catalog, use it; otherwise, take the first item in the
 // catalog.
 export const DEFAULT_MODEL_ID = (process.env.MODEL_ID && modelById(process.env.MODEL_ID)?.id) || MODELS[0].id;

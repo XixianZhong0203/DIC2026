@@ -26,12 +26,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve as resolvePath, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { opportunityWorkflow } from '../src/opportunity/opportunities.mjs';
 import { actionDecision, runAlignmentBenchmark } from '../src/alignment/alignment.mjs';
 
 const fixtureMode = process.argv.includes('--fixture');
-const repoRoot = new URL('..', import.meta.url).pathname;
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 
 // --- Code version record (cross-round consistency check: model settings + code version must be retained
 // with the trace) ---

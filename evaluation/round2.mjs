@@ -41,6 +41,7 @@ import { mkdir, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -50,7 +51,7 @@ import { evidenceHash } from '../src/opportunity/claims.mjs';
 import { defaultModel, modelKey } from '../src/models.mjs';
 
 const fixtureMode = process.argv.includes('--fixture');
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const preload = join(root, 'evaluation', 'fetch-redirect.mjs');
 
 // --- Code version history (cross-round consistency check) ---

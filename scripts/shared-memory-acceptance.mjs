@@ -152,6 +152,7 @@ export const modelKey = entry => {
   const fromEnv = entry.keyEnv ? (process.env[entry.keyEnv] ?? '').trim() : '';
   return entry.key ?? (fromEnv || entry.fallbackKey || '');
 };
+export const modelProvider = () => 'Mock';
 export const modelConfigured = entry => Boolean(entry.local || modelKey(entry));
 export const conversationModel = (conv, defaultEntry) => {
   const entry = modelById(conv?.model) ?? defaultEntry;
@@ -226,14 +227,12 @@ const replyRequest = () => {
   }
   return null;
 };
-// The last line of the reply request system is "Citation IDs only select from the following records.
-// Records: <JSON>": use lastIndexOf to locate ("Records:" appears only once in system prompt), parse out
-// the record view actually seen by the model.
+// Read the untrusted reference-data message rather than the system instructions.
 const recordsInPrompt = req => {
-  const system = systemOf(req);
-  const at = system.lastIndexOf('记录：');
+  const reference = (req?.messages ?? []).find(message => message.role === 'user' && message.content?.includes('记录：'))?.content ?? '';
+  const at = reference.lastIndexOf('记录：');
   if (at === -1) return null;
-  try { return JSON.parse(system.slice(at + '记录：'.length).trim()); } catch { return null; }
+  try { return JSON.parse(reference.slice(at + '记录：'.length).trim()); } catch { return null; }
 };
 const checkRequest = () => {
   for (let i = modelRequests.length - 1; i >= 0; i--) {

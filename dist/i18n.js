@@ -776,6 +776,70 @@ const english = {
   "草稿声明核查未提取到任何声明，实际核查范围为空。请重新核查，或针对当前草稿记录人工复核结论。": "Draft claim verification extracted no claims, so the actual verification scope is empty. Verify again, or record a manual review for the current draft.",
   "草稿声明尚未核查。请先核查关键声明，或针对当前草稿记录人工复核结论。": "Draft claims are not verified yet. Verify the key claims, or record a manual review for the current draft.",
   "这次发送没有当时保存的档案。": "This send has no archive saved at that time.",
+  // Model picker and embedding playground.
+  "搜索模型": "Search models",
+  "没有匹配的模型": "No matching models",
+  "API 体验": "API playground",
+  "输入任意中英文文本，体验向量 API。仅将下方文本发送至 Google。": "Try the embedding API with any English or Chinese text. Only the text below is sent to Google.",
+  "输入文本": "Input text",
+  "例如：我想试一下语义搜索": "For example: I want to try semantic search",
+  "生成向量": "Generate embedding",
+  "正在生成向量…": "Generating embedding\u2026",
+  "维度": "dimensions",
+  "字符": "characters",
+  "向量用于语义搜索和相似度计算，不是聊天回答。": "Embeddings represent text for semantic search and similarity comparisons.",
+  "显示前 12 个数值，可下载完整向量。": "Showing the first 12 values. Download the full vector below.",
+  "下载完整向量": "Download full vector",
+  "请配置 GEMINI_API_KEY。": "Configure GEMINI_API_KEY.",
+  "Gemini Embedding 请求失败，请检查密钥、配额和网络。": "Gemini Embedding request failed. Check your key, quota, and connection.",
+
+  // Audio tools.
+  "语音生成": "Text to speech",
+  "语音翻译": "Speech translation",
+  "仅将你输入的文本或选择的音频发送至 Google。": "Only the text you enter or audio you select is sent to Google.",
+  "朗读文本": "Text to read",
+  "音色": "Voice",
+  "语音风格（可选）": "Voice style (optional)",
+  "上传语音": "Upload speech",
+  "最长 30 秒、16 kHz、单声道、16 位 PCM WAV。音频将通过实时翻译接口流式发送。": "Up to 30 seconds of 16 kHz mono PCM16 WAV. Audio is streamed through the Live translation API.",
+  "目标语言": "Target language",
+  "生成音频": "Generate audio",
+  "正在生成音频…": "Generating audio…",
+  "音频已生成": "Audio is ready",
+  "下载 WAV": "Download WAV",
+  "请上传不超过 30 秒的 WAV 文件。": "Upload a WAV recording up to 30 seconds long.",
+  "Gemini 语音请求失败，请检查密钥、配额和网络。": "Gemini speech request failed. Check your key, quota, and connection.",
+  "Gemini 翻译请求失败，请检查音频、密钥、配额和网络。": "Gemini translation request failed. Check the audio, key, quota, and connection.",
+
+  // Thinking slider and audio validation.
+  "思考强度": "Thinking effort",
+  "Upload a PCM WAV file. / 请上传 PCM WAV 文件。": "Upload a PCM WAV file.",
+  "Truncated WAV file. / WAV 文件不完整。": "The WAV file is incomplete.",
+  "Use a mono 16-bit PCM WAV at 16 kHz, up to 30 seconds. / 请使用最长 30 秒、16 kHz 单声道 16 位 PCM WAV。": "Use a mono 16-bit PCM WAV at 16 kHz, up to 30 seconds.",
+
+  // Compact thinking card.
+  "轻度": "Low",
+  "中度": "Medium",
+  "高度": "High",
+  "标准": "Standard",
+  "选择模型": "Choose model",
+  "重置为最低强度": "Reset to the lowest effort",
+
+  "向量生成": "Embeddings",
+
+  "部分有据 · 仍需核实": "Partially supported · Verification still needed",
+
+  // Signing support checks.
+  "引文与声明的肯定或否定不一致": "The quote and claim have different polarity",
+  "疑问句不能证明事实已发生": "A question cannot establish a completed fact",
+  "只提及主题词，未证明行为已完成": "A topic mention does not establish the completed action",
+  "引用的是不同类型的文件": "The quote refers to a different document type",
+  "意向不能证明已完成": "Intent does not establish completion",
+  "引文没有确认已完成签约": "The quote does not establish completed signing",
+  "条件性表述不能证明已完成": "A conditional statement does not establish completion",
+
+  "引文过短，无法核实完整事实": "The quote is too short to verify the complete fact",
+
 };
 
 export function translate(language, phrase) {

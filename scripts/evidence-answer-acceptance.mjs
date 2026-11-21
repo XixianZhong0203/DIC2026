@@ -230,8 +230,8 @@ record('save the reply with explicit signing intent', reply.ok ? 'PASS' : 'FAIL'
 if (!reply.ok) await cleanup(1);
 
 const a2 = (await leadByTitle(leadTitle)).answer;
-record('the answer is updated to a SUFFICIENT, bounded conclusion',
-  a2?.situation === 'sufficient' ? 'PASS' : 'FAIL',
+record('the answer is updated to a PARTIAL conclusion while signing remains unresolved',
+  a2?.situation === 'partial' ? 'PASS' : 'FAIL',
   a2 ? 'situation=' + a2.situation : 'no answer');
 record('confirmed: the signing intent is explicit',
   /签约意向/.test(a2?.confirmed ?? '') ? 'PASS' : 'FAIL', a2?.confirmed ?? '');
@@ -307,8 +307,8 @@ record('save the explicit intent (customer) and the signing statement (founder)'
   intentSource.error ?? founderSource.error ?? '');
 if (!intentSource.ok || !founderSource.ok) await cleanup(1);
 const a6 = (await leadByTitle(mixedTitle)).answer;
-record('the answer is SUFFICIENT and confirms the explicit intent',
-  a6?.situation === 'sufficient' && /签约意向/.test(a6?.confirmed ?? '') ? 'PASS' : 'FAIL',
+record('the answer is PARTIAL and confirms only the explicit intent',
+  a6?.situation === 'partial' && /签约意向/.test(a6?.confirmed ?? '') ? 'PASS' : 'FAIL',
   a6 ? 'situation=' + a6.situation + ' confirmed=' + a6.confirmed : 'no answer');
 record('the founder-only signing claim is listed as pending verification, not confirmed',
   a6?.pending?.some(entry => entry.status === 'founder_only') ? 'PASS' : 'FAIL',

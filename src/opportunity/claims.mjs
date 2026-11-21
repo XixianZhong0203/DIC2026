@@ -1,3 +1,4 @@
+import { supportQuoteIssue } from './support-quote.mjs';
 import { createHash } from 'node:crypto';
 
 // Shared judgment core for claim verification.
@@ -387,7 +388,11 @@ export function quoteContext(text, quote) {
 // is also judged as unverified.
 export function resolveClaim(claim, sources, options = {}) {
   const byId = new Map(sources.map(source => [source.id, source]));
-  const items = normalizeItems(claim?.items, byId);
+  const items = normalizeItems(claim?.items, byId).map(item => {
+    if (!item.valid) return item;
+    const issue = supportQuoteIssue(claim?.text, item);
+    return issue ? { ...item, valid: false, reasons: [...item.reasons, issue] } : item;
+  });
   // Source identity policy for chat answer verification (Window 3) (identity='workspace'): workspace
   // records serve as the evidence base for that round of answers, and any valid supporting quotation
   // counts as "supported", without distinguishing between customer/founder/unconfirmed. Leads and draft

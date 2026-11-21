@@ -1,3 +1,4 @@
+import { extraCoveragePatterns } from './support-quote.mjs';
 // -- Draft coverage scan (Window 2: discovering risks in drafts missed by the model) --
 // Statement verification relies on the model to extract 'decision-affecting statements' from the draft
 // text one by one before verification; when the model misses extraction, the raw text that fails to enter
@@ -54,6 +55,7 @@ const ZH_DATE = '(?:今天|明天|后天|下周|下月|下季度|本月|本季�
 const ZH_ACTION = '(?:完成|交付|上线|付款|签约|启动|验收|部署|开通|发出|回复|安排|做到|达成|实现|开始|执行|进行)';
 const ZH_PATTERNS = {
   fact: [
+    ...extraCoveragePatterns.zhFacts,
     /已(?:经)?(?:签署|签订|签约|签好|交付|付款|支付|到账|回款|完成|上线|验收|启动|开通|部署|投产)/,
   ],
   commitment: [
@@ -92,6 +94,7 @@ const ZH_PATTERNS = {
     /[^。？\n]{0,20}?(?:批准|审批|核准|确认|通过|同意|签字|签署|验收|付款|到账|回款|签约|开通)[^。？\n]{0,8}?(?:之后|以后|后|完毕)(?!续)[^。？\n]{0,16}?(?:完成|交付|上线|付款|签约|启动|验收|部署|开通|发出|回复|安排|开始|执行|进行)/,
   ],
   figure: [
+    ...extraCoveragePatterns.zhFigures,
     /(?:\d+(?:\.\d+)?\s*(?:%|％|倍|万|亿|元|个|名|家|份|天|日|周|小时|美元|人民币)|翻(?:倍|番))/,
   ],
 };
@@ -116,6 +119,7 @@ const EN_SOFT_VERB = '\\b(?:expect\\w*|estimat\\w+|hop\\w*|aim\\w*|plan\\w*|sche
 const EN_CONDITION_BRIDGE = '\\b(?:after|once|upon|when|following|subject\\s+to|contingent\\s+on|pending|provided\\s+(?:that)?|so\\s+long\\s+as|awaiting|if)\\b';
 const EN_PATTERNS = {
   fact: [
+    ...extraCoveragePatterns.enFacts,
     /\b(?:signed|delivered|paid|completed|shipped|launched|deployed|collected|received)\b/i,
     /\b(?:has|have|had|was|were|being)\s+(?:been\s+)?(?:signed|delivered|paid|completed|made|launched|deployed|collected|received)\b/i,
   ],
@@ -139,6 +143,7 @@ const EN_PATTERNS = {
     /\b(?:subject\s+to|contingent\s+on|pending|awaiting)\s+(?:the\s+)?(?:board\s+|customer\s+|legal\s+|final\s+)?(?:approval|sign[-\s]?off|confirmation|acceptance|payment|contract)\b/i,
   ],
   figure: [
+    ...extraCoveragePatterns.enFigures,
     /\b(?:\d+(?:\.\d+)?\s*(?:%|percent|billion|million|times|days?|hours?|weeks?|USD|EUR|CNY|RMB|dollars?|euros?|yen)|doubled|tripled|increased by|grew by|growth of)\b/i,
   ],
 };

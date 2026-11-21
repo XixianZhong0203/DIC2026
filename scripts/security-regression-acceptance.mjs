@@ -198,6 +198,7 @@ export const modelKey = entry => {
   const fromEnv = entry.keyEnv ? (process.env[entry.keyEnv] ?? '').trim() : '';
   return entry.key ?? (fromEnv || entry.fallbackKey || '');
 };
+export const modelProvider = () => 'Mock';
 export const modelConfigured = entry => Boolean(entry.local || modelKey(entry));
 export const conversationModel = (conv, defaultEntry) => {
   const entry = modelById(conv?.model) ?? defaultEntry;

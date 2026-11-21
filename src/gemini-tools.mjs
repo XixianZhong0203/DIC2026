@@ -1,6 +1,24 @@
 export const EMBEDDING_MODEL = 'gemini-embedding-2';
 export const LIVE_TRANSLATE_MODEL = 'gemini-3.5-live-translate-preview';
 
+export async function geminiTextReply({ model, messages, key = process.env.GEMINI_API_KEY, fetchImpl = fetch, timeout = 90000 }) {
+  const system = messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
+  const contents = messages.filter(message => message.role !== 'system').map(message => ({
+    role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }],
+  }));
+  const response = await fetchImpl(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    method: 'POST', redirect: 'error',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': requireKey(key) },
+    body: JSON.stringify({ contents, ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}), generationConfig: { maxOutputTokens: 8192 } }),
+    signal: AbortSignal.timeout(timeout),
+  });
+  if (!response.ok) throw new Error(`Gemini text request failed (HTTP ${response.status}).`);
+  const result = await response.json();
+  const text = (result.candidates?.[0]?.content?.parts ?? []).filter(part => !part.thought && typeof part.text === 'string').map(part => part.text).join('');
+  if (!text.trim()) throw new Error('Gemini returned no text.');
+  return text;
+}
+
 function requireKey(key) {
   if (typeof key !== 'string' || !key.trim()) throw new Error('Configure GEMINI_API_KEY. / 请配置 GEMINI_API_KEY。');
   return key.trim();

@@ -344,6 +344,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
       (analysis == null || stored.analysisId === analysis.analysisId) ? stored : null;
     return {
       status: analysis?.status ?? null,
+      language: review?.language ?? 'zh-CN',
       error: review?.error ?? null,
       quote: analysis?.quote ?? '',
       reason: analysis?.reason ?? '',
@@ -418,7 +419,7 @@ export function opportunityWorkflow(db, { complete, model, fail, required }) {
       ? draftChecks(item.body ?? '', claims.map(claim => claim.text))
       : null;
     const coverage = target === 'draft' ? coverageScan(item.body ?? '', claims.map(claim => claim.text)) : null;
-    const review = { ...binding, coverage, model, effort: null, prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION }, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
+    const review = { ...binding, language: language === 'en' ? 'en' : 'zh-CN', coverage, model, effort: null, prompts: { claims: CLAIMS_PROMPT_VERSION, analysis: ANALYSIS_PROMPT_VERSION }, at: new Date().toISOString(), error, claims, warnings, draftChecks: draftChecksResult };
     transaction(() => {
       const current = get(id);
       const currentSources = sourcesFor(id);

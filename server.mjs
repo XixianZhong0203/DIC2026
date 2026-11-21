@@ -10,7 +10,7 @@ import { memoryCandidates, recordsInScope, scopeMatches, normalizeCandidates, ve
   memoryConflictMessages } from './src/memory/memory-impact.mjs';
 import { rankRecords } from './src/chat/local-chat.mjs';
 import { ruleIntent, normalizeIntent, workspaceMentions, chatIntentMessages } from './src/chat/chat-intent.mjs';
-import { chatReplySystem } from './src/chat/chat-reply.mjs';
+import { chatReplyMessages } from './src/chat/chat-reply.mjs';
 import { opportunityWorkflow } from './src/opportunity/opportunities.mjs';
 import { actionDecision, runAlignmentBenchmark } from './src/alignment/alignment.mjs';
 import { calendarFile } from './src/calendar/calendar.mjs';
@@ -18,7 +18,10 @@ import { GLOBAL_SCOPE, demoRecords, releaseStatus, release, repository } from '.
 import { detectDecision, decisionContext, recheckDecision } from './src/decision/decision.mjs';
 // Multi-model catalog (multi-model window): models, endpoints, credentials, and reasoning effort levels
 // switchable per session.
-import { MODELS, modelById, defaultModel, modelKey, modelConfigured, conversationModel } from './src/models.mjs';
+import { MODELS, modelById, defaultModel, modelKey, modelConfigured, conversationModel, modelProvider } from './src/models.mjs';
+import { embedText, geminiTextReply } from './src/gemini-tools.mjs';
+import { synthesizeSpeech } from './src/speech.mjs';
+import { translateRecording } from './src/audio-tools.mjs';
 // Decision card confirm execution: per-card serialization, confirm-time
 // recheck dispatch, idempotent receipt recovery, and the card states
 // Selected pending confirmation / Applied / Deferred / Failed. See the module header for ownership.
@@ -165,7 +168,7 @@ const state = () => {
   const current = draft();
   const activity = events();
   return { ...workflow.state(), alignment: latestAlignment(), memoryDecisions: memoryDecisions(), tasks: tasks(), taskAudit: taskAudit.list(), memory: memories(), messages: messages(), conversations: conversations(), workspaces: workspaces(), draft: current, events: activity,
-    status: current ? releaseStatus(current, activity) : null, live: modelLive, model, models: MODELS.map(entry => ({ id: entry.id, name: entry.name, requiredEffort: Boolean(entry.codex), efforts: Object.keys(entry.efforts ?? {}) })), release, repository };
+    status: current ? releaseStatus(current, activity) : null, live: modelLive, model, models: MODELS.map(entry => ({ id: entry.id, name: entry.name, provider: modelProvider(entry), requiredEffort: Boolean(entry.codex), efforts: Object.keys(entry.efforts ?? {}) })), release, repository };
 };
 
 function fail(status, message) {
@@ -190,6 +193,10 @@ async function complete(messages, timeout, entry = defaultEntry, effort = null) 
   const hosted = !local || entry.codex || Number(endpoint.port) === bridgePort;
   if (hosted && workflow.hasRestrictedModelInput(messages)) {
     fail(409, '当前请求包含受限原文，托管模型无法使用这部分证据。请改用本地模型或人工复核。');
+  }
+  if (entry.nativeGemini) {
+    try { return await geminiTextReply({ model: entry.id, messages, key, timeout: timeout ?? entry.timeout }); }
+    catch { fail(502, '模型连接失败，请检查服务地址或网络。'); }
   }
   const params = { model: entry.id, max_tokens: 2048, messages,
     ...(entry.codex ? { reasoning_effort: effort ?? 'low', service_tier: 'default' }
@@ -223,18 +230,16 @@ async function modelReply(question, language, active, recent, decisions = null, 
     .slice(-14)
     .map(({ role, body }) => ({ role, content: body }));
   const current = draft();
-  const system = chatReplySystem({
+  const messages = chatReplyMessages({
     language,
     active,
     decisions,
     release,
     verified: Boolean(current) && releaseStatus(current, events()) === 'ready',
+    history,
+    question,
   });
-  const raw = await complete([
-      { role: 'system', content: system },
-      ...history,
-      { role: 'user', content: question },
-  ], null, entry, effort);
+  const raw = await complete(messages, null, entry, effort);
   let review;
   let plain = false;
   try {
@@ -397,6 +402,41 @@ async function reply(question, language, temporary, conversationId, projectName,
 
 const mutations = {
   ...workflow.mutations,
+  '/api/speech': async ({ text, voice, style }) => {
+    const input = required(text, 4000);
+    if (!process.env.GEMINI_API_KEY?.trim()) fail(503, '请配置 GEMINI_API_KEY。');
+    if (workflow.hasRestrictedModelInput([{ role: 'user', content: input + '\n' + (typeof style === 'string' ? style : '') }])) {
+      fail(409, '当前请求包含受限原文，托管模型无法使用这部分证据。请改用本地模型或人工复核。');
+    }
+    try {
+      const result = await synthesizeSpeech({ text: input, voice: required(voice ?? 'Kore', 100), style: typeof style === 'string' ? style.slice(0, 500) : '' });
+      return { model: result.model, mimeType: result.mimeType, data: result.bytes.toString('base64') };
+    } catch { fail(502, 'Gemini 语音请求失败，请检查密钥、配额和网络。'); }
+  },
+  '/api/live-translate': async ({ audio, targetLanguage }) => {
+    if (!process.env.GEMINI_API_KEY?.trim()) fail(503, '请配置 GEMINI_API_KEY。');
+    const encoded = required(audio, 1300000);
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) fail(400, '请检查输入内容。');
+    if (!['en', 'zh', 'ja', 'ko', 'es', 'fr', 'de'].includes(targetLanguage)) fail(400, '请检查输入内容。');
+    try {
+      return await translateRecording({ wav: Buffer.from(encoded, 'base64'), targetLanguage });
+    } catch (error) {
+      if (/WAV/.test(error.message)) fail(400, error.message);
+      fail(502, 'Gemini 翻译请求失败，请检查音频、密钥、配额和网络。');
+    }
+  },
+  '/api/embedding': async ({ text }) => {
+    const input = required(text, 12000);
+    if (!process.env.GEMINI_API_KEY?.trim()) fail(503, '请配置 GEMINI_API_KEY。');
+    if (workflow.hasRestrictedModelInput([{ role: 'user', content: input }])) {
+      fail(409, '当前请求包含受限原文，托管模型无法使用这部分证据。请改用本地模型或人工复核。');
+    }
+    const started = performance.now();
+    try {
+      const result = await embedText({ text: input });
+      return { ...result, elapsedMs: Math.round(performance.now() - started), characters: input.length };
+    } catch { fail(502, 'Gemini Embedding 请求失败，请检查密钥、配额和网络。'); }
+  },
   '/api/alignment-benchmark': async ({ language }) => {
     const report = await runAlignmentBenchmark(complete, model, language === 'zh-CN' ? language : 'en');
     db.prepare('INSERT INTO alignment_runs(report) VALUES (?)').run(JSON.stringify(report));
@@ -808,6 +848,8 @@ createServer(async (req, res) => {
     const route = req.url;
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+    res.setHeader('X-Frame-Options', 'DENY');
     if (req.method === 'GET' && assets.has(route)) {
       const [file, mime] = assets.get(route);
       res.setHeader('Content-Type', mime + '; charset=utf-8');
@@ -853,11 +895,15 @@ createServer(async (req, res) => {
     if (req.method !== 'POST' || !Object.hasOwn(mutations, route)) fail(404, '页面不存在。');
     if (req.headers.origin && req.headers.origin !== 'http://' + req.headers.host) fail(403, '请求来源不匹配。');
     if (req.headers['content-type'] !== 'application/json') fail(415, '需要 JSON 请求。');
-    let payload = '';
+    const chunks = [];
+    let size = 0;
     for await (const chunk of req) {
-      payload += chunk;
-      if (payload.length > 64000) fail(413, '请求内容过长。');
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buf.length;
+      if (size > (route === '/api/live-translate' ? 1350000 : 64000)) fail(413, '请求内容过长。');
+      chunks.push(buf);
     }
+    const payload = Buffer.concat(chunks).toString('utf8');
     let input;
     try { input = JSON.parse(payload); } catch { fail(400, 'JSON 格式不正确。'); }
     if (!input || typeof input !== 'object' || Array.isArray(input)) fail(400, '请求内容不正确。');

@@ -480,7 +480,7 @@ record('adding the source re-runs verification (draft + analysis targets)',
   item?.claims?.target === 'draft' && item.claims.claims[0].status === 'supported' && !item.claimsStale ? 'PASS' : 'FAIL',
   JSON.stringify({ target: item?.claims?.target, status: item?.claims?.claims?.[0]?.status }));
 record('the lead current answer updates to a bounded conclusion pointing at S3',
-  item?.answer?.situation === 'sufficient' && item.answer.supporting?.map(s => s.id).join() === 'S3' &&
+  item?.answer?.situation === 'partial' && item.answer.supporting?.map(s => s.id).join() === 'S3' &&
   item.answer.confirmed.includes('客户 A 已确认将交付改至 2026-11-17 15:30') ? 'PASS' : 'FAIL',
   JSON.stringify({ s: item?.answer?.situation, supporting: item?.answer?.supporting }));
 record('the draft verification and the lead answer keep their own results',
@@ -489,7 +489,7 @@ record('the draft verification and the lead answer keep their own results',
 {
   const text = await renderUiFresh();
   record('UI shows the bounded conclusion and the supporting source',
-    text.includes('当前回答 · 证据充分 · 结论有边界') && text.includes('依据来源 · 客户 A 确认邮件（11 月 12 日）') ? 'PASS' : 'FAIL');
+    text.includes('当前回答 · 部分有据 · 仍需核实') && text.includes('依据来源 · 客户 A 确认邮件（11 月 12 日）') ? 'PASS' : 'FAIL');
 }
 
 const view = await api('/api/opportunity-review-view', { id: leadId, source_id: 'S3' });

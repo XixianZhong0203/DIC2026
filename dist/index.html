@@ -293,5 +293,36 @@
 </div>
 </main>
 </div>
+<dialog id="embedding-dialog" class="embedding-dialog" aria-labelledby="embedding-title">
+  <div class="embedding-heading"><h2 id="embedding-title">Gemini Embedding 2</h2><button id="embedding-close" type="button" aria-label="Close / 关闭">×</button></div>
+  <p class="muted" data-i18n>输入任意中英文文本，体验向量 API。仅将下方文本发送至 Google。</p>
+  <form id="embedding-form">
+    <label for="embedding-input" data-i18n>输入文本</label>
+    <textarea id="embedding-input" rows="5" required maxlength="12000" data-placeholder placeholder="例如：我想试一下语义搜索"></textarea>
+    <button id="embedding-run" type="submit" data-i18n>生成向量</button>
+  </form>
+  <div id="embedding-output" role="status" aria-live="polite"></div>
+  <button id="embedding-download" type="button" class="secondary" hidden data-i18n>下载完整向量</button>
+</dialog>
+<dialog id="audio-dialog" class="embedding-dialog" aria-labelledby="audio-title">
+  <div class="embedding-heading"><h2 id="audio-title"></h2><button id="audio-close" type="button" aria-label="Close / 关闭">×</button></div>
+  <p class="muted" data-i18n>仅将你输入的文本或选择的音频发送至 Google。</p>
+  <form id="audio-form">
+    <div id="speech-inputs">
+      <label for="speech-text" data-i18n>朗读文本</label><textarea id="speech-text" rows="4" maxlength="4000"></textarea>
+      <label for="speech-voice" data-i18n>音色</label><select id="speech-voice"><option>Kore</option><option>Puck</option><option>Aoede</option><option>Charon</option><option>Fenrir</option></select>
+      <label for="speech-style" data-i18n>语音风格（可选）</label><input id="speech-style" maxlength="500" placeholder="Calm, clear narration">
+    </div>
+    <div id="translation-inputs" hidden>
+      <label for="translation-file" data-i18n>上传语音</label><input id="translation-file" type="file" accept="audio/wav,.wav">
+      <p class="muted" data-i18n>最长 30 秒、16 kHz、单声道、16 位 PCM WAV。音频将通过实时翻译接口流式发送。</p>
+      <label for="translation-language" data-i18n>目标语言</label><select id="translation-language"><option value="en">English</option><option value="zh">中文</option><option value="ja">日本語</option><option value="ko">한국어</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option></select>
+    </div>
+    <button id="audio-run" type="submit" data-i18n>生成音频</button>
+  </form>
+  <p id="audio-status" role="status" aria-live="polite"></p>
+  <audio id="audio-player" controls hidden></audio>
+  <a id="audio-download" hidden data-i18n>下载 WAV</a>
+</dialog>
 </body>
 </html>

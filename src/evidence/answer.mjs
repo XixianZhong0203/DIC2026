@@ -9,7 +9,7 @@
 // listed separately as pending items (pending): conclusions extend only to parts supported by customer
 // sources, and pending items remain always visible and will not be omitted by summaries.
 //
-// Distinguish four situations so that "how to phrase" and "how to proceed" each have clear boundaries:
+// Distinguish situations so that "how to phrase" and "how to proceed" each have clear boundaries:
 // insufficient Insufficient evidence - Existing materials only support partial conclusions: state clearly
 // what is confirmed, what is missing, and the next steps.
 // conflict Source conflict - Sources contradict each other: display records that need comparison without
@@ -18,6 +18,9 @@
 // sources are not affected by the failure).
 // sufficient Sufficient evidence - Provide a clear and bounded conclusion: up to which step it is
 // confirmed and which step remains to be confirmed.
+// partial Partially supported - Supported claims coexist with unknown / refuted / incomplete / founder_only /
+// unconfirmed claims: keep the supported part, surface the pending matters, and resolve missing evidence
+// before relying on the full conclusion.
 //
 // This is the single source of truth for "how to phrase": the clue workflow and decision cards both
 // consume it, keeping wording consistent.
@@ -25,12 +28,34 @@
 // (status/quote/unknown/...), while the wording and boundaries here are determined by deterministic code,
 // which is unit-testable and replayable.
 
-export const SITUATIONS = ['sufficient', 'insufficient', 'conflict', 'failed'];
+export const SITUATIONS = ['sufficient', 'insufficient', 'conflict', 'failed', 'partial'];
+
+// Deterministic fallback wording for the situations where the analysis did not supply usable answer texts.
+// Each entry is authored bilingually (Chinese source text + English): the optional bundle language selects the
+// active copy, and structured fallbacks on the bundle take precedence for callers that author custom wording.
+// These strings are newly authored deterministic copy; user and source quotations (quotes, rewrites, supplied
+// answers) are never translated or altered.
+const FALLBACKS = {
+  failed: { next: { zh: '模型核查失败，可重试（重新核查）。原文与来源记录不受本次失败影响。', en: 'Model verification failed. It can be retried (re-run). The original text and sources are unaffected by this failure.' } },
+  conflict: { missing: { zh: '来源相互矛盾，先比较下列记录再下结论。', en: 'The sources contradict each other; compare the records before concluding.' }, next: { zh: '请确认哪条记录为准，或补充更新的、更权威的资料。', en: 'Confirm which record should prevail, or add a more authoritative source.' } },
+  sufficient: { next: { zh: '可依据已确认内容继续。', en: 'Proceed on the basis of the confirmed content.' } },
+  insufficient: { missing: { zh: '现有材料不足以支持关键结论。', en: 'The available materials do not support the key conclusion yet.' }, next: { zh: '请补充资料，或用澄清问题继续。', en: 'Add the missing materials, or continue with clarifying questions.' } },
+  partial: { missing: { zh: '存在仍需确认的说法，先补齐证据再据此下结论。', en: 'Some statements still need evidence; resolve them before relying on the conclusion.' }, next: { zh: '请先补充能支持该说法的来源，或针对缺失的声明重新核查，再据此下结论。', en: 'Add a source that supports this statement, or re-verify the unresolved claim before relying on it.' } },
+};
+
+const fallbackText = (bundle, situation, field) => {
+  const authored = FALLBACKS[situation]?.[field];
+  const fallback = bundle.fallbacks?.[situation]?.[field] ?? authored;
+  const text = typeof fallback === 'string' ? { zh: fallback, en: fallback } : fallback ?? {};
+  return bundle.language === 'en' ? (text.en ?? '') : (text.zh ?? '');
+};
 
 // Convert the evidence bundle into a structured answer. For bundle fields, see buildAnswerBundle
 // (opportunities.mjs).
 export function evidenceAnswer(bundle) {
   const b = bundle ?? {};
+  const copy = (zh, en) => b.language === 'en' ? en : zh;
+  const label = claim => claimLabel(claim, b.language);
   const claims = Array.isArray(b.claims) ? b.claims : [];
   const sources = Array.isArray(b.sources) ? b.sources : [];
   const bySourceId = new Map(sources.map(source => [source.id, source]));
@@ -58,7 +83,7 @@ export function evidenceAnswer(bundle) {
       confirmed: '',
       missing: '',
       bounds: '',
-      next: '模型核查失败，可重试（重新核查）。原文与来源记录不受本次失败影响。',
+      next: fallbackText(b, 'failed', 'next'),
       retryable: true,
       compare: [],
       supporting: [],
@@ -86,9 +111,9 @@ export function evidenceAnswer(bundle) {
     return {
       situation: 'conflict',
       confirmed: '',
-      missing: '来源相互矛盾，先比较下列记录再下结论。',
+      missing: fallbackText(b, 'conflict', 'missing'),
       bounds: '',
-      next: b.clarification || b.suggestedReply || '请确认哪条记录为准，或补充更新的、更权威的资料。',
+      next: b.clarification || b.suggestedReply || fallbackText(b, 'conflict', 'next'),
       retryable: false,
       compare,
       supporting: [],
@@ -102,23 +127,31 @@ export function evidenceAnswer(bundle) {
   // Confirmed = Supported statements (claims that existing evidence can actually back up);
   // Boundary = Parts still unconfirmed/refuted/incomplete (explicitly state that the conclusion only goes
   // this far).
+  // When supported claims coexist with unresolved ones (unknown / refuted / incomplete / founder_only /
+  // unconfirmed), the answer is "partial": the supported part is kept, the pending matters are surfaced, and
+  // missing evidence is resolved before the full conclusion is relied on. Only fully supported answers stay
+  // "sufficient".
   if (supported.length) {
-    const confirmed = supported.map(claim => claim.rewrite || claimLabel(claim)).join('；');
-    const open = unknown.map(claim => claim.missing || claimLabel(claim)).join('；');
-    const refutedNote = refuted.map(claim => claimLabel(claim) + ' 被来源反驳').join('；');
-    const incompleteNote = incomplete.map(claim => claimLabel(claim) + ' 未完成核查').join('；');
+    const hasUnresolved = unknown.length + refuted.length + incomplete.length + pending.length > 0;
+    const situation = hasUnresolved ? 'partial' : 'sufficient';
+    const confirmed = supported.map(claim => claim.rewrite || label(claim)).join('；');
+    const open = unknown.map(claim => claim.missing || label(claim)).join('；');
+    const refutedNote = refuted.map(claim => label(claim) + copy(' 被来源反驳', ' is contradicted by a source')).join('；');
+    const incompleteNote = incomplete.map(claim => label(claim) + copy(' 未完成核查', ' has incomplete verification')).join('；');
     // Pending items are also classified into the conclusion boundary: conclusions only extend to the
     // supported parts, and statements backed by founder statements and unconfirmed sources are explicitly
     // marked as "pending independent verification / pending verification".
-    const pendingNote = pending.map(claim => claimLabel({ dimension: claim.dimension, text: claim.text })
-      + (claim.status === 'founder_only' ? '（仅创始人陈述，待独立核实）' : '（来源未确认，待核实）')).join('；');
-    const bounds = [open, refutedNote, incompleteNote, pendingNote].filter(Boolean).join('；') || '暂无仍未确认项。';
+    const pendingNote = pending.map(claim => label({ dimension: claim.dimension, text: claim.text })
+      + (claim.status === 'founder_only' ? copy('（仅创始人陈述，待独立核实）', ' (founder statement only; independent verification needed)') : copy('（来源未确认，待核实）', ' (source identity unconfirmed; verification needed)'))).join('；');
+    const bounds = [open, refutedNote, incompleteNote, pendingNote].filter(Boolean).join('；') || copy('暂无仍未确认项。', 'No unresolved items among the extracted claims.');
     return {
-      situation: 'sufficient',
+      situation,
       confirmed,
       missing: open,
       bounds,
-      next: b.suggestedReply || b.clarification || '可依据已确认内容继续。',
+      next: situation === 'partial'
+        ? (fallbackText(b, 'partial', 'next') + (b.suggestedReply || b.clarification ? ' ' + (b.suggestedReply || b.clarification) : ''))
+        : (b.suggestedReply || b.clarification || fallbackText(b, 'sufficient', 'next')),
       retryable: false,
       compare: [],
       supporting: supportingSources(supported, bySourceId),
@@ -133,13 +166,13 @@ export function evidenceAnswer(bundle) {
   // information is missing;
   // Next step = Actionable suggestions (such as sending a case study and asking about procurement plans).
   const missing = b.unknown || unknown.map(claim => claim.missing).filter(Boolean).join('；')
-    || '现有材料不足以支持关键结论。';
+    || fallbackText(b, 'insufficient', 'missing');
   return {
     situation: 'insufficient',
     confirmed: b.quote || b.reason || '',
     missing,
     bounds: '',
-    next: b.suggestedReply || b.clarification || '请补充资料，或用澄清问题继续。',
+    next: b.suggestedReply || b.clarification || fallbackText(b, 'insufficient', 'next'),
     retryable: false,
     compare: [],
     supporting: [],
@@ -148,8 +181,11 @@ export function evidenceAnswer(bundle) {
   };
 }
 
-function claimLabel(claim) {
-  return (claim?.dimension ? claim.dimension + '：' : '') + (claim?.text || '（模型未返回声明原文）');
+const DIMENSION_EN = { '购买意向': 'Purchase intent', '签约状态': 'Signing status', '付款状态': 'Payment status', '交付时间': 'Delivery time', '交付状态': 'Delivery status', '预算': 'Budget', '对外承诺': 'External commitment', '功能范围': 'Feature scope' };
+function claimLabel(claim, language) {
+  const en = language === 'en';
+  const dimension = en ? (DIMENSION_EN[claim?.dimension] ?? claim?.dimension) : claim?.dimension;
+  return (dimension ? dimension + (en ? ': ' : '：') : '') + (claim?.text || (en ? '(No claim text returned)' : '（模型未返回声明原文）'));
 }
 
 // Pending items: dimension of the statement along with original text + reason for pending (founder_only /

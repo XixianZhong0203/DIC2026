@@ -529,7 +529,7 @@ function renderModelPicker() {
   const none = document.createElement('option');
   none.value = '';
   none.textContent = t('模型默认');
-  effortSelect.replaceChildren(...(entry.requiredEffort ? [] : [none]));
+  effortSelect.replaceChildren(...(levels.length ? [] : [none]));
   for (const level of levels) {
     const option = document.createElement('option');
     option.value = level;
@@ -538,43 +538,160 @@ function renderModelPicker() {
   }
   effortSelect.disabled = levels.length === 0;
   const wantedEffort = conv?.model ? conv.effort ?? '' : savedEffort;
-  effortSelect.value = levels.includes(wantedEffort) ? wantedEffort : entry.requiredEffort ? levels[0] : '';
+  effortSelect.value = levels.includes(wantedEffort) ? wantedEffort : levels[0] ?? '';
   const panel = get('model-options');
   const effortLabel = option => ({ low: language === 'en' ? 'Low' : '轻度', medium: language === 'en' ? 'Medium' : '中度' }[option.value] ?? option.textContent);
   get('model-choice').textContent = modelSelect.selectedOptions[0].textContent +
     (effortSelect.value ? ' · ' + effortLabel(effortSelect.selectedOptions[0]) : '');
   panel.replaceChildren();
-  function group(title, select, label, choose) {
-    const fieldset = element('fieldset');
-    fieldset.append(element('legend', title));
-    for (const option of select.options) {
-      const row = element('button', label(option), 'model-option');
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.placeholder = t('搜索模型');
+  search.setAttribute('aria-label', t('搜索模型'));
+  search.className = 'model-search';
+  const chooser = element('div', '', 'model-chooser');
+  chooser.hidden = true;
+  const back = element('button', '‹ ' + t('返回'), 'model-back');
+  back.type = 'button';
+  chooser.append(back, search);
+  const list = element('div', '', 'model-list');
+  const entries = [...models,
+    { id: 'gemini-3.8-flash-tts', name: 'Gemini 3.8 Flash TTS', provider: 'Google', tool: 'speech', label: '语音生成' },
+    { id: 'gemini-3.5-live-translate-preview', name: 'Gemini 3.5 Live Translate', provider: 'Google', tool: 'translate', label: '语音翻译' },
+    { id: 'gemini-embedding-2', name: 'Gemini Embedding 2', provider: 'Google', tool: 'embedding', label: '向量生成' },
+  ];
+  const providerOrder = ['OpenAI', 'Google', 'Qwen', 'OpenCode', 'Custom'];
+  const providers = [...new Set(entries.map(model => model.provider || 'Custom'))]
+    .sort((a, b) => providerOrder.indexOf(a) - providerOrder.indexOf(b));
+  for (const provider of providers) {
+    const section = element('section', '', 'model-group');
+    section.append(element('p', provider, 'model-group-title'));
+    for (const model of entries.filter(item => (item.provider || 'Custom') === provider)) {
+      const row = element('button', '', 'model-option');
       row.type = 'button';
-      row.setAttribute('aria-label', label(option));
-      row.setAttribute('aria-pressed', String(option.selected));
-      if (option.selected) row.append(element('span', '✓'));
+      row.dataset.search = (model.name + ' ' + model.id + ' ' + provider).toLowerCase();
+      row.setAttribute('aria-pressed', String(model.id === modelSelect.value));
+      row.dataset.modelId = model.id;
+      const copy = element('span', '', 'model-option-copy');
+      copy.append(element('span', model.name, 'model-option-name'));
+      if (model.tool) copy.append(element('span', t(model.label), 'model-option-kind'));
+      row.append(copy, element('span', model.id === modelSelect.value ? '✓' : '', 'model-check'));
       row.addEventListener('click', async () => {
         if (chatBusy || modelSaving) return;
-        choose(option.value);
+        if (model.tool) {
+          get('model-picker').open = false;
+          if (model.tool === 'embedding') get('embedding-dialog').showModal();
+          else openAudioTool(model.tool);
+          return;
+        }
+        modelSelect.value = model.id;
+        if (!model.efforts.includes(effortSelect.value)) effortSelect.value = '';
+        if (model.requiredEffort && !effortSelect.value) {
+          const level = model.efforts[0];
+          if (![...effortSelect.options].some(option => option.value === level)) effortSelect.add(new Option(t(EFFORT_LABELS[level]), level));
+          effortSelect.value = level;
+        }
         await applyModelChoice();
-        get('model-choice').focus();
+        positionModelMenu();
+        get('model-settings-name')?.focus();
       });
-      fieldset.append(row);
+      section.append(row);
     }
-    panel.append(fieldset);
+    list.append(section);
   }
-  group(language === 'en' ? 'Model' : '模型', modelSelect, option => option.textContent, value => {
-    modelSelect.value = value;
-    const next = models.find(item => item.id === value);
-    if (!next.efforts.includes(effortSelect.value)) effortSelect.value = '';
-    if (next.requiredEffort && !effortSelect.value) {
-      if (![...effortSelect.options].some(option => option.value === 'low')) effortSelect.add(new Option('Low', 'low'));
-      effortSelect.value = 'low';
+  const empty = element('p', t('没有匹配的模型'), 'model-empty');
+  empty.hidden = true;
+  list.append(empty);
+  search.addEventListener('input', () => {
+    const query = search.value.trim().toLowerCase();
+    let visible = 0;
+    for (const section of list.querySelectorAll('.model-group')) {
+      let count = 0;
+      for (const row of section.querySelectorAll('.model-option')) {
+        row.hidden = !row.dataset.search.includes(query);
+        if (!row.hidden) count++;
+      }
+      section.hidden = count === 0;
+      visible += count;
     }
+    empty.hidden = visible > 0;
   });
-  group(language === 'en' ? 'Thinking effort' : '思考强度', effortSelect, effortLabel, value => {
-    effortSelect.value = value;
+  chooser.append(list);
+  const card = element('div', '', 'model-settings-card');
+  const header = element('div', '', 'model-settings-header');
+  const lightning = element('span', '', 'model-lightning');
+  lightning.setAttribute('aria-hidden', 'true');
+  lightning.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m13 2-9 12h7l-1 8 10-13h-7l1-7Z"/></svg>';
+  const value = element('span', '', 'effort-current');
+  const reset = element('button', '', 'model-reset');
+  reset.type = 'button';
+  reset.setAttribute('aria-label', t('重置为最低强度'));
+  reset.title = t('重置为最低强度');
+  reset.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10a9 9 0 1 1 1 7M3 4v6h6"/></svg>';
+  header.append(lightning, value, reset);
+  const modelName = element('button', entry.name + ' ›', 'model-settings-name');
+  modelName.id = 'model-settings-name';
+  modelName.type = 'button';
+  modelName.setAttribute('aria-label', t('选择模型') + ' · ' + entry.name);
+  modelName.addEventListener('click', () => {
+    card.hidden = true;
+    chooser.hidden = false;
+    panel.classList.add('choosing-model');
+    positionModelMenu();
+    search.focus();
+    list.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: 'nearest' });
   });
+  back.addEventListener('click', () => {
+    chooser.hidden = true;
+    card.hidden = false;
+    panel.classList.remove('choosing-model');
+    positionModelMenu();
+    modelName.focus();
+  });
+  panel.classList.remove('choosing-model');
+  const options = levels.length ? [...effortSelect.options] : [];
+  const rail = element('div', '', 'thinking-rail');
+  const dots = element('div', '', 'thinking-dots');
+  for (let index = 0; index < Math.max(options.length, 1); index++) {
+    const dot = element('span');
+    dot.style.left = (index / Math.max(1, options.length - 1) * 100) + '%';
+    dots.append(dot);
+  }
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.id = 'thinking-slider';
+  range.min = '0';
+  range.max = String(Math.max(1, options.length - 1));
+  range.step = '1';
+  range.value = String(Math.max(0, options.findIndex(option => option.selected)));
+  range.setAttribute('aria-label', t('思考强度'));
+  const labels = { low: t('轻度'), medium: t('中度'), high: t('高度') };
+  const update = () => {
+    const option = options[Number(range.value)];
+    value.textContent = option ? labels[option.value] : t('标准');
+    range.setAttribute('aria-valuetext', value.textContent);
+  };
+  update();
+  range.disabled = options.length < 2 || chatBusy || modelSaving;
+  reset.disabled = !options.length || chatBusy || modelSaving;
+  range.addEventListener('input', update);
+  range.addEventListener('change', async () => {
+    if (chatBusy || modelSaving || !options.length) return;
+    effortSelect.value = options[Number(range.value)].value;
+    await applyModelChoice();
+    get('thinking-slider')?.focus();
+  });
+  reset.addEventListener('click', async () => {
+    if (chatBusy || modelSaving || !options.length) return;
+    effortSelect.value = options[0].value;
+    await applyModelChoice();
+    get('thinking-slider')?.focus();
+  });
+  if (!options.length) rail.classList.add('thinking-fixed');
+  rail.append(dots, range);
+  card.append(header, modelName, rail);
+  panel.append(card, chooser);
+
 }
 
 let modelSaving = false;
@@ -599,6 +716,136 @@ async function applyModelChoice() {
     render();
   }
 }
+function positionModelMenu() {
+  if (!get('model-picker').open) return;
+  const anchor = get('model-choice').getBoundingClientRect();
+  const panel = get('model-options');
+  const above = anchor.top - 20;
+  const below = window.innerHeight - anchor.bottom - 20;
+  const useAbove = above >= below;
+  panel.style.maxHeight = Math.max(100, Math.min(540, useAbove ? above : below)) + 'px';
+  panel.style.left = Math.max(12, Math.min(anchor.left, window.innerWidth - panel.offsetWidth - 12)) + 'px';
+  panel.style.top = (useAbove ? Math.max(12, anchor.top - panel.offsetHeight - 8) : anchor.bottom + 8) + 'px';
+}
+get('model-picker').addEventListener('toggle', () => {
+  if (get('model-picker').open) {
+    positionModelMenu();
+    get('model-settings-name')?.focus();
+  }
+});
+window.addEventListener('resize', positionModelMenu);
+window.addEventListener('scroll', positionModelMenu, true);
+get('model-options').addEventListener('keydown', event => {
+  if (event.target.type === 'range') return;
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key) || event.target.type === 'search' && ['Home', 'End'].includes(event.key)) return;
+  const buttons = [...get('model-options').querySelectorAll('button')].filter(button => !button.hidden && !button.closest('[hidden]'));
+  if (!buttons.length) return;
+  event.preventDefault();
+  const index = buttons.indexOf(document.activeElement);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowUp' ? -1 : 1) + buttons.length) % buttons.length;
+  buttons[next].focus();
+});
+
+let audioMode = 'speech';
+let audioUrl = null;
+function clearAudioResult() {
+  get('audio-player').pause();
+  get('audio-player').removeAttribute('src');
+  get('audio-player').hidden = true;
+  get('audio-download').hidden = true;
+  get('audio-download').removeAttribute('href');
+  if (audioUrl) URL.revokeObjectURL(audioUrl);
+  audioUrl = null;
+  get('audio-status').textContent = '';
+}
+function openAudioTool(mode) {
+  audioMode = mode;
+  get('audio-title').textContent = mode === 'speech' ? 'Gemini 3.8 Flash TTS' : 'Gemini 3.5 Live Translate';
+  get('speech-inputs').hidden = mode !== 'speech';
+  get('translation-inputs').hidden = mode !== 'translate';
+  get('speech-text').required = mode === 'speech';
+  get('translation-file').required = mode === 'translate';
+  clearAudioResult();
+  get('audio-dialog').showModal();
+}
+get('audio-close').addEventListener('click', () => get('audio-dialog').close());
+get('audio-dialog').addEventListener('close', () => {
+  get('audio-player').pause();
+  get('model-choice').focus();
+});
+get('audio-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  clearAudioResult();
+  const button = get('audio-run');
+  button.disabled = true;
+  get('audio-status').textContent = t('正在生成音频…');
+  try {
+    let result;
+    if (audioMode === 'speech') {
+      result = await fetchResult('speech', { text: get('speech-text').value, voice: get('speech-voice').value, style: get('speech-style').value });
+    } else {
+      const file = get('translation-file').files[0];
+      if (!file || file.size > 975000) throw new Error(t('请上传不超过 30 秒的 WAV 文件。'));
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+      result = await fetchResult('live-translate', { audio: btoa(binary), targetLanguage: get('translation-language').value });
+    }
+    const decoded = Uint8Array.from(atob(result.data), char => char.charCodeAt(0));
+    audioUrl = URL.createObjectURL(new Blob([decoded], { type: 'audio/wav' }));
+    get('audio-player').src = audioUrl;
+    get('audio-player').hidden = false;
+    get('audio-download').href = audioUrl;
+    get('audio-download').download = result.model + '.wav';
+    get('audio-download').hidden = false;
+    get('audio-status').textContent = result.transcript || t('音频已生成');
+  } catch (error) {
+    get('audio-status').textContent = t(error.message);
+  } finally { button.disabled = false; }
+});
+
+let embeddingResult = null;
+get('embedding-close').addEventListener('click', () => get('embedding-dialog').close());
+get('embedding-dialog').addEventListener('close', () => get('model-choice').focus());
+get('embedding-input').addEventListener('input', () => {
+  embeddingResult = null;
+  get('embedding-download').hidden = true;
+  get('embedding-output').replaceChildren();
+});
+get('embedding-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const button = get('embedding-run');
+  button.disabled = true;
+  get('embedding-input').disabled = true;
+  get('embedding-download').hidden = true;
+  embeddingResult = null;
+  const output = get('embedding-output');
+  output.textContent = t('正在生成向量…');
+  try {
+    const result = await fetchResult('embedding', { text: get('embedding-input').value });
+    embeddingResult = result;
+    output.replaceChildren(element('p', result.dimensions + ' ' + t('维度') + ' · ' + result.characters + ' ' + t('字符') + ' · ' + result.elapsedMs + ' ms', 'embedding-metrics'));
+    output.append(element('p', t('向量用于语义搜索和相似度计算，不是聊天回答。'), 'muted'));
+    output.append(element('pre', JSON.stringify(result.values.slice(0, 12), null, 2), 'embedding-vector'));
+    output.append(element('p', t('显示前 12 个数值，可下载完整向量。'), 'muted'));
+    get('embedding-download').hidden = false;
+  } catch (error) {
+    output.textContent = t(error.message);
+  } finally {
+    button.disabled = false;
+    get('embedding-input').disabled = false;
+  }
+});
+get('embedding-download').addEventListener('click', () => {
+  if (!embeddingResult) return;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(embeddingResult, null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'gemini-embedding-2.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
 get('model-picker').addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
   get('model-picker').open = false;

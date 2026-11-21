@@ -554,7 +554,7 @@ test('a reply with explicit intent updates the answer to a bounded conclusion th
   await call('opportunity-source', { id, name: '客户回复', date: '2026-07-10', kind: 'customer',
     text: '客户明确表示：我们希望尽快签约。', language: 'zh' });
   const answer = current().answer;
-  assert.equal(answer.situation, 'sufficient');
+  assert.equal(answer.situation, 'partial');
   assert.match(answer.confirmed, /签约意向/);
   assert.match(answer.bounds, /合同是否签署仍待确认/);
   assert.deepEqual(answer.supporting.map(source => source.id), ['S1']);
@@ -588,7 +588,7 @@ test('conflicting sources produce a conflict answer that lists the records to co
   await call('opportunity-assess', { id, request: '客户是否想签约？' });
   await call('opportunity-source', { id, name: '客户邮件', date: '2026-07-10', kind: 'customer',
     text: '客户确认周五签约。', language: 'zh' });
-  assert.equal(current().answer.situation, 'sufficient');
+  assert.equal(current().answer.situation, 'partial');
   await call('opportunity-source', { id, name: '客户回复', date: '2026-07-11', kind: 'customer',
     text: '客户希望改为下周一。', language: 'zh' });
   const answer = current().answer;
@@ -649,7 +649,7 @@ test('the answer is stored even when the claims review targets the draft after a
   // claims_review maintains draft target (send gate semantics unchanged)...
   assert.equal(current().claims.target, 'draft');
   // ...while the "current answer" has been updated according to the new source and points to S1.
-  assert.equal(current().answer.situation, 'sufficient');
+  assert.equal(current().answer.situation, 'partial');
   assert.deepEqual(current().answer.supporting.map(source => source.id), ['S1']);
 });
 

@@ -34,6 +34,14 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
     founder_only: '由创始人提供，待独立核实', unconfirmed: '来源未确认，待核实' };
   const stanceLabels = { supports: '支持', refutes: '反驳', withdraws: '撤回', neutral: '仅相关' };
   const checkReasonLabels = {
+    quote_too_short: '引文过短，无法核实完整事实',
+    quote_polarity_mismatch: '引文与声明的肯定或否定不一致',
+    quote_is_question: '疑问句不能证明事实已发生',
+    single_topic_word_cannot_prove_action: '只提及主题词，未证明行为已完成',
+    preliminary_doc_cannot_prove_contract: '引用的是不同类型的文件',
+    intent_cannot_prove_completion: '意向不能证明已完成',
+    quote_missing_signing_action: '引文没有确认已完成签约',
+    conditional_qualification_cannot_prove_completion: '条件性表述不能证明已完成',
     unknown_source: '引用了不存在的来源', quote_not_found: '引文未在来源原文中逐字找到',
     field_conflict: '模型输出字段不一致', claim_not_in_draft: '声明未在草稿正文中逐字出现',
     request_failed: '模型请求失败', empty_claim_text: '声明原文为空',
@@ -783,6 +791,7 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   // the decision card), providing a retry option on failure.
   const answerSituationLabels = {
     sufficient: '证据充分 · 结论有边界',
+    partial: '部分有据 · 仍需核实',
     insufficient: '证据不足 · 先说清缺口',
     conflict: '来源冲突 · 先比较记录',
     failed: '核查失败 · 可重试',
@@ -790,10 +799,10 @@ export function createOpportunityUI({ get, t, element, action, request, formActi
   function answerBlock(item, refs, result) {
     const answer = item.answer;
     if (!answer) return null;
-    const block = element('section', '', 'evidence-answer');
+    const block = element('section', '', 'evidence-answer' + (answer.situation === 'partial' ? ' attention' : ''));
     block.setAttribute('data-situation', answer.situation);
     block.append(element('strong', t('当前回答') + ' · ' + t(answerSituationLabels[answer.situation] ?? answer.situation)));
-    if (answer.situation === 'sufficient') {
+    if (answer.situation === 'sufficient' || answer.situation === 'partial') {
       if (answer.confirmed) block.append(element('p', t('已确认') + ' · ' + answer.confirmed));
       if (answer.missing) block.append(element('p', t('仍缺') + ' · ' + answer.missing, 'attention'));
       if (answer.bounds) block.append(element('p', t('结论边界') + ' · ' + answer.bounds, 'attention'));
